@@ -512,7 +512,7 @@ So that the radio cannot be put into transmit over the network, the CAT commands
   Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main`.
 - Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `EX`).
   For `EX` only the write that sets the DATA-USB `USB OUT LEVEL` to 100 (`EX010411`) is allowed.
-  Commands that lead to transmission, such as `TX` `MX` `KY` `PB` `VX` `PC` and `AC` (the antenna tuner), have no call path in the code and are also blocked by the allow list.
+  Commands that lead to transmission, such as `TX` `MX` `KY` `PB` `VX` and `PC`, have no call path in the code and are also blocked by the allow list.
   As a result, this firmware has no operation that puts the radio into transmit.
 - Frequency settings are range-checked. Only values from 30 kHz to 470 MHz (30000 to 470000000 Hz, the range the FTX-1 accepts) are passed to the radio; anything outside it is rejected.
 - As a second safeguard, consider also setting `RPTT SELECT` / `TX INHIBIT` on the radio itself.

@@ -183,7 +183,7 @@ static void event_cb(const cdc_acm_host_dev_event_data_t *event, void *arg)
 
 // ---- Transmit allow-list ----------------------------------------------------------------------------
 // Every byte sent to the radio goes through cat_tx(), and cat_tx() only lets the commands below pass.
-// Anything else (TX, MX, KY, PB, VX, PC, AC, FT, GP, ...) is dropped, so this firmware has no way to make
+// Anything else (TX, MX, KY, PB, VX, PC, FT, GP, ...) is dropped, so this firmware has no way to make
 // the radio transmit. EX (menu) is allowed for exactly one item, 01-04-11 (RADIO SETTING / MODE DATA /
 // USB OUT LEVEL), and nothing else in the radio's menu.
 #define CAT_TX_MAX_BYTES    64      // matches out_buffer_size of the CDC port
