@@ -575,7 +575,7 @@ HTTPS 用の自己署名証明書（EC P-256、有効期間 2 年、SAN: `ftx-1c
 | [`main/console_menu.c`](main/console_menu.c) | USB UART シリアル対話型設定メニュー（SSID・パスワード・OTA設定） |
 | [`main/usb_audio.c`](main/usb_audio.c) | USB Host と [`espressif/usb_host_uac`](https://components.espressif.com/components/espressif/usb_host_uac) による入力デバイスの検出・ストリーム開始・取得 |
 | [`main/wifi_sta.c`](main/wifi_sta.c) | Wi-Fi ステーション接続（DHCP ホスト名、初期値 `ftx-1c`） |
-| [`main/web_server.c`](main/web_server.c) | HTTPS サーバー（再生ページ、ステータス、PCM / WAV ストリーム） |
+| [`main/web_server.c`](main/web_server.c) | HTTPS サーバー（再生ページ、ステータス、PCM / WAV ストリーム）。サーバーとストリームのタスクは、Wi-Fi・USB のあるコア 0 を避け、コア 1 で動かします |
 | [`main/ota.c`](main/ota.c) | OTA 更新（`POST /ota`、Basic 認証、ロールバック） |
 | [`main/cat.c`](main/cat.c) | CAT 制御（CP210x USB シリアル経由、BUSY / S メーター / 周波数 / モード / ボリューム / スケルチの読み出しと設定） |
 | [`main/index.html`](main/index.html) | ブラウザ用プレーヤー（Web Audio API）と疑似スケルチ |

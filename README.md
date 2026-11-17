@@ -70,7 +70,7 @@ The ESP32-S3-DevKitC-1 has two USB ports. Use them as follows.
 | **USB-OTG** | **FTX-1** (audio and CAT) | In normal use |
 | **USB-UART** | **PC** | Only for the initial setup and flashing |
 
-Which is which is printed on the board (the silkscreen), next to each port. On the Freenove board the two ports are labeled, and other boards are likely to be labeled in the same way. Check the label before you connect.
+The label for each port is printed on the board (the silkscreen), next to the port. On the Freenove board the two ports are labeled, and other boards are likely to be labeled in the same way. Check the label before you connect.
 
 - The port that goes to the FTX-1 is USB-OTG. In normal use you do not need to connect a PC to the USB-UART port.
 - Connect the USB-UART port to a PC only to use the serial menu (Wi-Fi settings and so on) and to flash the firmware (see "First-time setup and flashing").
@@ -575,7 +575,7 @@ So that the radio cannot be put into transmit over the network, the CAT commands
 | [`main/console_menu.c`](main/console_menu.c) | Interactive configuration menu on the USB UART serial console (SSID, passwords, OTA settings) |
 | [`main/usb_audio.c`](main/usb_audio.c) | USB Host and [`espressif/usb_host_uac`](https://components.espressif.com/components/espressif/usb_host_uac): detects the input device, starts and reads the stream |
 | [`main/wifi_sta.c`](main/wifi_sta.c) | Wi-Fi station connection (DHCP host name `ftx-1c` by default) |
-| [`main/web_server.c`](main/web_server.c) | HTTPS server (player page, status, PCM / WAV streams) |
+| [`main/web_server.c`](main/web_server.c) | HTTPS server (player page, status, PCM / WAV streams). The server and the stream task run on core 1, away from Wi-Fi and USB on core 0 |
 | [`main/ota.c`](main/ota.c) | OTA update (`POST /ota`, Basic authentication, rollback) |
 | [`main/cat.c`](main/cat.c) | CAT control (over the CP210x USB serial port: reads and sets BUSY / S-meter / frequency / mode / volume / squelch) |
 | [`main/index.html`](main/index.html) | Browser player (Web Audio API) with a pseudo squelch |

@@ -224,7 +224,8 @@ static esp_err_t start_stream(httpd_req_t *req, bool wav)
 
     s_ctx = (stream_ctx_t) {.req = async_req, .wav = wav, .fmt = fmt};
     // TLS record encryption runs in this task, so it needs more stack than plain HTTP
-    if (xTaskCreate(stream_task, "stream", 8192, &s_ctx, 5, NULL) != pdPASS) {
+    // Core 1: keep TLS encryption and sending away from Wi-Fi / USB, which run on core 0
+    if (xTaskCreatePinnedToCore(stream_task, "stream", 8192, &s_ctx, 5, NULL, 1) != pdPASS) {
         httpd_req_async_handler_complete(async_req);
         atomic_store(&s_stream_active, false);
         return ESP_FAIL;
@@ -668,6 +669,8 @@ esp_err_t web_server_start(void)
     // sockets until complete. The default of 4 fills up immediately, causing "Too many retries".
     // 8 is enough for a single browser client (page + /status poll + /cat poll + stream).
     config.httpd.max_open_sockets = 8;
+    // Run the httpd task (including TLS handshakes) on core 1, away from Wi-Fi / USB on core 0
+    config.httpd.core_id = 1;
     // The TLS handshake runs synchronously inside the single httpd task. Chrome (especially on Android)
     // opens speculative connections that never send a ClientHello; with the 10 s default each of them
     // freezes the whole server and the real request ends in ERR_TOO_MANY_RETRIES. A normal handshake
