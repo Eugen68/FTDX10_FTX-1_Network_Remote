@@ -1126,9 +1126,9 @@
               <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecMain" title="Save the last 30 s of MAIN as WAV">REC</button>
               <button type="button" class="scope-span-btn scope-mute-btn" id="btnMuteMain" aria-pressed="false" title="Mute MAIN audio (scope and FT8 keep running)">MUTE</button>
               <span class="scope-span-label">SPAN:</span>
+              <button type="button" class="scope-span-btn" data-span="1000" title="Narrow span for CW">1k</button>
               <button type="button" class="scope-span-btn active" data-span="3500">3.5k</button>
               <button type="button" class="scope-span-btn" data-span="6000">6k</button>
-              <button type="button" class="scope-span-btn" data-span="24000">24k</button>
             </div>
           </div>
           <canvas id="scopeCanvasMain" class="scope-canvas" width="400" height="90"></canvas>
@@ -1145,9 +1145,9 @@
               <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecSub" title="Save the last 30 s of SUB as WAV">REC</button>
               <button type="button" class="scope-span-btn scope-mute-btn" id="btnMuteSub" aria-pressed="false" title="Mute SUB audio (scope and FT8 keep running)">MUTE</button>
               <span class="scope-span-label">SPAN:</span>
+              <button type="button" class="scope-span-btn" data-span="1000" title="Narrow span for CW">1k</button>
               <button type="button" class="scope-span-btn active" data-span="3500">3.5k</button>
               <button type="button" class="scope-span-btn" data-span="6000">6k</button>
-              <button type="button" class="scope-span-btn" data-span="24000">24k</button>
             </div>
           </div>
           <canvas id="scopeCanvasSub" class="scope-canvas" width="400" height="90"></canvas>
@@ -1655,7 +1655,7 @@ function makeScope(name, idx) {
   wfCanvas.width = canvas.width;
   wfCanvas.height = canvas.height / 2;
   const wfCtx = wfCanvas.getContext('2d');
-  const sc = { idx, spanHz: 3500 }; // Default: 3.5kHz for SSB / FT8 / CW
+  const sc = { idx, spanHz: 3500, lastMode: null }; // Default: 3.5kHz (SSB / DATA); follows the mode, see followModeSpan()
 
   // Waterfall baseline: analyser levels (0-255) at or below this are drawn black; the rest is
   // stretched over the full colour range. Only the waterfall uses it, the spectrum trace does not.
@@ -1676,12 +1676,12 @@ function makeScope(name, idx) {
   });
 
   const btns = document.querySelectorAll('.scope-spans[data-scope="' + name + '"] .scope-span-btn[data-span]');
+  sc.setSpan = function (hz) {
+    sc.spanHz = hz;
+    btns.forEach(b => b.classList.toggle('active', parseInt(b.dataset.span, 10) === hz));
+  };
   btns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      btns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      sc.spanHz = parseInt(btn.dataset.span, 10);
-    });
+    btn.addEventListener('click', () => sc.setSpan(parseInt(btn.dataset.span, 10)));
   });
 
   sc.clearWaterfall = function () {
@@ -1713,8 +1713,8 @@ function makeScope(name, idx) {
 
     // Scale: major frequency lines every majorHz (labelled on the ruler), minor ticks every minorHz,
     // and level lines every 20 dB using the analyser's own dB range.
-    const majorHz = sc.spanHz <= 3500 ? 500 : (sc.spanHz <= 6000 ? 1000 : 4000);
-    const minorHz = sc.spanHz <= 3500 ? 100 : (sc.spanHz <= 6000 ? 200 : 1000);
+    const majorHz = sc.spanHz <= 1000 ? 200 : (sc.spanHz <= 3500 ? 500 : 1000);
+    const minorHz = sc.spanHz <= 1000 ? 50 : (sc.spanHz <= 3500 ? 100 : 200);
     const freqLines = (y0, y1, color) => {
       sctx.strokeStyle = color;
       sctx.lineWidth = 1;
@@ -1860,6 +1860,7 @@ function makeScope(name, idx) {
 const scopes = [makeScope('Main', 0), makeScope('Sub', 1)];
 
 function renderScope() {
+  followModeSpan();
   scopes.forEach(s => s.render());
   requestAnimationFrame(renderScope);
 }
@@ -1908,7 +1909,7 @@ async function start() {
     speakerGains.forEach((_, i) => applySpeakerMute(i));
     scopeAnalysers = [0, 1].map((i) => {
       const an = ctx.createAnalyser();
-      an.fftSize = 2048;
+      an.fftSize = 4096;   // ~11.7 Hz per bin at 48 kHz: enough detail for the 1k (CW) span
       an.smoothingTimeConstant = 0.6;
       splitter.connect(an, ch >= 2 ? i : 0);
       return an;
@@ -2295,6 +2296,22 @@ const modeSelectMain = document.getElementById('modeSelectMain');
 const modeSelectSub = document.getElementById('modeSelectSub');
 const modeBadgeMain = document.getElementById('modeBadgeMain');
 const modeBadgeSub = document.getElementById('modeBadgeSub');
+
+// The scope shows the audio spectrum, so its useful width depends on the mode. When a channel's mode
+// changes, its SPAN is set to that mode's default; a SPAN chosen by hand stays until the mode changes again.
+function defaultSpanForMode(mode) {
+  if (mode.startsWith('CW')) return 1000;
+  if (mode.startsWith('AM') || mode.includes('FM')) return 6000;
+  return 3500;
+}
+function followModeSpan() {
+  [modeBadgeMain, modeBadgeSub].forEach((badge, i) => {
+    const mode = badge.textContent;
+    if (mode === scopes[i].lastMode) return;
+    scopes[i].lastMode = mode;
+    scopes[i].setSpan(defaultSpanForMode(mode));
+  });
+}
 
 function getStep(sub) {
   return sub ? stepSub : stepMain;
