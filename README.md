@@ -434,6 +434,8 @@ This project would not exist without the contributions of those who came before.
 
 ### FT8 world map
 
+![FT8 world map window: stations plotted by grid locator, with the list of decoded stations below (callsigns in the screenshot are dummies)](docs/ft8_map.png)
+
 Pressing `DECODER ON` opens a world map in a separate window (`/map`) and plots each station at the grid locator (4 characters) contained in the decoded message.
 
 - Call signs are not always shown on the map. Click a marker to see it together with the grid, SNR, distance, and bearing. You can also select a station by clicking a row in the list, and a station that is off screen is moved into view. When several stations overlap at the same grid, each click cycles through them in turn. Click an empty spot or press Esc to deselect.
@@ -512,7 +514,7 @@ So that the radio cannot be put into transmit over the network, the CAT commands
   For `EX` only the write that sets the DATA-USB `USB OUT LEVEL` to 100 (`EX010411`) is allowed.
   Commands that lead to transmission, such as `TX` `MX` `KY` `PB` `VX` `PC` and `AC` (the antenna tuner), have no call path in the code and are also blocked by the allow list.
   As a result, this firmware has no operation that puts the radio into transmit.
-- Only frequencies from 30000 to 470000000 Hz are accepted.
+- Frequency settings are range-checked. Only values from 30 kHz to 470 MHz (30000 to 470000000 Hz, the range the FTX-1 accepts) are passed to the radio; anything outside it is rejected.
 - As a second safeguard, consider also setting `RPTT SELECT` / `TX INHIBIT` on the radio itself.
 - Transmission that does not go through the ESP32 (microphone PTT, front-panel operation) cannot be prevented.
 
