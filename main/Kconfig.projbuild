@@ -1,0 +1,41 @@
+menu "USB Audio Streamer"
+
+    config WIFI_SSID
+        string "Wi-Fi SSID (default fallback)"
+        default ""
+        help
+            Default fallback SSID of the access point.
+            You can configure SSID interactively via the USB UART serial menu at boot time
+            and store it in NVS without modifying code or sdkconfig.
+
+    config WIFI_PASSWORD
+        string "Wi-Fi password (default fallback)"
+        default ""
+        help
+            Default fallback password of the access point. Leave empty for an open network.
+            You can configure it interactively via the USB UART serial menu at boot time.
+
+    config AUDIO_SAMPLE_RATE
+        int "Preferred sample rate (Hz)"
+        default 48000
+        help
+            Sample rate requested from the USB audio device (16 bit PCM is preferred).
+            If the device does not offer it, its first supported format is used.
+
+    config AUDIO_RING_BUFFER_SIZE
+        int "USB audio ring buffer size (bytes)"
+        range 4096 65536
+        default 16384
+        help
+            Size of the driver ring buffer between the USB host and the HTTP stream.
+            Larger values tolerate slower Wi-Fi but add latency under congestion.
+
+    config OTA_PASSWORD
+        string "OTA update password default fallback (HTTP Basic auth, user: ota)"
+        default ""
+        help
+            Default fallback password required by POST /ota. Leave empty to disable OTA updates.
+            You can configure OTA user ID and password interactively via the USB UART serial menu
+            at boot time and store them in NVS.
+
+endmenu

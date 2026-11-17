@@ -1,0 +1,4111 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FTX-1 Companion</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,500;0,700;1,500&family=JetBrains+Mono:wght@700;800&family=Rajdhani:wght@600;700&family=Share+Tech+Mono&display=swap');
+
+  :root {
+    --bg-main: #0c0f14;
+    --panel-bg: #161b22;
+    --panel-border: #2d3748;
+    --screen-bg: #030712;
+    --screen-border: #1f293d;
+    --text-primary: #e2e8f0;
+    --text-muted: #8b949e;
+    --accent-blue: #38bdf8;
+    --accent-cyan: #22d3ee;
+    --accent-green: #10b981;
+    --accent-red: #ef4444;
+    --accent-amber: #f59e0b;
+    --led-on: #22c55e;
+    --led-off: #1e293b;
+    --btn-bg: #1e293b;
+    --btn-border: #334155;
+    --btn-hover: #334155;
+    --btn-active: #0284c7;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg-main);
+    color: var(--text-primary);
+    padding: 0.4rem;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+  }
+  .rig-chassis {
+    width: 100%;
+    max-width: 1380px;
+    background: linear-gradient(180deg, #1e242c 0%, #111419 100%);
+    border: 2px solid #2d3748;
+    border-radius: 10px;
+    box-shadow: 0 16px 36px rgba(0,0,0,0.8), inset 0 1px 0 rgba(255,255,255,0.08);
+    padding: 0.6rem 0.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+
+  /* Header */
+  .rig-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #232a36;
+    padding-bottom: .35rem;
+  }
+  .brand-logo {
+    display: flex;
+    align-items: baseline;
+    gap: .4rem;
+  }
+  .brand-title {
+    font-size: 1.25rem;
+    font-weight: 900;
+    letter-spacing: 2px;
+    color: #f8fafc;
+    text-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+  }
+  .brand-build {
+    font-size: .6rem;
+    color: #64748b;
+    letter-spacing: .5px;
+    font-family: ui-monospace, SFMono-Regular, "Courier New", monospace;
+  }
+  .header-controls {
+    display: flex;
+    align-items: center;
+    gap: .8rem;
+  }
+  .pwr-btn {
+    font-size: .75rem;
+    font-weight: bold;
+    padding: .3rem .9rem;
+    background: linear-gradient(180deg, #334155 0%, #1e293b 100%);
+    color: #f8fafc;
+    border: 1px solid #475569;
+    border-radius: 5px;
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    gap: .3rem;
+  }
+  .pwr-btn.running {
+    background: linear-gradient(180deg, #059669 0%, #047857 100%);
+    border-color: #10b981;
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.5);
+  }
+  .rig-off-btn {
+    font-size: .75rem;
+    font-weight: bold;
+    padding: .3rem .8rem;
+    background: linear-gradient(180deg, #451a1a 0%, #2b0e0e 100%);
+    color: #fca5a5;
+    border: 1px solid #7f1d1d;
+    border-radius: 5px;
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    gap: .3rem;
+    transition: all 0.2s ease;
+  }
+  .rig-off-btn:hover {
+    background: linear-gradient(180deg, #7f1d1d 0%, #451a1a 100%);
+    color: #fee2e2;
+    border-color: #ef4444;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
+  }
+  .led-group {
+    display: flex;
+    gap: .6rem;
+    font-size: .65rem;
+    color: #94a3b8;
+  }
+  .led-item {
+    display: flex;
+    align-items: center;
+    gap: .25rem;
+  }
+  .led {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--led-off);
+    border: 1px solid rgba(0,0,0,0.5);
+  }
+  .led.on-green { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+  .led.on-amber { background: #f59e0b; box-shadow: 0 0 8px #f59e0b; }
+  .led.on-red { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+
+  /* 3-Column Chassis Layout */
+  .rig-body-grid {
+    display: grid;
+    grid-template-columns: 270px minmax(420px, 1fr) 270px;
+    gap: .55rem;
+    align-items: start;
+  }
+
+  /* Central TFT Screen */
+  .tft-screen {
+    background: var(--screen-bg);
+    border: 3px solid #0f172a;
+    border-radius: 7px;
+    box-shadow: inset 0 0 20px rgba(0,0,0,0.9), 0 0 0 1px #334155;
+    padding: .5rem .6rem;
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .tft-screen::after {
+    content: " ";
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.2), transparent);
+  }
+
+  /* Dual S-Meter Row in Screen */
+  .screen-meters {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .5rem;
+  }
+  .smeter-svg {
+    display: block;
+    width: 100%;
+    max-height: 170px;
+    height: auto;
+    background: #020617;
+    border: 1px solid #1e293b;
+    border-radius: 5px;
+  }
+  .smeter-svg.off { opacity: .35; }
+
+  /* VFO Main Frequency Displays */
+  .vfo-display-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .5rem;
+    margin: 0;
+  }
+  .vfo-box {
+    background: rgba(10, 15, 26, 0.85);
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    padding: .35rem .5rem;
+    position: relative;
+  }
+  .vfo-box.main-box { border-left: 3px solid #4efdc7; }
+  .vfo-box.sub-box { border-left: 3px solid #38bdf8; }
+
+  .vfo-box-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: .68rem;
+    font-weight: bold;
+    color: #94a3b8;
+    margin-bottom: 0.2rem;
+  }
+
+  /* VFD Bezel (Physical Window Housing Mode Tag + Frequency Readout) */
+  .vfd-bezel {
+    position: relative;
+    background: #020606;
+    border: 1.5px solid #0d221e;
+    border-radius: 4px;
+    padding: 0.2rem 0.5rem;
+    margin: .1rem 0;
+    box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.95), 0 1px 3px rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .4rem;
+  }
+  .sub-box .vfd-bezel {
+    background: #020509;
+    border-color: #0b1d2e;
+  }
+
+  /* VFD Integrated Communication Mode Tag */
+  .vfd-mode-tag {
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    color: #38f8ba;
+    text-shadow: 0 0 1px #38f8ba, 0 0 5px rgba(56, 248, 186, 0.6);
+    background: rgba(56, 248, 186, 0.1);
+    border: 1px solid rgba(56, 248, 186, 0.3);
+    user-select: none;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  .sub-box .vfd-mode-tag {
+    color: #5ec5ff;
+    text-shadow: 0 0 1px #5ec5ff, 0 0 5px rgba(94, 197, 255, 0.6);
+    background: rgba(94, 197, 255, 0.1);
+    border-color: rgba(94, 197, 255, 0.3);
+  }
+
+  /* VFD Frequency Readout (Digits + MHz) */
+  .freq-readout {
+    font-family: 'Chakra Petch', ui-monospace, SFMono-Regular, "Courier New", monospace, sans-serif;
+    font-size: 1.7rem;
+    font-weight: 500;
+    letter-spacing: 1.2px;
+    color: #38f8ba;
+    text-shadow:
+      0 0 1px #38f8ba,
+      0 0 5px rgba(56, 248, 186, 0.65);
+    cursor: default;
+    user-select: none;
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    flex: 1;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+    margin: 0;
+  }
+  .sub-box .freq-readout {
+    color: #5ec5ff;
+    text-shadow:
+      0 0 1px #5ec5ff,
+      0 0 5px rgba(94, 197, 255, 0.65);
+  }
+
+  .freq-unit {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    margin-left: 0.25rem;
+    opacity: 0.8;
+    user-select: none;
+    align-self: baseline;
+  }
+
+  /* Font Variations for VFO Bezel & Readout */
+  .vfd-bezel.font-chakra {
+    font-family: 'Chakra Petch', ui-monospace, SFMono-Regular, sans-serif;
+  }
+  .vfd-bezel.font-chakra .freq-readout {
+    font-size: 1.7rem;
+    font-weight: 500;
+    letter-spacing: 1.2px;
+  }
+  .vfd-bezel.font-chakra-italic {
+    font-family: 'Chakra Petch', ui-monospace, SFMono-Regular, sans-serif;
+    font-style: italic;
+  }
+  .vfd-bezel.font-chakra-italic .freq-readout {
+    font-size: 1.7rem;
+    font-weight: 500;
+    letter-spacing: 1.2px;
+  }
+  .vfd-bezel.font-jetbrains {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  }
+  .vfd-bezel.font-jetbrains .freq-readout {
+    font-size: 1.55rem;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+  }
+  .vfd-bezel.font-rajdhani {
+    font-family: 'Rajdhani', sans-serif;
+  }
+  .vfd-bezel.font-rajdhani .freq-readout {
+    font-size: 1.85rem;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+  }
+  .vfd-bezel.font-sharetech {
+    font-family: 'Share Tech Mono', monospace;
+  }
+  .vfd-bezel.font-sharetech .freq-readout {
+    font-size: 1.65rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+  }
+  .vfd-bezel.font-system {
+    font-family: ui-monospace, SFMono-Regular, "Courier New", monospace;
+  }
+  .vfd-bezel.font-system .freq-readout {
+    font-size: 1.5rem;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+  }
+
+  .vfo-font-select-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
+    font-size: .62rem;
+    color: #94a3b8;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 4px;
+    padding: .15rem .35rem;
+  }
+  .vfo-font-label {
+    font-weight: bold;
+    color: #64748b;
+    font-size: .6rem;
+    user-select: none;
+  }
+  .vfo-font-select {
+    background: transparent;
+    color: #cbd5e1;
+    border: none;
+    font-size: .65rem;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+  }
+  .vfo-font-select option {
+    background: #0f172a;
+    color: #cbd5e1;
+  }
+  .freq-seg {
+    display: inline-block;
+    min-width: 0.62em;
+    text-align: center;
+    padding: 0 1px;
+    margin: 0;
+    border-radius: 2px;
+    cursor: ns-resize;
+    transition: background-color 0.1s, color 0.1s, text-shadow 0.1s;
+  }
+  .freq-seg:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+    text-shadow: 0 0 8px #ffffff, 0 0 14px #4efdc7;
+  }
+  .sub-box .freq-seg:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+    text-shadow: 0 0 8px #ffffff, 0 0 14px #38bdf8;
+  }
+  .freq-seg.freq-blank {
+    color: transparent !important;
+    text-shadow: none !important;
+  }
+  .freq-seg.freq-blank:hover {
+    color: transparent !important;
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: inset 0 0 4px rgba(255, 255, 255, 0.25);
+  }
+  .freq-dot {
+    opacity: 0.75;
+    padding: 0 1px;
+    user-select: none;
+  }
+
+  /* VFO Operations Bar */
+  .vfo-ops-bar {
+    display: flex;
+    justify-content: center;
+    gap: .4rem;
+    margin: 0;
+  }
+  .vfo-op-btn {
+    flex: 1;
+    font-size: .68rem;
+    font-weight: 700;
+    letter-spacing: .3px;
+    padding: .22rem .4rem;
+    background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+    border: 1px solid #334155;
+    color: #e2e8f0;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: .3rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    transition: all 0.15s ease;
+  }
+  .vfo-op-btn:hover {
+    background: linear-gradient(180deg, #334155 0%, #1e293b 100%);
+    border-color: #38bdf8;
+    color: #38bdf8;
+  }
+  .vfo-op-btn:active {
+    transform: translateY(1px);
+    background: #0284c7;
+    color: #fff;
+  }
+  .vfo-op-icon {
+    font-size: .8rem;
+    color: #38bdf8;
+  }
+
+  /* Spectrum Scope & Waterfall */
+  .scope-container {
+    background: #020617;
+    border: 1px solid #1e293b;
+    border-radius: 5px;
+    overflow: hidden;
+    position: relative;
+  }
+  .scope-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: .2rem .45rem;
+    font-size: .6rem;
+    color: #64748b;
+    background: #0a0f1d;
+    border-bottom: 1px solid #1e293b;
+    font-weight: bold;
+  }
+  .scope-spans {
+    display: flex;
+    align-items: center;
+    gap: .2rem;
+  }
+  .scope-span-label {
+    font-size: .58rem;
+    color: #94a3b8;
+  }
+  .scope-span-btn {
+    font-size: .6rem;
+    font-weight: 600;
+    padding: .08rem .35rem;
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: #94a3b8;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.1s;
+  }
+  .scope-rec-btn { margin-right: .2rem; }
+  .scope-rec-btn:hover { background: #7f1d1d; border-color: #ef4444; }
+  .scope-rec-btn.flash { background: #dc2626; color: #fff; border-color: #fca5a5; }
+  .scope-mute-btn { margin-right: .5rem; }
+  .scope-mute-btn.muted {
+    background: #b91c1c;
+    color: #fff;
+    border-color: #ef4444;
+    font-weight: bold;
+  }
+  .scope-base-row {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    padding: .12rem .45rem;
+    font-size: .58rem;
+    color: #94a3b8;
+    background: #0a0f1d;
+    border-top: 1px solid #1e293b;
+  }
+  .scope-base-row input[type="range"] { flex: 1; min-width: 0; height: 12px; }
+  .scope-base-val { min-width: 2.2rem; text-align: right; font-family: monospace; color: #cbd5e1; }
+  .scope-span-btn:hover { background: #334155; color: #fff; }
+  .scope-span-btn.active {
+    background: #0284c7;
+    color: #fff;
+    border-color: #38bdf8;
+    font-weight: bold;
+  }
+  .scope-pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .4rem;
+  }
+  .scope-canvas {
+    display: block;
+    width: 100%;
+    height: 90px;
+    background: #020617;
+  }
+  .scope-rate-row {
+    font-size: .58rem;
+    color: #64748b;
+    text-align: right;
+    font-weight: bold;
+    margin-top: -.2rem;
+  }
+  .main-tag { color: var(--accent-blue); }
+  .sub-tag { color: var(--accent-green); }
+
+  /* FT8 Live Decoder Panel */
+  .ft8-panel {
+    background: #0b1120;
+    border: 1px solid #1e293b;
+    border-radius: 5px;
+    overflow: hidden;
+    font-family: ui-monospace, SFMono-Regular, "Courier New", monospace;
+  }
+  .ft8-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: .22rem .45rem;
+    background: #0f172a;
+    border-bottom: 1px solid #1e293b;
+    font-size: .68rem;
+    font-weight: bold;
+    color: #94a3b8;
+  }
+  .ft8-title {
+    display: flex;
+    align-items: center;
+    gap: .3rem;
+  }
+  .ft8-sync-badge {
+    background: #1e293b;
+    color: #38bdf8;
+    padding: .08rem .3rem;
+    border-radius: 3px;
+    font-size: .62rem;
+    font-weight: bold;
+  }
+  .ft8-ctrls {
+    display: flex;
+    gap: .25rem;
+  }
+  .ft8-btn {
+    font-size: .6rem;
+    font-weight: 600;
+    padding: .1rem .35rem;
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: #cbd5e1;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .ft8-btn.active {
+    background: #059669;
+    color: #fff;
+    border-color: #10b981;
+  }
+  .ft8-progress-bar {
+    height: 3px;
+    background: #1e293b;
+    width: 100%;
+    position: relative;
+  }
+  .ft8-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #0284c7, #38bdf8);
+    transition: width 0.1s linear;
+  }
+  .ft8-list-container {
+    max-height: 105px;
+    overflow-y: auto;
+    font-size: .68rem;
+  }
+  .ft8-table {
+    width: 100%;
+    border-collapse: collapse;
+    color: #e2e8f0;
+    text-align: left;
+  }
+  .ft8-table th {
+    background: #0a0f1d;
+    padding: .2rem .35rem;
+    color: #64748b;
+    font-size: .6rem;
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+    border-bottom: 1px solid #1e293b;
+  }
+  .ft8-table td {
+    padding: .15rem .35rem;
+    border-bottom: 1px solid #131d31;
+    white-space: nowrap;
+  }
+  .ft8-table tr:hover { background: #1e293b; }
+  .ft8-msg-cq {
+    color: #34d399;
+    font-weight: bold;
+  }
+  .ft8-msg-report {
+    color: #f59e0b;
+  }
+  .ft8-msg-73 {
+    color: #38bdf8;
+    font-weight: bold;
+  }
+  .ft8-placeholder {
+    color: #475569;
+    text-align: center;
+    font-style: italic;
+  }
+
+  /* Control Card (Left / Right Column Hardware Panels) */
+  .control-card {
+    background: #181f2a;
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    padding: .5rem .6rem;
+    display: flex;
+    flex-direction: column;
+    gap: .35rem;
+  }
+  .card-title {
+    font-size: .75rem;
+    font-weight: bold;
+    color: #94a3b8;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #2d3748;
+    padding-bottom: .25rem;
+    margin-bottom: .1rem;
+  }
+  .card-title select {
+    background: #0f172a;
+    border: 1px solid #334155;
+    color: #f8fafc;
+    padding: .12rem .3rem;
+    border-radius: 3px;
+    font-size: .7rem;
+    font-weight: bold;
+  }
+
+  /* Rotary Dial Knob & Step Controls */
+  .dial-section {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    gap: .4rem;
+    margin: .2rem 0;
+  }
+  .dial-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(180deg, #334155 0%, #1e293b 100%);
+    border: 1px solid #475569;
+    color: #f8fafc;
+    font-size: .9rem;
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .dial-btn:hover { background: #475569; }
+  .dial-btn:active { transform: translateY(1px); }
+  .dial-svg {
+    width: 76px;
+    height: 76px;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    filter: drop-shadow(0 3px 5px rgba(0,0,0,0.6));
+  }
+  .dial-svg:active { cursor: grabbing; }
+
+  /* Step Button Grid */
+  .button-group-label {
+    font-size: .62rem;
+    color: #64748b;
+    font-weight: bold;
+    margin-top: .15rem;
+    margin-bottom: .05rem;
+  }
+  .step-grid, .band-grid, .mode-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .2rem;
+  }
+  .rig-btn {
+    font-size: .65rem;
+    font-weight: 600;
+    padding: .15rem .35rem;
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: #cbd5e1;
+    border-radius: 3px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.1s;
+    line-height: 1.2;
+  }
+  .rig-btn:hover { background: #334155; color: #fff; }
+  .rig-btn.active {
+    background: #0284c7;
+    color: #fff;
+    border-color: #38bdf8;
+    box-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
+    font-weight: bold;
+  }
+
+  .direct-input-row {
+    display: flex;
+    gap: .3rem;
+    margin-top: .1rem;
+  }
+  .direct-input {
+    flex: 1;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 3px;
+    color: #f8fafc;
+    padding: .2rem .4rem;
+    font-family: monospace;
+    font-size: .75rem;
+  }
+  .direct-input:focus {
+    outline: none;
+    border-color: #38bdf8;
+  }
+
+  /* Hardware Volume & Squelch Knobs (CAT) */
+  .analog-knobs-row {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 5px;
+    padding: .3rem .2rem;
+    margin-top: .1rem;
+  }
+  .mini-knob-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: .1rem;
+  }
+  .mini-knob-label {
+    font-size: .58rem;
+    font-weight: bold;
+    color: #94a3b8;
+    letter-spacing: .3px;
+  }
+  .mini-knob-svg {
+    width: 42px;
+    height: 42px;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,0.5));
+  }
+  .mini-knob-svg:active { cursor: grabbing; }
+  .notch-btn { min-width: 3.2rem; margin: .5rem 0 .2rem; }
+  .notch-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .notch-btn.active { background: #b45309; border-color: #f59e0b; color: #fff; }
+  .mini-knob-val {
+    font-family: monospace;
+    font-size: .68rem;
+    color: #38bdf8;
+    font-weight: bold;
+  }
+  .sub-card .mini-knob-val, #valVolSub, #valSqSub {
+    color: #6ee7b7;
+  }
+
+  /* Squelch Controls */
+  .sq-section {
+    background: #181f2a;
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    padding: .35rem .6rem;
+  }
+  .sq-summary {
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: none;
+    margin-bottom: 0;
+    padding-bottom: 0;
+  }
+  .sq-summary::-webkit-details-marker {
+    display: none;
+  }
+  .sq-summary-hint {
+    font-size: .65rem;
+    color: #64748b;
+  }
+  details.sq-section[open] .sq-summary {
+    border-bottom: 1px solid #2d3748;
+    padding-bottom: .25rem;
+    margin-bottom: .4rem;
+  }
+  .sq-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .6rem;
+    margin-top: .3rem;
+  }
+  .sq-box {
+    background: #0f172a;
+    border: 1px solid #1e293b;
+    border-radius: 5px;
+    padding: .4rem .5rem;
+  }
+  .sq-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .4rem;
+    margin-top: .25rem;
+    font-size: .7rem;
+  }
+  .sq-row select {
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: #f8fafc;
+    padding: .1rem .3rem;
+    border-radius: 3px;
+    font-size: .7rem;
+  }
+  .sq-row input[type=range] {
+    flex: 1;
+  }
+  .audio-meter {
+    position: relative;
+    height: 8px;
+    background: #020617;
+    border: 1px solid #334155;
+    border-radius: 3px;
+    margin-top: .35rem;
+    overflow: hidden;
+  }
+  .audio-meter .lvl {
+    position: absolute;
+    left: 0; top: 0; bottom: 0; width: 0;
+    background: var(--accent-blue);
+    transition: width 0.05s ease;
+  }
+  .audio-meter.open .lvl { background: var(--accent-green); }
+  .audio-meter .thr {
+    position: absolute;
+    top: 0; bottom: 0; width: 2px;
+    background: var(--accent-red);
+  }
+  .sq-status {
+    font-size: .65rem;
+    color: #94a3b8;
+    font-family: monospace;
+    margin-top: .2rem;
+  }
+  .hidden { display: none !important; }
+
+  @media (max-width: 1020px) {
+    .rig-body-grid {
+      grid-template-columns: 1fr;
+    }
+    .tft-screen {
+      order: -1;
+    }
+  }
+  @media (max-width: 680px) {
+    .screen-meters, .vfo-display-grid, .sq-grid, .scope-pair {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+</head>
+<body>
+
+<div class="rig-chassis">
+  <!-- Header -->
+  <div class="rig-header">
+    <div class="brand-logo">
+      <div class="brand-title">FTX-1 Companion</div>
+      <div class="brand-build" id="buildInfo" title="Firmware build time"></div>
+    </div>
+    <div class="header-controls">
+      <div class="led-group">
+        <div class="led-item"><div class="led" id="ledCat"></div>CAT</div>
+        <div class="led-item"><div class="led" id="ledBusy"></div>BUSY</div>
+        <div class="led-item"><div class="led" id="ledRx"></div>RX</div>
+      </div>
+      <button class="rig-off-btn" id="btnRigOff" title="Turn the FTX-1 power OFF (CAT: PS0;)">RIG OFF</button>
+      <button class="pwr-btn" id="btnPlay">POWER / PLAY</button>
+    </div>
+  </div>
+
+  <!-- 3-Column Chassis Body -->
+  <div class="rig-body-grid">
+    <!-- LEFT: MAIN Controls Card -->
+    <div class="control-card main-card">
+      <div class="card-title">
+        <span>MAIN VFO-A</span>
+        <select id="modeSelectMain" title="MAIN mode">
+          <option value="LSB">LSB</option>
+          <option value="USB">USB</option>
+          <option value="CW-U">CW-U</option>
+          <option value="FM">FM</option>
+          <option value="AM">AM</option>
+          <option value="RTTY-LSB">RTTY-LSB</option>
+          <option value="CW-L">CW-L</option>
+          <option value="DATA-LSB">DATA-LSB</option>
+          <option value="RTTY-USB">RTTY-USB</option>
+          <option value="DATA-FM">DATA-FM</option>
+          <option value="FM-N">FM-N</option>
+          <option value="DATA-USB">DATA-USB</option>
+          <option value="AM-N">AM-N</option>
+          <option value="PSK">PSK</option>
+          <option value="DATA-FM-N">DATA-FM-N</option>
+          <option value="C4FM-DN">C4FM-DN</option>
+          <option value="C4FM-VW">C4FM-VW</option>
+        </select>
+      </div>
+
+      <!-- Band Buttons (wavelength labels) -->
+      <div class="button-group-label">BAND:</div>
+      <div class="band-grid" id="bandBtnsMain">
+        <button type="button" class="rig-btn" onclick="setBand(false, 1910000, 'LSB')">160m</button>
+        <button type="button" class="rig-btn" onclick="setBand(false, 3500000, 'LSB')">80m</button>
+        <button type="button" class="rig-btn" onclick="setBand(false, 7074000, 'LSB')">40m</button>
+        <button type="button" class="rig-btn" onclick="setBand(false, 10136000, 'USB')">30m</button>
+        <button type="button" class="rig-btn" onclick="setBand(false, 14074000, 'USB')">20m</button>
+        <button type="button" class="rig-btn" onclick="setBand(false, 18100000, 'USB')">17m</button>
+        <button type="button" class="rig-btn" onclick="setBand(false, 21074000, 'USB')">15m</button>
+        <button type="button" class="rig-btn" onclick="setBand(false, 24915000, 'USB')">12m</button>
+        <button type="button" class="rig-btn" onclick="setBand(false, 28074000, 'USB')">10m</button>
+        <button type="button" class="rig-btn" onclick="setBand(false, 50313000, 'USB')">6m</button>
+        <button type="button" class="rig-btn" onclick="setBand(false, 145000000, 'FM')">2m</button>
+        <button type="button" class="rig-btn" onclick="setBand(false, 433000000, 'FM')">70cm</button>
+      </div>
+
+      <!-- Quick Mode Buttons -->
+      <div class="button-group-label">MODE:</div>
+      <div class="mode-grid" id="modeBtnsMain">
+        <button type="button" class="rig-btn" data-mode="LSB" onclick="setMode(false, 'LSB')">LSB</button>
+        <button type="button" class="rig-btn" data-mode="USB" onclick="setMode(false, 'USB')">USB</button>
+        <button type="button" class="rig-btn" data-mode="CW-U CW-L" onclick="setCwMode(false)">CW</button>
+        <button type="button" class="rig-btn" data-mode="AM" onclick="setMode(false, 'AM')">AM</button>
+        <button type="button" class="rig-btn" data-mode="FM" onclick="setMode(false, 'FM')">FM</button>
+        <button type="button" class="rig-btn" data-mode="DATA-LSB" onclick="setMode(false, 'DATA-LSB')">DATA-L</button>
+        <button type="button" class="rig-btn" data-mode="DATA-USB" onclick="setMode(false, 'DATA-USB')">DATA-U</button>
+        <button type="button" class="rig-btn" data-mode="DATA-FM" onclick="setMode(false, 'DATA-FM')">DATA-F</button>
+        <button type="button" class="rig-btn" data-mode="RTTY-USB" onclick="setMode(false, 'RTTY-USB')">RTTY</button>
+        <button type="button" class="rig-btn" data-mode="PSK" onclick="setMode(false, 'PSK')">PSK</button>
+        <button type="button" class="rig-btn" data-mode="C4FM-DN" onclick="setMode(false, 'C4FM-DN')">C4FM-DN</button>
+        <button type="button" class="rig-btn" data-mode="C4FM-VW" onclick="setMode(false, 'C4FM-VW')">C4FM-VW</button>
+      </div>
+
+      <!-- Rotary Dial Knob -->
+      <div class="dial-section">
+        <button class="dial-btn" type="button" title="Frequency down" onclick="stepFreq(false, -getStep(false))">◀</button>
+        <svg class="dial-svg" id="dialMain" viewBox="0 0 100 100" role="slider" aria-label="MAIN Dial"></svg>
+        <button class="dial-btn" type="button" title="Frequency up" onclick="stepFreq(false, +getStep(false))">▶</button>
+      </div>
+
+      <!-- Step Selection -->
+      <div class="button-group-label">STEP:</div>
+      <div class="step-grid" id="stepBtnsMain">
+        <button type="button" class="rig-btn" data-step="10">10Hz</button>
+        <button type="button" class="rig-btn" data-step="100">100Hz</button>
+        <button type="button" class="rig-btn" data-step="500">500Hz</button>
+        <button type="button" class="rig-btn active" data-step="1000">1kHz</button>
+        <button type="button" class="rig-btn" data-step="5000">5kHz</button>
+        <button type="button" class="rig-btn" data-step="10000">10kHz</button>
+        <button type="button" class="rig-btn" data-step="12500">12.5k</button>
+        <button type="button" class="rig-btn" data-step="20000">20k</button>
+        <button type="button" class="rig-btn" data-step="25000">25k</button>
+        <button type="button" class="rig-btn" data-step="100000">100k</button>
+        <button type="button" class="rig-btn" data-step="1000000">1M</button>
+      </div>
+
+      <!-- Direct Input -->
+      <form class="direct-input-row" id="formFreqMain" onsubmit="return false;">
+        <input type="text" class="direct-input" id="freqMainInput" placeholder="Direct entry (MHz/Hz)">
+        <button type="submit" class="rig-btn">SET</button>
+      </form>
+
+      <!-- AF GAIN & SQUELCH (CAT) -->
+      <div class="button-group-label">AF GAIN / SQL (CAT):</div>
+      <div class="analog-knobs-row">
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">AF GAIN</div>
+          <svg class="mini-knob-svg" id="knobVolMain" viewBox="0 0 60 60" role="slider" aria-label="MAIN AF GAIN"></svg>
+          <div class="mini-knob-val" id="valVolMain">--</div>
+        </div>
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">SQUELCH</div>
+          <svg class="mini-knob-svg" id="knobSqMain" viewBox="0 0 60 60" role="slider" aria-label="MAIN SQL"></svg>
+          <div class="mini-knob-val" id="valSqMain">--</div>
+        </div>
+      </div>
+
+      <!-- MANUAL NOTCH (CAT BP) -->
+      <div class="button-group-label">MANUAL NOTCH (CAT):</div>
+      <div class="analog-knobs-row">
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">NOTCH</div>
+          <button type="button" class="rig-btn notch-btn" id="notchBtnMain" aria-pressed="false">OFF</button>
+        </div>
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">FREQ</div>
+          <svg class="mini-knob-svg" id="knobNotchMain" viewBox="0 0 60 60" role="slider" aria-label="MAIN NOTCH FREQ" aria-valuemin="10" aria-valuemax="3200"></svg>
+          <div class="mini-knob-val" id="valNotchMain">--</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- CENTER: Central TFT Screen -->
+    <div class="tft-screen">
+      <!-- Dual S-Meters -->
+      <div class="screen-meters" id="smeters"></div>
+
+      <!-- Frequency & Mode Displays -->
+      <div class="vfo-display-grid">
+        <div class="vfo-box main-box">
+          <div class="vfo-box-top">
+            <span>MAIN (VFO-A)</span>
+          </div>
+          <div class="vfd-bezel" id="vfdBezelMain">
+            <span class="vfd-mode-tag" id="modeBadgeMain">USB</span>
+            <div class="freq-readout" id="freqMainDisplay" title="Mouse wheel changes frequency">--.---.---<span class="freq-unit">MHz</span></div>
+          </div>
+        </div>
+
+        <div class="vfo-box sub-box">
+          <div class="vfo-box-top">
+            <span>SUB (VFO-B)</span>
+          </div>
+          <div class="vfd-bezel" id="vfdBezelSub">
+            <span class="vfd-mode-tag" id="modeBadgeSub">LSB</span>
+            <div class="freq-readout" id="freqSubDisplay" title="Mouse wheel changes frequency">--.---.---<span class="freq-unit">MHz</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VFO Operations Bar (Swap / Copy / Font Selector) -->
+      <div class="vfo-ops-bar">
+        <button type="button" class="vfo-op-btn" id="btnSwapVfo" title="Swap frequency and mode between MAIN and SUB (SV;)">
+          <span class="vfo-op-icon">⇄</span> SWAP (A ⇄ B)
+        </button>
+        <button type="button" class="vfo-op-btn" id="btnCopyAtoB" title="Copy MAIN to SUB (AB;)">
+          <span class="vfo-op-icon">➔</span> A ➔ B (A=B)
+        </button>
+        <button type="button" class="vfo-op-btn" id="btnCopyBtoA" title="Copy SUB to MAIN (BA;)">
+          <span class="vfo-op-icon">🠔</span> A 🠔 B (B=A)
+        </button>
+        <div class="vfo-font-select-wrap" title="VFO frequency display font (saved in this browser)">
+          <label for="vfoFontSelect" class="vfo-font-label">FONT</label>
+          <select id="vfoFontSelect" class="vfo-font-select">
+            <option value="font-chakra">Chakra (Slim)</option>
+            <option value="font-chakra-italic">Chakra (Italic)</option>
+            <option value="font-jetbrains">JetBrains (Sharp)</option>
+            <option value="font-rajdhani">Rajdhani (Tech)</option>
+            <option value="font-sharetech">Share Tech (Retro)</option>
+            <option value="font-system">System (Mono)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Real-time Spectrum Scope & Waterfall (left = MAIN / right = SUB) -->
+      <div class="scope-pair">
+        <div class="scope-container">
+          <div class="scope-header">
+            <span class="scope-title main-tag">MAIN SCOPE</span>
+            <div class="scope-spans" data-scope="Main">
+              <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecMain" title="Save the last 30 s of MAIN as WAV">REC</button>
+              <button type="button" class="scope-span-btn scope-mute-btn" id="btnMuteMain" aria-pressed="false" title="Mute MAIN audio (scope and FT8 keep running)">MUTE</button>
+              <span class="scope-span-label">SPAN:</span>
+              <button type="button" class="scope-span-btn active" data-span="3500">3.5k</button>
+              <button type="button" class="scope-span-btn" data-span="6000">6k</button>
+              <button type="button" class="scope-span-btn" data-span="24000">24k</button>
+            </div>
+          </div>
+          <canvas id="scopeCanvasMain" class="scope-canvas" width="400" height="90"></canvas>
+          <div class="scope-base-row">
+            <span title="Waterfall baseline: values at or below this are drawn black">WF BASE</span>
+            <input type="range" id="wfBaseMain" min="0" max="200" step="1" value="0" aria-label="MAIN waterfall baseline">
+            <span class="scope-base-val" id="wfBaseValMain">0</span>
+          </div>
+        </div>
+        <div class="scope-container">
+          <div class="scope-header">
+            <span class="scope-title sub-tag">SUB SCOPE</span>
+            <div class="scope-spans" data-scope="Sub">
+              <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecSub" title="Save the last 30 s of SUB as WAV">REC</button>
+              <button type="button" class="scope-span-btn scope-mute-btn" id="btnMuteSub" aria-pressed="false" title="Mute SUB audio (scope and FT8 keep running)">MUTE</button>
+              <span class="scope-span-label">SPAN:</span>
+              <button type="button" class="scope-span-btn active" data-span="3500">3.5k</button>
+              <button type="button" class="scope-span-btn" data-span="6000">6k</button>
+              <button type="button" class="scope-span-btn" data-span="24000">24k</button>
+            </div>
+          </div>
+          <canvas id="scopeCanvasSub" class="scope-canvas" width="400" height="90"></canvas>
+          <div class="scope-base-row">
+            <span title="Waterfall baseline: values at or below this are drawn black">WF BASE</span>
+            <input type="range" id="wfBaseSub" min="0" max="200" step="1" value="0" aria-label="SUB waterfall baseline">
+            <span class="scope-base-val" id="wfBaseValSub">0</span>
+          </div>
+        </div>
+      </div>
+      <div class="scope-rate-row"><span id="scopeRateText">48.0 kHz AUDIO</span></div>
+
+      <!-- FT8 Live Decoder Panels (MAIN / SUB) -->
+      <div class="ft8-panel">
+        <div class="ft8-header">
+          <div class="ft8-title">
+            <span class="ft8-icon">📻</span>
+            <span>FT8 DECODER <span class="main-tag">MAIN</span></span>
+            <span class="ft8-sync-badge" id="ft8SyncBadgeMain">SYNC: 00s</span>
+          </div>
+          <div class="ft8-ctrls">
+            <button type="button" class="ft8-btn" id="ft8EnableBtnMain">DECODER OFF</button>
+            <button type="button" class="ft8-btn" id="ft8ClearBtnMain">CLEAR</button>
+          </div>
+        </div>
+        <div class="ft8-progress-bar"><div class="ft8-progress-fill" id="ft8ProgressFillMain"></div></div>
+        <div class="ft8-list-container">
+          <table class="ft8-table">
+            <thead>
+              <tr>
+                <th style="width:68px">UTC</th>
+                <th style="width:42px">dB</th>
+                <th style="width:40px">DT</th>
+                <th style="width:75px">Dial(MHz)</th>
+                <th style="width:65px">Audio(Hz)</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody id="ft8MsgBodyMain">
+              <tr class="ft8-placeholder" id="ft8EmptyRowMain"><td colspan="6">Listening for FT8 signals on 15s interval...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="ft8-panel">
+        <div class="ft8-header">
+          <div class="ft8-title">
+            <span class="ft8-icon">📻</span>
+            <span>FT8 DECODER <span class="sub-tag">SUB</span></span>
+            <span class="ft8-sync-badge" id="ft8SyncBadgeSub">SYNC: 00s</span>
+          </div>
+          <div class="ft8-ctrls">
+            <button type="button" class="ft8-btn" id="ft8EnableBtnSub">DECODER OFF</button>
+            <button type="button" class="ft8-btn" id="ft8ClearBtnSub">CLEAR</button>
+          </div>
+        </div>
+        <div class="ft8-progress-bar"><div class="ft8-progress-fill" id="ft8ProgressFillSub"></div></div>
+        <div class="ft8-list-container">
+          <table class="ft8-table">
+            <thead>
+              <tr>
+                <th style="width:68px">UTC</th>
+                <th style="width:42px">dB</th>
+                <th style="width:40px">DT</th>
+                <th style="width:75px">Dial(MHz)</th>
+                <th style="width:65px">Audio(Hz)</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody id="ft8MsgBodySub">
+              <tr class="ft8-placeholder" id="ft8EmptyRowSub"><td colspan="6">Listening for FT8 signals on 15s interval...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: SUB Controls Card -->
+    <div class="control-card sub-card">
+      <div class="card-title">
+        <span>SUB VFO-B</span>
+        <select id="modeSelectSub" title="SUB mode">
+          <option value="LSB">LSB</option>
+          <option value="USB">USB</option>
+          <option value="CW-U">CW-U</option>
+          <option value="FM">FM</option>
+          <option value="AM">AM</option>
+          <option value="RTTY-LSB">RTTY-LSB</option>
+          <option value="CW-L">CW-L</option>
+          <option value="DATA-LSB">DATA-LSB</option>
+          <option value="RTTY-USB">RTTY-USB</option>
+          <option value="DATA-FM">DATA-FM</option>
+          <option value="FM-N">FM-N</option>
+          <option value="DATA-USB">DATA-USB</option>
+          <option value="AM-N">AM-N</option>
+          <option value="PSK">PSK</option>
+          <option value="DATA-FM-N">DATA-FM-N</option>
+          <option value="C4FM-DN">C4FM-DN</option>
+          <option value="C4FM-VW">C4FM-VW</option>
+        </select>
+      </div>
+
+      <!-- Band Buttons (wavelength labels) -->
+      <div class="button-group-label">BAND:</div>
+      <div class="band-grid" id="bandBtnsSub">
+        <button type="button" class="rig-btn" onclick="setBand(true, 1910000, 'LSB')">160m</button>
+        <button type="button" class="rig-btn" onclick="setBand(true, 3500000, 'LSB')">80m</button>
+        <button type="button" class="rig-btn" onclick="setBand(true, 7074000, 'LSB')">40m</button>
+        <button type="button" class="rig-btn" onclick="setBand(true, 10136000, 'USB')">30m</button>
+        <button type="button" class="rig-btn" onclick="setBand(true, 14074000, 'USB')">20m</button>
+        <button type="button" class="rig-btn" onclick="setBand(true, 18100000, 'USB')">17m</button>
+        <button type="button" class="rig-btn" onclick="setBand(true, 21074000, 'USB')">15m</button>
+        <button type="button" class="rig-btn" onclick="setBand(true, 24915000, 'USB')">12m</button>
+        <button type="button" class="rig-btn" onclick="setBand(true, 28074000, 'USB')">10m</button>
+        <button type="button" class="rig-btn" onclick="setBand(true, 50313000, 'USB')">6m</button>
+        <button type="button" class="rig-btn" onclick="setBand(true, 145000000, 'FM')">2m</button>
+        <button type="button" class="rig-btn" onclick="setBand(true, 433000000, 'FM')">70cm</button>
+      </div>
+
+      <!-- Quick Mode Buttons -->
+      <div class="button-group-label">MODE:</div>
+      <div class="mode-grid" id="modeBtnsSub">
+        <button type="button" class="rig-btn" data-mode="LSB" onclick="setMode(true, 'LSB')">LSB</button>
+        <button type="button" class="rig-btn" data-mode="USB" onclick="setMode(true, 'USB')">USB</button>
+        <button type="button" class="rig-btn" data-mode="CW-U CW-L" onclick="setCwMode(true)">CW</button>
+        <button type="button" class="rig-btn" data-mode="AM" onclick="setMode(true, 'AM')">AM</button>
+        <button type="button" class="rig-btn" data-mode="FM" onclick="setMode(true, 'FM')">FM</button>
+        <button type="button" class="rig-btn" data-mode="DATA-LSB" onclick="setMode(true, 'DATA-LSB')">DATA-L</button>
+        <button type="button" class="rig-btn" data-mode="DATA-USB" onclick="setMode(true, 'DATA-USB')">DATA-U</button>
+        <button type="button" class="rig-btn" data-mode="DATA-FM" onclick="setMode(true, 'DATA-FM')">DATA-F</button>
+        <button type="button" class="rig-btn" data-mode="RTTY-USB" onclick="setMode(true, 'RTTY-USB')">RTTY</button>
+        <button type="button" class="rig-btn" data-mode="PSK" onclick="setMode(true, 'PSK')">PSK</button>
+        <button type="button" class="rig-btn" data-mode="C4FM-DN" onclick="setMode(true, 'C4FM-DN')">C4FM-DN</button>
+        <button type="button" class="rig-btn" data-mode="C4FM-VW" onclick="setMode(true, 'C4FM-VW')">C4FM-VW</button>
+      </div>
+
+      <!-- Rotary Dial Knob -->
+      <div class="dial-section">
+        <button class="dial-btn" type="button" title="Frequency down" onclick="stepFreq(true, -getStep(true))">◀</button>
+        <svg class="dial-svg" id="dialSub" viewBox="0 0 100 100" role="slider" aria-label="SUB Dial"></svg>
+        <button class="dial-btn" type="button" title="Frequency up" onclick="stepFreq(true, +getStep(true))">▶</button>
+      </div>
+
+      <!-- Step Selection -->
+      <div class="button-group-label">STEP:</div>
+      <div class="step-grid" id="stepBtnsSub">
+        <button type="button" class="rig-btn" data-step="10">10Hz</button>
+        <button type="button" class="rig-btn" data-step="100">100Hz</button>
+        <button type="button" class="rig-btn" data-step="500">500Hz</button>
+        <button type="button" class="rig-btn active" data-step="1000">1kHz</button>
+        <button type="button" class="rig-btn" data-step="5000">5kHz</button>
+        <button type="button" class="rig-btn" data-step="10000">10kHz</button>
+        <button type="button" class="rig-btn" data-step="12500">12.5k</button>
+        <button type="button" class="rig-btn" data-step="20000">20k</button>
+        <button type="button" class="rig-btn" data-step="25000">25k</button>
+        <button type="button" class="rig-btn" data-step="100000">100k</button>
+        <button type="button" class="rig-btn" data-step="1000000">1M</button>
+      </div>
+
+      <!-- Direct Input -->
+      <form class="direct-input-row" id="formFreqSub" onsubmit="return false;">
+        <input type="text" class="direct-input" id="freqSubInput" placeholder="Direct entry (MHz/Hz)">
+        <button type="submit" class="rig-btn">SET</button>
+      </form>
+
+      <!-- AF GAIN & SQUELCH (CAT) -->
+      <div class="button-group-label">AF GAIN / SQL (CAT):</div>
+      <div class="analog-knobs-row">
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">AF GAIN</div>
+          <svg class="mini-knob-svg" id="knobVolSub" viewBox="0 0 60 60" role="slider" aria-label="SUB AF GAIN"></svg>
+          <div class="mini-knob-val" id="valVolSub">--</div>
+        </div>
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">SQUELCH</div>
+          <svg class="mini-knob-svg" id="knobSqSub" viewBox="0 0 60 60" role="slider" aria-label="SUB SQL"></svg>
+          <div class="mini-knob-val" id="valSqSub">--</div>
+        </div>
+      </div>
+
+      <!-- MANUAL NOTCH (CAT BP) -->
+      <div class="button-group-label">MANUAL NOTCH (CAT):</div>
+      <div class="analog-knobs-row">
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">NOTCH</div>
+          <button type="button" class="rig-btn notch-btn" id="notchBtnSub" aria-pressed="false">OFF</button>
+        </div>
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">FREQ</div>
+          <svg class="mini-knob-svg" id="knobNotchSub" viewBox="0 0 60 60" role="slider" aria-label="SUB NOTCH FREQ" aria-valuemin="10" aria-valuemax="3200"></svg>
+          <div class="mini-knob-val" id="valNotchSub">--</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Squelch DSP Panel (Collapsible) -->
+  <details class="sq-section" id="sqSection">
+    <summary class="card-title sq-summary">
+      <span>NOISE SQUELCH GATE (DSP)</span>
+      <span class="sq-summary-hint">▼ DSP settings / meter</span>
+    </summary>
+    <div class="sq-grid">
+      <!-- MAIN Squelch -->
+      <div class="sq-box" id="sqCardMain">
+        <label><input type="checkbox" id="sqOnMain"> <strong>MAIN (L) SQUELCH</strong></label>
+        <div class="sq-row">
+          <span>Type:</span>
+          <select id="sqModeMain">
+            <option value="var">Variable AM</option>
+            <option value="level">Level FM/SSB</option>
+          </select>
+        </div>
+        <div class="sq-row" id="rowVarMain">
+          <span>Var Thr:</span>
+          <input type="range" id="sqVarMain" min="2" max="20" step="1">
+          <span id="sqVarValMain" style="font-family:monospace; min-width:32px;"></span>
+        </div>
+        <div class="sq-row" id="rowThrMain">
+          <span>Level:</span>
+          <input type="range" id="sqThrMain" min="-80" max="-5" step="1">
+          <span id="sqThrValMain" style="font-family:monospace; min-width:48px;"></span>
+        </div>
+        <div class="sq-row" id="rowInvMain">
+          <label><input type="checkbox" id="sqInvMain"> Invert (FM noise gate)</label>
+        </div>
+        <div class="audio-meter" id="meterMain"><div class="lvl"></div><div class="thr"></div></div>
+        <div class="sq-status" id="stateMain">MAIN: --</div>
+      </div>
+
+      <!-- SUB Squelch -->
+      <div class="sq-box" id="sqCardSub">
+        <label><input type="checkbox" id="sqOnSub"> <strong>SUB (R) SQUELCH</strong></label>
+        <div class="sq-row">
+          <span>Type:</span>
+          <select id="sqModeSub">
+            <option value="var">Variable AM</option>
+            <option value="level">Level FM/SSB</option>
+          </select>
+        </div>
+        <div class="sq-row" id="rowVarSub">
+          <span>Var Thr:</span>
+          <input type="range" id="sqVarSub" min="2" max="20" step="1">
+          <span id="sqVarValSub" style="font-family:monospace; min-width:32px;"></span>
+        </div>
+        <div class="sq-row" id="rowThrSub">
+          <span>Level:</span>
+          <input type="range" id="sqThrSub" min="-80" max="-5" step="1">
+          <span id="sqThrValSub" style="font-family:monospace; min-width:48px;"></span>
+        </div>
+        <div class="sq-row" id="rowInvSub">
+          <label><input type="checkbox" id="sqInvSub"> Invert (FM noise gate)</label>
+        </div>
+        <div class="audio-meter" id="meterSub"><div class="lvl"></div><div class="thr"></div></div>
+        <div class="sq-status" id="stateSub">SUB: --</div>
+      </div>
+    </div>
+    <div class="sq-row" style="margin-top:8px;">
+      <label><input type="checkbox" id="sqBusyBypass"> Suspend the DSP squelch while CAT reports BUSY (rig squelch open) (MAIN/SUB)</label>
+    </div>
+  </details>
+</div>
+
+<script>
+// Headers for every state changing request. The firmware refuses POST /cat without the marker header:
+// a browser adds a custom header to a cross-site request only after a CORS preflight, which the
+// firmware never allows, so other web sites cannot drive the radio through this page's login.
+const CAT_POST_HEADERS = { 'Content-Type': 'application/json', 'X-Requested-With': 'ftx1' };
+
+
+const btnPlay = document.getElementById('btnPlay');
+const ledCat = document.getElementById('ledCat');
+const ledBusy = document.getElementById('ledBusy');
+const ledRx = document.getElementById('ledRx');
+
+const BUFFER_SEC = 0.08;
+const PREBUFFER_SEC = 0.25;
+const MAX_LATENCY = 0.8;
+
+let abort = null;
+let ctx = null;
+let scopeAnalysers = [null, null]; // [MAIN(left), SUB(right)]
+let speakerGains = [null, null];   // per-channel speaker gain nodes (mute switches)
+const speakerMuted = [false, false];
+
+function applySpeakerMute(i) {
+  if (speakerGains[i]) speakerGains[i].gain.value = speakerMuted[i] ? 0 : 1;
+}
+
+['Main', 'Sub'].forEach((name, i) => {
+  const btn = document.getElementById('btnMute' + name);
+  btn.addEventListener('click', () => {
+    speakerMuted[i] = !speakerMuted[i];
+    btn.classList.toggle('muted', speakerMuted[i]);
+    btn.setAttribute('aria-pressed', speakerMuted[i] ? 'true' : 'false');
+    btn.textContent = speakerMuted[i] ? 'MUTED' : 'MUTE';
+    applySpeakerMute(i);
+  });
+});
+
+// <squelch>
+function makeSquelch(rate) {
+  const HYST_DB = 3;
+  const HOLD_SEC = 0.4;
+  const FADE_SEC = 0.01;
+  const FRAME_SEC = 0.01;
+  const WIN_FRAMES = 30;
+  const hist = [];
+  const gates = [];
+
+  function measure(ci, a) {
+    let s = 0;
+    for (let i = 0; i < a.length; i++) s += a[i] * a[i];
+    const db = 20 * Math.log10(Math.max(Math.sqrt(s / a.length), 1e-6));
+    const n = Math.max(1, Math.round(rate * FRAME_SEC));
+    const h = hist[ci] || (hist[ci] = []);
+    for (let i = 0; i + n <= a.length; i += n) {
+      let f = 0;
+      for (let j = i; j < i + n; j++) f += a[j] * a[j];
+      h.push(20 * Math.log10(Math.max(Math.sqrt(f / n), 1e-6)));
+      if (h.length > WIN_FRAMES) h.shift();
+    }
+    return { db, range: h.length ? Math.max(...h) - Math.min(...h) : 0 };
+  }
+
+  function step(g, m, frames, cfg, forceOpen) {
+    if (!cfg.enabled || forceOpen) {
+      g.open = true;
+      g.holdLeft = HOLD_SEC;
+      return;
+    }
+    const byVar = cfg.mode === 'var';
+    const openCond = byVar ? m.range > cfg.varThr : cfg.invert ? m.db < cfg.threshold : m.db > cfg.threshold;
+    const keepCond = byVar ? m.range > cfg.varThr : cfg.invert ? m.db < cfg.threshold + HYST_DB : m.db > cfg.threshold - HYST_DB;
+    if (!g.open) {
+      if (openCond) { g.open = true; g.holdLeft = HOLD_SEC; }
+    } else if (keepCond) {
+      g.holdLeft = HOLD_SEC;
+    } else {
+      g.holdLeft -= frames / rate;
+      if (g.holdLeft <= 0) g.open = false;
+    }
+  }
+
+  function fade(g, arrays, frames) {
+    const target = g.open ? 1 : 0;
+    if (g.gain === target && target === 1) return;
+    const n = Math.min(frames, Math.max(1, Math.ceil(rate * FADE_SEC)));
+    const g0 = g.gain;
+    for (const a of arrays) {
+      for (let i = 0; i < frames; i++) a[i] *= i < n ? g0 + (target - g0) * ((i + 1) / n) : target;
+    }
+    g.gain = target;
+  }
+
+  function process(chans, cfgs, forceOpen) {
+    const frames = chans[0].length;
+    chans.forEach((_, c) => { if (!gates[c]) gates[c] = { open: false, holdLeft: 0, gain: 0 }; });
+    const ms = chans.map((a, c) => measure(c, a));
+
+    chans.forEach((a, c) => {
+      const cfg = cfgs[c] || cfgs[0];
+      step(gates[c], ms[c], frames, cfg, forceOpen);
+      fade(gates[c], [a], frames);
+    });
+    return ms.map((m, c) => ({ db: m.db, range: m.range, open: gates[c].open }));
+  }
+  return { process };
+}
+// </squelch>
+
+
+const SQ_KEYS = ['squelch_main_v3', 'squelch_sub_v3'];
+const sqCfgs = [
+  { enabled: false, mode: 'var', threshold: -34, varThr: 8, invert: false },
+  { enabled: false, mode: 'var', threshold: -34, varThr: 8, invert: false }
+];
+sqCfgs.forEach((cfg, idx) => {
+  try { Object.assign(cfg, JSON.parse(localStorage.getItem(SQ_KEYS[idx]) || '{}')); } catch (e) {}
+});
+
+const dbToPct = (db) => Math.max(0, Math.min(100, (db + 80) / 80 * 100));
+
+const sqChannels = ['Main', 'Sub'].map((name, idx) => {
+  const m = document.getElementById('meter' + name);
+  return {
+    name: name === 'Main' ? 'MAIN' : 'SUB',
+    idx: idx,
+    cfg: sqCfgs[idx],
+    key: SQ_KEYS[idx],
+    on: document.getElementById('sqOn' + name),
+    mode: document.getElementById('sqMode' + name),
+    vthr: document.getElementById('sqVar' + name),
+    vthrVal: document.getElementById('sqVarVal' + name),
+    rowVar: document.getElementById('rowVar' + name),
+    thr: document.getElementById('sqThr' + name),
+    thrVal: document.getElementById('sqThrVal' + name),
+    rowThr: document.getElementById('rowThr' + name),
+    inv: document.getElementById('sqInv' + name),
+    rowInv: document.getElementById('rowInv' + name),
+    meter: m,
+    lvl: m.querySelector('.lvl'),
+    mark: m.querySelector('.thr'),
+    state: document.getElementById('state' + name)
+  };
+});
+
+function sqRefreshChannel(ch) {
+  ch.on.checked = ch.cfg.enabled;
+  ch.mode.value = ch.cfg.mode;
+  ch.vthr.value = ch.cfg.varThr;
+  ch.vthrVal.textContent = ch.cfg.varThr + ' dB';
+  ch.rowVar.classList.toggle('hidden', ch.cfg.mode !== 'var');
+  ch.rowThr.classList.toggle('hidden', ch.cfg.mode === 'var');
+  ch.rowInv.classList.toggle('hidden', ch.cfg.mode === 'var');
+  ch.thr.value = ch.cfg.threshold;
+  ch.thrVal.textContent = ch.cfg.threshold + ' dBFS';
+  ch.inv.checked = ch.cfg.invert;
+  ch.mark.style.left = 'calc(' + dbToPct(ch.cfg.threshold) + '% - 1px)';
+}
+
+function sqSaveChannel(ch) {
+  ch.cfg.enabled = ch.on.checked;
+  ch.cfg.mode = ch.mode.value;
+  ch.cfg.varThr = +ch.vthr.value;
+  ch.cfg.threshold = +ch.thr.value;
+  ch.cfg.invert = ch.inv.checked;
+  try { localStorage.setItem(ch.key, JSON.stringify(ch.cfg)); } catch (e) {}
+  sqRefreshChannel(ch);
+}
+
+sqChannels.forEach((ch) => {
+  [ch.on, ch.mode, ch.vthr, ch.thr, ch.inv].forEach((el) => {
+    el.addEventListener('input', () => sqSaveChannel(ch));
+  });
+  sqRefreshChannel(ch);
+});
+
+// Temporarily open the DSP squelch while the radio reports BUSY (CAT RI P8 = 1).
+// Opt-in: with the radio SQL at 0 the radio is always BUSY, which would defeat the DSP squelch.
+const SQ_BUSY_KEY = 'squelch_busy_bypass_v1';
+const sqBusyBypass = document.getElementById('sqBusyBypass');
+let radioBusy = false;
+try { sqBusyBypass.checked = localStorage.getItem(SQ_BUSY_KEY) === '1'; } catch (e) {}
+sqBusyBypass.addEventListener('input', () => {
+  try { localStorage.setItem(SQ_BUSY_KEY, sqBusyBypass.checked ? '1' : '0'); } catch (e) {}
+});
+
+function sqShowLevel(rs) {
+  let anyOpen = false;
+  sqChannels.forEach((ch, c) => {
+    const r = rs[Math.min(c, rs.length - 1)];
+    ch.lvl.style.width = dbToPct(r.db) + '%';
+    ch.meter.classList.toggle('open', r.open);
+    if (r.open) anyOpen = true;
+    ch.state.textContent = ch.name + ': ' + r.db.toFixed(1) + ' dBFS  var ' + r.range.toFixed(1) + ' dB  ' +
+      (!ch.cfg.enabled ? '(disabled)' : r.open ? 'OPEN' : 'CLOSED');
+  });
+  ledRx.classList.toggle('on-green', anyOpen);
+}
+
+function concat(a, b) {
+  if (a.length === 0) return b;
+  const r = new Uint8Array(a.length + b.length);
+  r.set(a, 0);
+  r.set(b, a.length);
+  return r;
+}
+
+function decode(bytes, ch, width) {
+  const frames = Math.floor(bytes.length / (ch * width));
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const out = [];
+  for (let c = 0; c < ch; c++) out.push(new Float32Array(frames));
+  let o = 0;
+  for (let i = 0; i < frames; i++) {
+    for (let c = 0; c < ch; c++) {
+      let v;
+      if (width === 2) v = view.getInt16(o, true) / 32768;
+      else if (width === 3) {
+        let s = (bytes[o + 2] << 16) | (bytes[o + 1] << 8) | bytes[o];
+        if (s & 0x800000) s -= 0x1000000;
+        v = s / 8388608;
+      } else if (width === 4) v = view.getInt32(o, true) / 2147483648;
+      else v = (bytes[o] - 128) / 128;
+      out[c][i] = v;
+      o += width;
+    }
+  }
+  return { frames, channels: out, used: o };
+}
+
+// Spectrum Scope & Waterfall renderer (one per channel: left = MAIN, right = SUB)
+let currentAudioRate = 48000;
+
+// Manual notch position per receiver, drawn over the scope: { on, hz } (hz = audio frequency, 0 = unknown)
+const notchMarks = [{ on: false, hz: 0 }, { on: false, hz: 0 }];
+
+function makeScope(name, idx) {
+  const canvas = document.getElementById('scopeCanvas' + name);
+  const sctx = canvas.getContext('2d');
+  const wfCanvas = document.createElement('canvas');
+  wfCanvas.width = canvas.width;
+  wfCanvas.height = canvas.height / 2;
+  const wfCtx = wfCanvas.getContext('2d');
+  const sc = { idx, spanHz: 3500 }; // Default: 3.5kHz for SSB / FT8 / CW
+
+  // Waterfall baseline: analyser levels (0-255) at or below this are drawn black; the rest is
+  // stretched over the full colour range. Only the waterfall uses it, the spectrum trace does not.
+  const WF_BASE_KEY = 'wf_base_v1_' + name;
+  const baseSlider = document.getElementById('wfBase' + name);
+  const baseVal = document.getElementById('wfBaseVal' + name);
+  let wfBase = 0;
+  try {
+    const saved = parseInt(localStorage.getItem(WF_BASE_KEY), 10);
+    if (saved >= 0 && saved <= 200) wfBase = saved;
+  } catch (e) {}
+  baseSlider.value = wfBase;
+  baseVal.textContent = wfBase;
+  baseSlider.addEventListener('input', () => {
+    wfBase = Math.min(200, Math.max(0, parseInt(baseSlider.value, 10) || 0));
+    baseVal.textContent = wfBase;
+    try { localStorage.setItem(WF_BASE_KEY, String(wfBase)); } catch (e) {}
+  });
+
+  const btns = document.querySelectorAll('.scope-spans[data-scope="' + name + '"] .scope-span-btn[data-span]');
+  btns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      btns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      sc.spanHz = parseInt(btn.dataset.span, 10);
+    });
+  });
+
+  sc.clearWaterfall = function () {
+    wfCtx.clearRect(0, 0, wfCanvas.width, wfCanvas.height);
+  };
+
+  sc.render = function () {
+    const w = canvas.width;
+    const h = canvas.height;
+    const BAR_H = 16; // frequency ruler under the waterfall
+    const specH = h * 0.52;
+    const wfH = h - specH - BAR_H;
+    const an = scopeAnalysers[idx];
+
+    if (!an) {
+      sctx.fillStyle = '#020617';
+      sctx.fillRect(0, 0, w, h);
+      return;
+    }
+
+    const fData = new Uint8Array(an.frequencyBinCount);
+    an.getByteFrequencyData(fData);
+
+    sctx.fillStyle = '#020617';
+    sctx.fillRect(0, 0, w, h);
+
+    const nyquist = currentAudioRate / 2;
+    const maxBin = Math.max(10, Math.min(fData.length - 1, Math.round((sc.spanHz / nyquist) * fData.length)));
+
+    // Scale: major frequency lines every majorHz (labelled on the ruler), minor ticks every minorHz,
+    // and level lines every 20 dB using the analyser's own dB range.
+    const majorHz = sc.spanHz <= 3500 ? 500 : (sc.spanHz <= 6000 ? 1000 : 4000);
+    const minorHz = sc.spanHz <= 3500 ? 100 : (sc.spanHz <= 6000 ? 200 : 1000);
+    const freqLines = (y0, y1, color) => {
+      sctx.strokeStyle = color;
+      sctx.lineWidth = 1;
+      for (let f = majorHz; f < sc.spanHz; f += majorHz) {
+        const x = Math.round((f / sc.spanHz) * w) + 0.5;
+        sctx.beginPath();
+        sctx.moveTo(x, y0);
+        sctx.lineTo(x, y1);
+        sctx.stroke();
+      }
+    };
+    const dbMin = an.minDecibels, dbMax = an.maxDecibels;
+    const dbLines = [];
+    for (let db = Math.ceil(dbMin / 20) * 20; db < dbMax; db += 20) {
+      dbLines.push({ db, y: specH - ((db - dbMin) / (dbMax - dbMin)) * (specH - 4) });
+    }
+    sctx.strokeStyle = 'rgba(51, 65, 85, 0.8)';
+    sctx.lineWidth = 1;
+    for (const l of dbLines) {
+      sctx.beginPath();
+      sctx.moveTo(0, l.y);
+      sctx.lineTo(w, l.y);
+      sctx.stroke();
+    }
+    freqLines(0, specH, 'rgba(71, 85, 105, 0.8)');
+
+    sctx.beginPath();
+    sctx.moveTo(0, specH);
+    for (let i = 0; i <= maxBin; i++) {
+      const x = (i / maxBin) * w;
+      const v = fData[i] / 255.0;
+      sctx.lineTo(x, specH - v * (specH - 4));
+    }
+    sctx.lineTo(w, specH);
+    sctx.closePath();
+
+    const grad = sctx.createLinearGradient(0, 0, 0, specH);
+    const rgb = idx === 0 ? '56, 189, 248' : '16, 185, 129';
+    grad.addColorStop(0, 'rgba(' + rgb + ', 0.85)');
+    grad.addColorStop(0.5, 'rgba(' + rgb + ', 0.35)');
+    grad.addColorStop(1, 'rgba(2, 6, 23, 0.05)');
+    sctx.fillStyle = grad;
+    sctx.fill();
+
+    sctx.strokeStyle = idx === 0 ? '#38bdf8' : '#10b981';
+    sctx.lineWidth = 1.5;
+    sctx.stroke();
+
+    sctx.font = '9px monospace';
+    sctx.fillStyle = '#64748b';
+    sctx.textAlign = 'left';
+    for (const l of dbLines) sctx.fillText(l.db + 'dB', 2, l.y - 2);
+
+    wfCtx.drawImage(wfCanvas, 0, 1);
+    const imgData = wfCtx.createImageData(w, 1);
+    for (let i = 0; i < w; i++) {
+      const bin = Math.min(maxBin, Math.floor((i / w) * maxBin));
+      const val = wfBase > 0 ? Math.max(0, (fData[bin] - wfBase) * 255 / (255 - wfBase)) : fData[bin];
+      let r = 0, g = 0, b = 0;
+      if (val < 60) {
+        b = val * 4;
+      } else if (val < 120) {
+        b = 255;
+        g = (val - 60) * 4;
+      } else if (val < 180) {
+        g = 255;
+        r = (val - 120) * 4;
+        b = 255 - r;
+      } else {
+        r = 255;
+        g = 255 - (val - 180) * 2;
+        b = (val - 180) * 4;
+      }
+      const o = i * 4;
+      imgData.data[o] = r;
+      imgData.data[o + 1] = g;
+      imgData.data[o + 2] = b;
+      imgData.data[o + 3] = 255;
+    }
+    wfCtx.putImageData(imgData, 0, 0);
+    sctx.drawImage(wfCanvas, 0, specH, w, wfH);
+    freqLines(specH, specH + wfH, 'rgba(226, 232, 240, 0.28)');
+
+    // Manual notch marker: solid + shaded when ON, dashed when OFF (so its position can still be set up).
+    // The notch frequency is an audio frequency, the same axis as this scope.
+    const nm = notchMarks[idx];
+    if (nm.hz > 0 && nm.hz < sc.spanHz) {
+      const nx = (nm.hz / sc.spanHz) * w;
+      const bandPx = Math.max(3, (60 / sc.spanHz) * w);   // about the width of a narrow notch
+      sctx.save();
+      if (nm.on) {
+        sctx.fillStyle = 'rgba(245, 158, 11, 0.22)';
+        sctx.fillRect(nx - bandPx / 2, 0, bandPx, specH + wfH);
+        sctx.strokeStyle = '#f59e0b';
+        sctx.lineWidth = 2;
+        sctx.setLineDash([]);
+      } else {
+        sctx.strokeStyle = 'rgba(245, 158, 11, 0.55)';
+        sctx.lineWidth = 1;
+        sctx.setLineDash([4, 4]);
+      }
+      sctx.beginPath();
+      sctx.moveTo(nx, 0);
+      sctx.lineTo(nx, specH + wfH);
+      sctx.stroke();
+      sctx.setLineDash([]);
+      sctx.font = 'bold 9px monospace';
+      sctx.fillStyle = nm.on ? '#fbbf24' : 'rgba(251, 191, 36, 0.7)';
+      sctx.textAlign = nx > w - 70 ? 'right' : 'left';
+      sctx.fillText('NOTCH ' + nm.hz + 'Hz' + (nm.on ? '' : ' (off)'), nx + (nx > w - 70 ? -4 : 4), 11);
+      sctx.restore();
+    }
+
+    // Frequency ruler: minor tick every minorHz, longer tick + label every majorHz
+    const barY = specH + wfH;
+    sctx.fillStyle = '#0a0f1d';
+    sctx.fillRect(0, barY, w, BAR_H);
+    sctx.strokeStyle = '#475569';
+    sctx.lineWidth = 1;
+    sctx.beginPath();
+    sctx.moveTo(0, barY + 0.5);
+    sctx.lineTo(w, barY + 0.5);
+    for (let f = minorHz; f < sc.spanHz; f += minorHz) {
+      const x = Math.round((f / sc.spanHz) * w) + 0.5;
+      sctx.moveTo(x, barY + 1);
+      sctx.lineTo(x, barY + (f % majorHz === 0 ? 6 : 3));
+    }
+    sctx.stroke();
+    sctx.font = '9px monospace';
+    sctx.fillStyle = '#94a3b8';
+    sctx.textAlign = 'center';
+    for (let f = majorHz; f < sc.spanHz; f += majorHz) {
+      sctx.fillText((f >= 1000 ? (f / 1000).toFixed(1) + 'k' : f) + 'Hz', (f / sc.spanHz) * w, h - 2);
+    }
+    sctx.textAlign = 'left';
+    sctx.fillText('0', 2, h - 2);
+    sctx.textAlign = 'right';
+    sctx.fillText((sc.spanHz / 1000).toFixed(1) + 'kHz', w - 2, h - 2);
+  };
+  return sc;
+}
+
+const scopes = [makeScope('Main', 0), makeScope('Sub', 1)];
+
+function renderScope() {
+  scopes.forEach(s => s.render());
+  requestAnimationFrame(renderScope);
+}
+requestAnimationFrame(renderScope);
+
+let isUserStopped = true;
+let reconnectTimer = null;
+
+async function start() {
+  isUserStopped = false;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  abort = new AbortController();
+  btnPlay.textContent = 'PWR OFF / STOP';
+  btnPlay.classList.add('running');
+  try {
+    const res = await fetch('/stream.pcm', { signal: abort.signal, cache: 'no-store' });
+    if (!res.ok) {
+      if (!isUserStopped) scheduleReconnect();
+      else stop();
+      return;
+    }
+    const rate = +res.headers.get('X-Sample-Rate');
+    const ch = +res.headers.get('X-Channels');
+    const width = +res.headers.get('X-Bytes-Per-Sample');
+    document.getElementById('scopeRateText').textContent = (rate / 1000).toFixed(1) + ' kHz ' + ch + 'ch ' + (width * 8) + 'bit';
+
+    if (!ctx || ctx.state === 'closed') {
+      ctx = new AudioContext({ sampleRate: rate });
+    }
+    await ctx.resume();
+
+    // Playback bus: the source is split per channel (left = MAIN, right = SUB;
+    // mono feeds both). Each channel is tapped by its own analyser (pre-mute, so
+    // scope keeps running) and then passes a per-channel mute gain to the speakers.
+    const mix = ctx.createGain();
+    const splitter = ctx.createChannelSplitter(2);
+    mix.connect(splitter);
+    const merger = ctx.createChannelMerger(2);
+    merger.connect(ctx.destination);
+    speakerGains = [0, 1].map((i) => {
+      const g = ctx.createGain();
+      splitter.connect(g, ch >= 2 ? i : 0);
+      g.connect(merger, 0, i);
+      return g;
+    });
+    speakerGains.forEach((_, i) => applySpeakerMute(i));
+    scopeAnalysers = [0, 1].map((i) => {
+      const an = ctx.createAnalyser();
+      an.fftSize = 2048;
+      an.smoothingTimeConstant = 0.6;
+      splitter.connect(an, ch >= 2 ? i : 0);
+      return an;
+    });
+    currentAudioRate = rate;
+
+    const minBytes = Math.ceil(rate * BUFFER_SEC) * ch * width;
+    const prebufferBytes = Math.ceil(rate * PREBUFFER_SEC) * ch * width;
+    let pending = new Uint8Array(0);
+    let nextTime = 0;
+    let isPrebuffering = true;
+    const squelch = makeSquelch(rate);
+    const reader = res.body.getReader();
+
+    // Diagnostics (console: audioDiag): tells a server/network stall (maxReadMs) from a browser stall (maxProcMs)
+    const diag = window.audioDiag = { underruns: 0, maxReadMs: 0, maxProcMs: 0, slowReads: 0, chunks: 0 };
+    let diagLog = performance.now();
+
+    for (;;) {
+      const tRead = performance.now();
+      const { done, value } = await reader.read();
+      if (done) break;
+      const tGot = performance.now();
+      const readMs = tGot - tRead;
+      diag.chunks++;
+      if (readMs > diag.maxReadMs) diag.maxReadMs = readMs;
+      if (readMs > 150) diag.slowReads++;
+      pending = concat(pending, value);
+
+      // Pre-buffer initial audio before playing
+      if (isPrebuffering) {
+        if (pending.length < prebufferBytes) continue;
+        isPrebuffering = false;
+        nextTime = ctx.currentTime + 0.15;
+      }
+
+      if (pending.length < minBytes) continue;
+
+      const d = decode(pending, ch, width);
+      pending = pending.slice(d.used);
+      // The radio's USB audio is [left = MAIN, right = SUB] and follows a VFO swap (SV;),
+      // so no channel reordering is done here.
+      recFeed(d.channels, rate);
+      sqShowLevel(squelch.process(d.channels, sqCfgs, sqBusyBypass.checked && radioBusy));
+      ft8Chans.forEach((f, i) => {
+        if (f.enabled && d.channels.length > 0) {
+          ft8FeedAudio(f, d.channels[Math.min(i, d.channels.length - 1)], rate);
+        }
+      });
+
+      const now = ctx.currentTime;
+      if (nextTime < now) {
+        diag.underruns++;
+        nextTime = now + 0.12;
+      } else if (nextTime - now > MAX_LATENCY) {
+        nextTime = now + 0.20;
+      }
+
+      const buf = ctx.createBuffer(ch, d.frames, rate);
+      for (let c = 0; c < ch; c++) buf.copyToChannel(d.channels[c], c);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(mix);
+      src.start(nextTime);
+      nextTime += d.frames / rate;
+
+      const procMs = performance.now() - tGot;
+      if (procMs > diag.maxProcMs) diag.maxProcMs = procMs;
+      if (tGot - diagLog > 10000) {
+        diagLog = tGot;
+        if (diag.underruns || diag.slowReads) {
+          console.warn('audioDiag', JSON.stringify({ ...diag, maxReadMs: Math.round(diag.maxReadMs), maxProcMs: Math.round(diag.maxProcMs) }));
+        }
+      }
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') console.error('Stream error:', e);
+  }
+
+  if (!isUserStopped) {
+    scheduleReconnect();
+  } else {
+    stop();
+  }
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (!isUserStopped) {
+      console.log('Reconnecting audio stream...');
+      start();
+    }
+  }, 500);
+}
+
+function stop() {
+  isUserStopped = true;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  if (abort) { abort.abort(); abort = null; }
+  if (ctx) { ctx.close(); ctx = null; scopeAnalysers = [null, null]; speakerGains = [null, null]; }
+  btnPlay.textContent = 'POWER / PLAY';
+  btnPlay.classList.remove('running');
+  ledRx.classList.remove('on-green');
+}
+
+btnPlay.addEventListener('click', () => { if (abort) stop(); else start(); });
+
+const btnRigOff = document.getElementById('btnRigOff');
+if (btnRigOff) {
+  btnRigOff.addEventListener('click', async () => {
+    if (confirm("Turn the FTX-1 power OFF?\n(It cannot be turned back on via CAT. Use the power button on the rig.)")) {
+      try {
+        await fetch('/cat', {
+          method: 'POST',
+          headers: CAT_POST_HEADERS,
+          body: JSON.stringify({ power: 0 })
+        });
+        if (abort) stop();
+      } catch (e) {
+        console.error('Failed to send power off command:', e);
+      }
+    }
+  });
+}
+
+// High-End S-Meter SVG Component
+const SM_S9_RAW = 120;
+const SM_S9_FRAC = 0.6;
+const SM_ARC_DEG = 28.7;
+const SM_CX = 150, SM_CY = 286, SM_R = 250;   // pivot sits far below the face, like a real moving-coil meter
+const SM_NEEDLE = SM_R + 6;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function smFrac(raw) {
+  const v = Math.max(0, Math.min(255, raw));
+  return v <= SM_S9_RAW ? SM_S9_FRAC * v / SM_S9_RAW
+                        : SM_S9_FRAC + (1 - SM_S9_FRAC) * (v - SM_S9_RAW) / (255 - SM_S9_RAW);
+}
+
+function smText(raw) {
+  if (raw <= SM_S9_RAW) return 'S' + Math.min(9, Math.round(raw / SM_S9_RAW * 9));
+  return 'S9+' + Math.round((raw - SM_S9_RAW) / (255 - SM_S9_RAW) * 60) + 'dB';
+}
+
+function svgEl(name, attrs, parent, text) {
+  const e = document.createElementNS(SVG_NS, name);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+// Analog meter face in the style of a vintage Icom moving-coil meter: the S scale is the live one,
+// the blue SWR/Po and the COMP/ALC scales are decoration only.
+function makeSMeter(host, title) {
+  const pt = (f, r) => {
+    const a = (f * 2 - 1) * SM_ARC_DEG * Math.PI / 180;
+    return [SM_CX + r * Math.sin(a), SM_CY - r * Math.cos(a)];
+  };
+  const n2 = (v) => v.toFixed(2);
+  const INK = '#1c1c1c', BLUE = '#2f55c4';
+  const W = 300, H = 140;
+  const svg = svgEl('svg', { viewBox: '0 0 ' + W + ' ' + H, class: 'smeter-svg off', role: 'img' }, host);
+
+  // Lamp-lit vintage face: aged amber paper, two bulbs glowing from the lower corners,
+  // dark vignette and recessed top edge, plus a glass reflection drawn over the needle.
+  const gid = 'smFace' + title;
+  const defs = svgEl('defs', {}, svg);
+  const stopOf = (g, off, color, op) => svgEl('stop', { offset: off, 'stop-color': color, 'stop-opacity': op }, g);
+  const radial = (id, cx, cy, r, extra) => svgEl('radialGradient', Object.assign({ id: gid + id, gradientUnits: 'userSpaceOnUse', cx, cy, r }, extra || {}), defs);
+  const clip = svgEl('clipPath', { id: gid + 'Clip' }, defs);
+  svgEl('rect', { x: 0, y: 0, width: W, height: H, rx: 6 }, clip);
+
+  const gBase = radial('Base', 150, 100, 200);
+  stopOf(gBase, '0', '#f6eaa6', 1); stopOf(gBase, '1', '#d3c377', 1);
+  const gLampL = radial('LampL', 0, H, 190);
+  stopOf(gLampL, '0', '#fffbd6', 0.95); stopOf(gLampL, '0.35', '#fff2a8', 0.5); stopOf(gLampL, '1', '#fff2a8', 0);
+  const gLampR = radial('LampR', W, H, 190);
+  stopOf(gLampR, '0', '#fffbd6', 0.95); stopOf(gLampR, '0.35', '#fff2a8', 0.5); stopOf(gLampR, '1', '#fff2a8', 0);
+  const gVig = radial('Vig', 150, 80, 190, { gradientTransform: 'translate(150 80) scale(1 0.6) translate(-150 -80)' });
+  stopOf(gVig, '0.5', '#3c2504', 0); stopOf(gVig, '1', '#3c2504', 0.55);
+  const gTop = svgEl('linearGradient', { id: gid + 'Top', x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
+  stopOf(gTop, '0', '#2d1b02', 0.5); stopOf(gTop, '1', '#2d1b02', 0);
+  const gGlass = svgEl('linearGradient', { id: gid + 'Glass', x1: 0, y1: 0, x2: 1, y2: 0 }, defs);
+  stopOf(gGlass, '0', '#ffffff', 0.28); stopOf(gGlass, '1', '#ffffff', 0.02);
+
+  const face = svgEl('g', { 'clip-path': 'url(#' + gid + 'Clip)' }, svg);
+  svgEl('rect', { x: 0, y: 0, width: W, height: H, fill: 'url(#' + gid + 'Base)' }, face);
+  svgEl('rect', { x: 0, y: 0, width: W, height: H, fill: 'url(#' + gid + 'LampL)' }, face);
+  svgEl('rect', { x: 0, y: 0, width: W, height: H, fill: 'url(#' + gid + 'LampR)' }, face);
+  svgEl('rect', { x: 0, y: 0, width: W, height: H, fill: 'url(#' + gid + 'Vig)' }, face);
+  svgEl('rect', { x: 0, y: 0, width: W, height: 26, fill: 'url(#' + gid + 'Top)' }, face);
+  svgEl('rect', { x: 0.75, y: 0.75, width: W - 1.5, height: H - 1.5, rx: 5.5, fill: 'none', stroke: 'rgba(60,38,5,.45)', 'stroke-width': 1.5 }, face);
+
+  const arc = (f0, f1, r, color, width) => {
+    const [x0, y0] = pt(f0, r), [x1, y1] = pt(f1, r);
+    svgEl('path', { d: 'M' + n2(x0) + ' ' + n2(y0) + ' A' + r + ' ' + r + ' 0 0 1 ' + n2(x1) + ' ' + n2(y1),
+                    fill: 'none', stroke: color, 'stroke-width': width }, svg);
+  };
+  const tick = (f, r, len, color, width) => {
+    const [x0, y0] = pt(f, r), [x1, y1] = pt(f, r + len);
+    svgEl('line', { x1: n2(x0), y1: n2(y0), x2: n2(x1), y2: n2(y1), stroke: color, 'stroke-width': width }, svg);
+  };
+  const label = (f, r, s, color, size) => {
+    const [x, y] = pt(f, r);
+    svgEl('text', { x: n2(x), y: n2(y + size / 3), 'text-anchor': 'middle', 'font-size': size, 'font-family': 'Arial, Helvetica, sans-serif',
+                    fill: color }, svg, s);
+  };
+  const text = (x, y, s, color, size, anchor, weight) => {
+    svgEl('text', { x, y, 'text-anchor': anchor || 'start', 'font-size': size, 'font-family': 'Arial, Helvetica, sans-serif',
+                    'font-weight': weight || 'normal', fill: color }, svg, s);
+  };
+
+  // S scale (black): S1-S9, then +dB. Heavier line above S9 and block ends, as on the real scale.
+  arc(0, SM_S9_FRAC, SM_R, INK, 1.6);
+  arc(SM_S9_FRAC, 1, SM_R, INK, 2.8);
+  arc(0, 0.025, SM_R, INK, 5);
+  arc(0.975, 1, SM_R, INK, 5);
+  for (let n = 1; n <= 9; n++) {
+    const f = SM_S9_FRAC * n / 9;
+    tick(f, SM_R, n % 2 ? 7 : 4, INK, 1.1);
+    if (n % 2) label(f, SM_R + 15, String(n), INK, 11);
+  }
+  for (let db = 10; db <= 60; db += 10) {
+    const f = SM_S9_FRAC + (1 - SM_S9_FRAC) * db / 60;
+    tick(f, SM_R, db % 20 ? 4 : 7, INK, 1.1);
+    if (db % 20 === 0) label(f, SM_R + 15, '+' + db + 'dB', INK, 10);
+  }
+  text(22, 64, 'S', INK, 13, 'middle', 'bold');
+
+  // SWR / Po scale (blue)
+  const RB = SM_R - 34;
+  arc(0, 1, RB, BLUE, 1.4);
+  arc(0, 0.025, RB, BLUE, 4);
+  for (let i = 0; i <= 20; i++) tick(i / 20, RB, i % 5 ? 3 : 5, BLUE, 1);
+  [['1', 0.04], ['1.5', 0.28], ['2', 0.46], ['3', 0.62]].forEach(([s, f]) => label(f, RB + 12, s, BLUE, 9));
+  [['0', 0.05], ['5', 0.3], ['10', 0.4], ['50', 0.62], ['100', 0.8], ['150', 0.96]].forEach(([s, f]) => label(f, RB - 9, s, BLUE, 8));
+  text(44, 92, 'SWR', BLUE, 9, 'end');
+  text(44, 102, 'Po', BLUE, 9, 'end');
+  text(258, 101, '%', BLUE, 9, 'middle');
+
+  // COMP / ALC scale (black)
+  const RA = RB - 30;
+  arc(0, 1, RA, INK, 1.4);
+  arc(0, 0.02, RA, INK, 4);
+  for (let i = 0; i <= 20; i++) tick(i / 20, RA, i % 5 ? 3 : 5, INK, 1);
+  [['0', 0.02], ['5', 0.26], ['10', 0.5], ['15', 0.74], ['20', 0.95]].forEach(([s, f]) => label(f, RA - 9, s, INK, 8));
+  text(56, 117, 'COMP', INK, 8, 'end');
+  text(56, 126, 'ALC', INK, 8, 'end');
+  text(246, 127, 'dB', INK, 8, 'start');
+
+  text(10, 16, title, INK, 11, 'start', 'bold');
+  const reading = svgEl('text', { x: W - 10, y: 16, 'text-anchor': 'end', 'font-size': 11, 'font-family': 'Arial, Helvetica, sans-serif',
+                                  'font-weight': 'bold', fill: INK }, svg, '--');
+
+  // Needle with a soft shadow; both rotate about the (off-face) pivot.
+  const needle = svgEl('g', {}, svg);
+  svgEl('line', { x1: SM_CX + 2.6, y1: SM_CY - 120 + 2.6, x2: SM_CX + 2.6, y2: SM_CY - SM_NEEDLE + 2.6, stroke: 'rgba(60,35,0,.14)',
+                  'stroke-width': 4, 'stroke-linecap': 'round' }, needle);
+  svgEl('line', { x1: SM_CX + 2, y1: SM_CY - 120 + 2, x2: SM_CX + 2, y2: SM_CY - SM_NEEDLE + 2, stroke: 'rgba(60,35,0,.28)',
+                  'stroke-width': 2, 'stroke-linecap': 'round' }, needle);
+  svgEl('line', { x1: SM_CX, y1: SM_CY - 120, x2: SM_CX, y2: SM_CY - SM_NEEDLE, stroke: '#0a0a0a',
+                  'stroke-width': 1.1, 'stroke-linecap': 'round' }, needle);
+
+  // Glass reflection over the face and needle.
+  svgEl('path', { d: 'M0 0 H175 L88 ' + H + ' H0 Z', fill: 'url(#' + gid + 'Glass)', 'clip-path': 'url(#' + gid + 'Clip)' }, svg);
+  svgEl('line', { x1: 6, y1: 1.5, x2: W - 6, y2: 1.5, stroke: 'rgba(255,255,255,.35)', 'stroke-width': 1 }, svg);
+
+  // Meter hub at the bottom edge hides where the needle comes from.
+  svgEl('circle', { cx: SM_CX + 1, cy: H + 6, r: 22, fill: 'rgba(40,25,0,.3)' }, svg);
+  svgEl('circle', { cx: SM_CX, cy: H + 4, r: 20, fill: '#6b6a58' }, svg);
+  svgEl('circle', { cx: SM_CX, cy: H + 4, r: 14, fill: '#9c9a82' }, svg);
+  svgEl('circle', { cx: SM_CX, cy: H - 4, r: 3.2, fill: '#2f6f46' }, svg);
+
+  const m = { cur: 0, target: 0, shown: null };
+  m.set = (raw) => {
+    svg.setAttribute('class', raw === null ? 'smeter-svg off' : 'smeter-svg');
+    m.target = raw === null ? 0 : smFrac(raw);
+    reading.textContent = raw === null ? '--' : smText(raw);
+    reading.setAttribute('fill', INK);
+  };
+  m.draw = () => {
+    m.cur += (m.target - m.cur) * (m.target > m.cur ? 0.4 : 0.08);
+    if (Math.abs(m.target - m.cur) < 0.0005) m.cur = m.target;
+    if (m.cur !== m.shown) {
+      needle.setAttribute('transform', 'rotate(' + n2((m.cur * 2 - 1) * SM_ARC_DEG) + ' ' + SM_CX + ' ' + SM_CY + ')');
+      m.shown = m.cur;
+    }
+  };
+  m.draw();
+  return m;
+}
+
+const smHost = document.getElementById('smeters');
+const smMeters = [makeSMeter(smHost, 'MAIN'), makeSMeter(smHost, 'SUB')];
+
+(function smAnimate() {
+  smMeters.forEach((m) => m.draw());
+  requestAnimationFrame(smAnimate);
+})();
+
+// VFO Frequency & Rotary Controller Logic
+let curFreqMain = 0;
+let curFreqSub = 0;
+let lastUserChangeMain = 0;
+let lastUserChangeSub = 0;
+let isUserEditingMain = false;
+let isUserEditingSub = false;
+
+let stepMain = 1000;
+let stepSub = 1000;
+// REC: keeps the last REC_SECONDS of each receiver's audio (after the L/R correction)
+// and saves it as a mono 16-bit WAV on demand.
+const REC_SECONDS = 30;
+const recBuf = [null, null];   // Float32Array ring per receiver
+let recPos = [0, 0], recFilled = [0, 0], recRate = 0;
+function recFeed(channels, rate) {
+  if (rate !== recRate) {      // (re)allocate when the sample rate is first known or changes
+    recRate = rate;
+    for (let i = 0; i < 2; i++) { recBuf[i] = new Float32Array(Math.round(rate * REC_SECONDS)); recPos[i] = 0; recFilled[i] = 0; }
+  }
+  for (let i = 0; i < 2; i++) {
+    const src = channels[Math.min(i, channels.length - 1)];
+    if (!src) continue;
+    const ring = recBuf[i], n = ring.length;
+    let p = recPos[i];
+    for (let k = 0; k < src.length; k++) { ring[p] = src[k]; if (++p === n) p = 0; }
+    recPos[i] = p;
+    recFilled[i] = Math.min(n, recFilled[i] + src.length);
+  }
+}
+function recSnapshot(idx) {
+  const ring = recBuf[idx], n = recFilled[idx];
+  if (!ring || n === 0) return null;
+  const out = new Float32Array(n);
+  const start = (recPos[idx] - n + ring.length) % ring.length;
+  for (let i = 0; i < n; i++) out[i] = ring[(start + i) % ring.length];
+  return out;
+}
+function encodeWav16(samples, rate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const v = new DataView(buf);
+  const str = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) {
+    const x = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(44 + i * 2, x < 0 ? x * 32768 : x * 32767, true);
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+function recSave(idx) {
+  const btn = document.getElementById(idx ? 'btnRecSub' : 'btnRecMain');
+  const samples = recSnapshot(idx);
+  if (!samples) { btn.title = 'Audio stream has not started yet'; return; }
+  const t = new Date(), z = (n) => String(n).padStart(2, '0');
+  const stamp = t.getFullYear() + z(t.getMonth() + 1) + z(t.getDate()) + '_' + z(t.getHours()) + z(t.getMinutes()) + z(t.getSeconds());
+  const hz = idx ? curFreqSub : curFreqMain;
+  const mode = (idx ? modeBadgeSub : modeBadgeMain).textContent;
+  const name = 'ftx1_' + (idx ? 'sub' : 'main') + '_' + stamp + (hz > 0 ? '_' + (hz / 1e6).toFixed(3) + 'MHz' : '') + '_' + mode + '.wav';
+  const url = URL.createObjectURL(encodeWav16(samples, recRate));
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  btn.classList.add('flash');
+  setTimeout(() => btn.classList.remove('flash'), 400);
+  btn.title = name + ' (' + (samples.length / recRate).toFixed(1) + ' s) saved';
+}
+document.getElementById('btnRecMain').addEventListener('click', () => recSave(0));
+document.getElementById('btnRecSub').addEventListener('click', () => recSave(1));
+
+const USER_CHANGE_HOLD_MS = 1500;
+
+const freqMainDisplay = document.getElementById('freqMainDisplay');
+const freqSubDisplay = document.getElementById('freqSubDisplay');
+const freqMainInput = document.getElementById('freqMainInput');
+const freqSubInput = document.getElementById('freqSubInput');
+const modeSelectMain = document.getElementById('modeSelectMain');
+const modeSelectSub = document.getElementById('modeSelectSub');
+const modeBadgeMain = document.getElementById('modeBadgeMain');
+const modeBadgeSub = document.getElementById('modeBadgeSub');
+
+function getStep(sub) {
+  return sub ? stepSub : stepMain;
+}
+
+function initStepButtons(sub, containerId) {
+  const container = document.getElementById(containerId);
+  const btns = container.querySelectorAll('.rig-btn');
+  btns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      btns.forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      const val = parseInt(btn.dataset.step, 10);
+      if (sub) stepSub = val;
+      else stepMain = val;
+    });
+  });
+}
+initStepButtons(false, 'stepBtnsMain');
+initStepButtons(true, 'stepBtnsSub');
+
+function formatFreq(hz) {
+  if (!hz || hz <= 0) return '  --.---.---';
+  const s = String(Math.max(0, hz)).padStart(9, '0');
+  const mhzVal = parseInt(s.slice(0, -6), 10);
+  const mhzLen = Math.max(3, s.slice(0, -6).length);
+  const mhz = String(mhzVal).padStart(mhzLen, ' ');
+  const khz = s.slice(-6, -3);
+  const hz3 = s.slice(-3);
+  return mhz + '.' + khz + '.' + hz3;
+}
+
+function renderFreq(el, hz, sub) {
+  if (!hz || hz <= 0) {
+    el.innerHTML = '<span class="freq-seg freq-blank" data-step="100000000">&nbsp;</span>' +
+                   '<span class="freq-seg freq-blank" data-step="10000000">&nbsp;</span>' +
+                   '<span class="freq-seg" data-step="1000000">-</span>' +
+                   '<span class="freq-dot">.</span>' +
+                   '<span class="freq-seg" data-step="100000">-</span>' +
+                   '<span class="freq-seg" data-step="10000">-</span>' +
+                   '<span class="freq-seg" data-step="1000">-</span>' +
+                   '<span class="freq-dot">.</span>' +
+                   '<span class="freq-seg" data-step="100">-</span>' +
+                   '<span class="freq-seg" data-step="10">-</span>' +
+                   '<span class="freq-seg" data-step="1">-</span>' +
+                   '<span class="freq-unit">MHz</span>';
+    return;
+  }
+  const s = String(Math.max(0, hz)).padStart(9, '0');
+  const mhzRaw = s.slice(0, -6);
+  const khz = s.slice(-6, -3);
+  const hz3 = s.slice(-3);
+  const mhzVal = parseInt(mhzRaw, 10);
+  const mhzLen = Math.max(3, mhzRaw.length);
+  const mhzStr = String(mhzVal).padStart(mhzLen, ' ');
+
+  // One span per digit; the wheel moves the digit under the pointer by that digit's place value
+  const digits = (str, firstPlace) => {
+    let out = '';
+    for (let i = 0; i < str.length; i++) {
+      const place = Math.round(firstPlace / Math.pow(10, i));
+      const ch = str[i];
+      const isBlank = ch === ' ';
+      const displayChar = isBlank ? '&nbsp;' : ch;
+      const cls = isBlank ? 'freq-seg freq-blank' : 'freq-seg';
+      out += '<span class="' + cls + '" data-step="' + place + '" title="Wheel: ±' + fmtPlace(place) + '">' + displayChar + '</span>';
+    }
+    return out;
+  };
+
+  const mhzFirstPlace = Math.pow(10, 6 + mhzLen - 1);
+  el.innerHTML = digits(mhzStr, mhzFirstPlace) +
+                 '<span class="freq-dot">.</span>' + digits(khz, 100000) +
+                 '<span class="freq-dot">.</span>' + digits(hz3, 100) +
+                 '<span class="freq-unit">MHz</span>';
+}
+
+function fmtPlace(step) {
+  if (step >= 1000000) return (step / 1000000) + ' MHz';
+  if (step >= 1000) return (step / 1000) + ' kHz';
+  return step + ' Hz';
+}
+
+function updateFreqDisplay(sub, hz) {
+  renderFreq(sub ? freqSubDisplay : freqMainDisplay, hz, sub);
+}
+
+function parseFreqInput(val) {
+  const v = val.trim().replace(/,/g, '');
+  if (!v) return 0;
+  if (v.includes('.')) {
+    return Math.round(parseFloat(v) * 1e6);
+  }
+  const n = parseInt(v, 10);
+  if (n < 10000) {
+    return n * 1000000;
+  }
+  return n;
+}
+
+// Serialized CAT Command Queue with Request Coalescing.
+// The page never builds CAT strings: it sends settings (freq, mode, vol, ...) and named actions
+// ('swap', 'copy_main_to_sub', 'copy_sub_to_main'); the firmware turns them into CAT commands.
+let catBusy = false;
+const catQueue = {
+  action: [],
+  main: {},
+  sub: {}
+};
+
+async function processCatQueue() {
+  if (catBusy) return;
+
+  let payloadToSend = null;
+  if (catQueue.action.length > 0) {
+    payloadToSend = { action: catQueue.action.shift() };
+  } else if (Object.keys(catQueue.main).length > 0) {
+    payloadToSend = { target: 'main', ...catQueue.main };
+    catQueue.main = {};
+  } else if (Object.keys(catQueue.sub).length > 0) {
+    payloadToSend = { target: 'sub', ...catQueue.sub };
+    catQueue.sub = {};
+  }
+
+  if (!payloadToSend) return;
+
+  catBusy = true;
+  try {
+    await fetch('/cat', {
+      method: 'POST',
+      headers: CAT_POST_HEADERS,
+      body: JSON.stringify(payloadToSend)
+    });
+  } catch (e) {
+    console.error('CAT command error:', e);
+  } finally {
+    catBusy = false;
+    if (catQueue.action.length > 0 || Object.keys(catQueue.main).length > 0 || Object.keys(catQueue.sub).length > 0) {
+      setTimeout(processCatQueue, 20);
+    }
+  }
+}
+
+function sendCatCommand(payload) {
+  if (payload.action) {
+    catQueue.action.push(payload.action);
+  } else if (payload.target === 'sub') {
+    Object.assign(catQueue.sub, payload);
+  } else {
+    Object.assign(catQueue.main, payload);
+  }
+  processCatQueue();
+}
+
+let sendTimerMain = null;
+let sendTimerSub = null;
+let pendingFreqMain = 0;
+let pendingFreqSub = 0;
+
+function queueFreqSend(sub, hz) {
+  const now = Date.now();
+  if (sub) {
+    lastUserChangeSub = now;
+    curFreqSub = hz;
+    pendingFreqSub = hz;
+    updateFreqDisplay(true, hz);
+    if (!sendTimerSub) {
+      sendTimerSub = setTimeout(() => {
+        const toSend = pendingFreqSub;
+        sendTimerSub = null;
+        sendCatCommand({ target: 'sub', freq: toSend });
+      }, 50);
+    }
+  } else {
+    lastUserChangeMain = now;
+    curFreqMain = hz;
+    pendingFreqMain = hz;
+    updateFreqDisplay(false, hz);
+    if (!sendTimerMain) {
+      sendTimerMain = setTimeout(() => {
+        const toSend = pendingFreqMain;
+        sendTimerMain = null;
+        sendCatCommand({ target: 'main', freq: toSend });
+      }, 50);
+    }
+  }
+}
+
+async function setFreq(sub, hz) {
+  if (hz <= 0) return;
+  queueFreqSend(sub, hz);
+}
+
+async function stepFreq(sub, delta) {
+  const cur = sub ? curFreqSub : curFreqMain;
+  if (cur > 0) {
+    const next = Math.max(100000, cur + delta);
+    setFreq(sub, next);
+  }
+}
+
+function updateModeButtons(sub, mode) {
+  const containerId = sub ? 'modeBtnsSub' : 'modeBtnsMain';
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const btns = container.querySelectorAll('.rig-btn');
+  btns.forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.mode.split(' ').includes(mode));
+  });
+}
+
+async function setMode(sub, mode) {
+  const now = Date.now();
+  if (sub) {
+    lastUserChangeSub = now;
+    modeBadgeSub.textContent = mode;
+    modeSelectSub.value = mode;
+    updateModeButtons(true, mode);
+  } else {
+    lastUserChangeMain = now;
+    modeBadgeMain.textContent = mode;
+    modeSelectMain.value = mode;
+    updateModeButtons(false, mode);
+  }
+  sendCatCommand({ target: sub ? 'sub' : 'main', mode: mode });
+}
+
+// CW follows the usual sideband convention: below 10 MHz lower side (CW-L), otherwise CW-U
+function setCwMode(sub) {
+  const hz = sub ? curFreqSub : curFreqMain;
+  return setMode(sub, hz > 0 && hz < 10000000 ? 'CW-L' : 'CW-U');
+}
+
+async function setBand(sub, freq, mode) {
+  setFreq(sub, freq);
+  if (mode) {
+    await setMode(sub, mode);
+  }
+}
+
+// Dial Rotary Knob Controller
+function makeVfoDial(svgId, sub) {
+  const svg = document.getElementById(svgId);
+  const cx = 50, cy = 50, r = 44;
+
+  // Knob outer body
+  svgEl('circle', { cx: cx, cy: cy, r: r, fill: '#0f172a', stroke: '#334155', 'stroke-width': 3 }, svg);
+  svgEl('circle', { cx: cx, cy: cy, r: r - 5, fill: '#1e293b', stroke: '#475569', 'stroke-width': 1 }, svg);
+
+  // Knurl notches
+  const notchGroup = svgEl('g', {}, svg);
+  for (let i = 0; i < 24; i++) {
+    const a = (i * 15) * Math.PI / 180;
+    const x1 = cx + (r - 4) * Math.cos(a), y1 = cy + (r - 4) * Math.sin(a);
+    const x2 = cx + (r - 1) * Math.cos(a), y2 = cy + (r - 1) * Math.sin(a);
+    svgEl('line', { x1: x1, y1: y1, x2: x2, y2: y2, stroke: '#64748b', 'stroke-width': 1.5 }, notchGroup);
+  }
+
+  // Finger dimple and center cap
+  const dimpleGroup = svgEl('g', {}, svg);
+  svgEl('circle', { cx: cx, cy: cy - 24, r: 7.5, fill: '#020617', stroke: '#38bdf8', 'stroke-width': 1.2 }, dimpleGroup);
+  svgEl('circle', { cx: cx, cy: cy, r: 14, fill: '#0f172a', stroke: '#334155', 'stroke-width': 2 }, svg);
+
+  let angle = 0;
+  let lastAngle = null;
+  let angleAcc = 0;
+  const DEG_PER_STEP = 12;
+
+  function setAngle(deg) {
+    angle = deg % 360;
+    notchGroup.setAttribute('transform', 'rotate(' + angle.toFixed(1) + ' ' + cx + ' ' + cy + ')');
+    dimpleGroup.setAttribute('transform', 'rotate(' + angle.toFixed(1) + ' ' + cx + ' ' + cy + ')');
+  }
+
+  function getAngleFromClient(clientX, clientY) {
+    const rect = svg.getBoundingClientRect();
+    const x = clientX - (rect.left + rect.width / 2);
+    const y = clientY - (rect.top + rect.height / 2);
+    return Math.atan2(y, x) * 180 / Math.PI;
+  }
+
+  let pointerId = null;
+
+  function onPointerDown(e) {
+    e.preventDefault();
+    pointerId = e.pointerId;
+    svg.setPointerCapture(e.pointerId);
+    lastAngle = getAngleFromClient(e.clientX, e.clientY);
+    angleAcc = 0;
+  }
+
+  function onPointerMove(e) {
+    if (pointerId === null || e.pointerId !== pointerId || lastAngle === null) return;
+    e.preventDefault();
+    const currentAngle = getAngleFromClient(e.clientX, e.clientY);
+    let delta = currentAngle - lastAngle;
+    if (delta > 180) delta -= 360;
+    if (delta < -180) delta += 360;
+    lastAngle = currentAngle;
+
+    setAngle(angle + delta);
+    angleAcc += delta;
+
+    const steps = Math.trunc(angleAcc / DEG_PER_STEP);
+    if (steps !== 0) {
+      angleAcc -= steps * DEG_PER_STEP;
+      stepFreq(sub, steps * getStep(sub));
+    }
+  }
+
+  function onPointerUp(e) {
+    if (pointerId !== null && e.pointerId === pointerId) {
+      try { svg.releasePointerCapture(pointerId); } catch (err) {}
+      pointerId = null;
+      lastAngle = null;
+      angleAcc = 0;
+    }
+  }
+
+  svg.addEventListener('pointerdown', onPointerDown);
+  svg.addEventListener('pointermove', onPointerMove);
+  svg.addEventListener('pointerup', onPointerUp);
+  svg.addEventListener('pointercancel', onPointerUp);
+
+  svg.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const dir = e.deltaY > 0 ? -1 : 1;
+    setAngle(angle + dir * DEG_PER_STEP);
+    stepFreq(sub, dir * getStep(sub));
+  }, { passive: false });
+}
+
+makeVfoDial('dialMain', false);
+makeVfoDial('dialSub', true);
+
+// Mini Knob Component for AF GAIN (Volume) and Squelch
+function makeMiniKnob(svgId, valElId, sub, type, onChange) {
+  const svg = document.getElementById(svgId);
+  const valEl = document.getElementById(valElId);
+  const cx = 30, cy = 30, r = 24;
+  const START_DEG = -135, END_DEG = 135, SWEEP_DEG = 270;
+  const color = sub ? '#10b981' : '#38bdf8';
+
+  const pt = (deg, radius) => {
+    const rad = (deg - 90) * Math.PI / 180;
+    return [cx + radius * Math.cos(rad), cy + radius * Math.sin(rad)];
+  };
+
+  const [bx0, by0] = pt(START_DEG, r - 3), [bx1, by1] = pt(END_DEG, r - 3);
+  svgEl('path', {
+    d: 'M ' + bx0.toFixed(1) + ' ' + by0.toFixed(1) + ' A ' + (r - 3) + ' ' + (r - 3) + ' 0 1 1 ' + bx1.toFixed(1) + ' ' + by1.toFixed(1),
+    fill: 'none', stroke: '#1e293b', 'stroke-width': 3, 'stroke-linecap': 'round'
+  }, svg);
+
+  const activeArc = svgEl('path', {
+    d: 'M ' + bx0.toFixed(1) + ' ' + by0.toFixed(1) + ' A ' + (r - 3) + ' ' + (r - 3) + ' 0 0 1 ' + bx0.toFixed(1) + ' ' + by0.toFixed(1),
+    fill: 'none', stroke: color, 'stroke-width': 3, 'stroke-linecap': 'round'
+  }, svg);
+
+  svgEl('circle', { cx: cx, cy: cy, r: r - 6, fill: '#0f172a', stroke: '#334155', 'stroke-width': 1.5 }, svg);
+  svgEl('circle', { cx: cx, cy: cy, r: r - 9, fill: '#1e293b', stroke: '#475569', 'stroke-width': 0.8 }, svg);
+
+  const pointerGroup = svgEl('g', {}, svg);
+  svgEl('line', { x1: cx, y1: cy - 7, x2: cx, y2: cy - (r - 9), stroke: color, 'stroke-width': 2, 'stroke-linecap': 'round' }, pointerGroup);
+
+  let currentVal = 0;
+  let lastY = null;
+  let lastChangeTime = 0;
+  let pointerId = null;
+
+  function updateVisual(val) {
+    currentVal = Math.max(0, Math.min(255, Math.round(val)));
+    const frac = currentVal / 255.0;
+    const deg = START_DEG + frac * SWEEP_DEG;
+    pointerGroup.setAttribute('transform', 'rotate(' + deg.toFixed(1) + ' ' + cx + ' ' + cy + ')');
+
+    const [ax, ay] = pt(deg, r - 3);
+    const largeArc = (deg - START_DEG) > 180 ? 1 : 0;
+    activeArc.setAttribute('d', 'M ' + bx0.toFixed(1) + ' ' + by0.toFixed(1) + ' A ' + (r - 3) + ' ' + (r - 3) + ' 0 ' + largeArc + ' 1 ' + ax.toFixed(1) + ' ' + ay.toFixed(1));
+
+    if (valEl) {
+      valEl.textContent = type === 'vol' ? currentVal + ' (' + Math.round(frac * 100) + '%)' : currentVal;
+    }
+  }
+
+  function setValue(val, triggerChange) {
+    updateVisual(val);
+    if (triggerChange) {
+      lastChangeTime = Date.now();
+      if (onChange) onChange(currentVal);
+    }
+  }
+
+  function onPointerDown(e) {
+    e.preventDefault();
+    pointerId = e.pointerId;
+    svg.setPointerCapture(e.pointerId);
+    lastY = e.clientY;
+  }
+
+  function onPointerMove(e) {
+    if (pointerId === null || e.pointerId !== pointerId || lastY === null) return;
+    e.preventDefault();
+    const dy = lastY - e.clientY;
+    lastY = e.clientY;
+    if (dy !== 0) {
+      setValue(currentVal + dy * 2, true);
+    }
+  }
+
+  function onPointerUp(e) {
+    if (pointerId !== null && e.pointerId === pointerId) {
+      try { svg.releasePointerCapture(pointerId); } catch (err) {}
+      pointerId = null;
+      lastY = null;
+    }
+  }
+
+  svg.addEventListener('pointerdown', onPointerDown);
+  svg.addEventListener('pointermove', onPointerMove);
+  svg.addEventListener('pointerup', onPointerUp);
+  svg.addEventListener('pointercancel', onPointerUp);
+
+  svg.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const dir = e.deltaY > 0 ? -5 : 5;
+    setValue(currentVal + dir, true);
+  }, { passive: false });
+
+  updateVisual(0);
+
+  return {
+    setValue: (val, isExternal) => {
+      if (isExternal && Date.now() - lastChangeTime < USER_CHANGE_HOLD_MS) return;
+      updateVisual(val);
+    },
+    getValue: () => currentVal
+  };
+}
+
+let lastUserChangeSqMain = 0;
+let lastUserChangeSqSub = 0;
+let lastUserChangeVolMain = 0;
+let lastUserChangeVolSub = 0;
+
+function queueKnobSend(sub, type, val) {
+  const now = Date.now();
+  if (type === 'sq') {
+    if (sub) lastUserChangeSqSub = now;
+    else lastUserChangeSqMain = now;
+  } else if (type === 'vol') {
+    if (sub) lastUserChangeVolSub = now;
+    else lastUserChangeVolMain = now;
+  }
+  const payload = { target: sub ? 'sub' : 'main' };
+  payload[type] = val;
+  sendCatCommand(payload);
+}
+
+const knobVolMain = makeMiniKnob('knobVolMain', 'valVolMain', false, 'vol', (v) => queueKnobSend(false, 'vol', v));
+const knobSqMain = makeMiniKnob('knobSqMain', 'valSqMain', false, 'sq', (v) => queueKnobSend(false, 'sq', v));
+const knobVolSub = makeMiniKnob('knobVolSub', 'valVolSub', true, 'vol', (v) => queueKnobSend(true, 'vol', v));
+const knobSqSub = makeMiniKnob('knobSqSub', 'valSqSub', true, 'sq', (v) => queueKnobSend(true, 'sq', v));
+
+// ---- Manual notch (CAT BP): ON/OFF button + frequency knob (10-3200 Hz, 10 Hz steps) ----
+const NOTCH_MIN_HZ = 10, NOTCH_MAX_HZ = 3200;
+let lastUserChangeNotchMain = 0;
+let lastUserChangeNotchSub = 0;
+
+function makeNotchKnob(svgId, valElId, sub, onChange) {
+  const svg = document.getElementById(svgId);
+  const valEl = document.getElementById(valElId);
+  const cx = 30, cy = 30, r = 24;
+  const START_DEG = -135, END_DEG = 135, SWEEP_DEG = 270;
+  const color = sub ? '#10b981' : '#38bdf8';
+  const pt = (deg, radius) => {
+    const rad = (deg - 90) * Math.PI / 180;
+    return [cx + radius * Math.cos(rad), cy + radius * Math.sin(rad)];
+  };
+  const [bx0, by0] = pt(START_DEG, r - 3), [bx1, by1] = pt(END_DEG, r - 3);
+  svgEl('path', {
+    d: 'M ' + bx0.toFixed(1) + ' ' + by0.toFixed(1) + ' A ' + (r - 3) + ' ' + (r - 3) + ' 0 1 1 ' + bx1.toFixed(1) + ' ' + by1.toFixed(1),
+    fill: 'none', stroke: '#1e293b', 'stroke-width': 3, 'stroke-linecap': 'round'
+  }, svg);
+  const activeArc = svgEl('path', { d: '', fill: 'none', stroke: color, 'stroke-width': 3, 'stroke-linecap': 'round' }, svg);
+  svgEl('circle', { cx: cx, cy: cy, r: r - 6, fill: '#0f172a', stroke: '#334155', 'stroke-width': 1.5 }, svg);
+  svgEl('circle', { cx: cx, cy: cy, r: r - 9, fill: '#1e293b', stroke: '#475569', 'stroke-width': 0.8 }, svg);
+  const pointerGroup = svgEl('g', {}, svg);
+  svgEl('line', { x1: cx, y1: cy - 7, x2: cx, y2: cy - (r - 9), stroke: color, 'stroke-width': 2, 'stroke-linecap': 'round' }, pointerGroup);
+
+  let hz = 1000, lastY = null, pointerId = null, lastChangeTime = 0;
+  let pending = 0;                        // drag distance not yet turned into a step
+
+  // The knob scale is logarithmic: a notch is tuned over a wide range but needs fine steps in the speech band
+  const toFrac = (f) => Math.log(f / NOTCH_MIN_HZ) / Math.log(NOTCH_MAX_HZ / NOTCH_MIN_HZ);
+  const fromFrac = (x) => NOTCH_MIN_HZ * Math.pow(NOTCH_MAX_HZ / NOTCH_MIN_HZ, Math.max(0, Math.min(1, x)));
+  const snap = (f) => Math.max(NOTCH_MIN_HZ, Math.min(NOTCH_MAX_HZ, Math.round(f / 10) * 10));
+
+  function updateVisual(f) {
+    hz = snap(f);
+    const frac = toFrac(hz);
+    const deg = START_DEG + frac * SWEEP_DEG;
+    pointerGroup.setAttribute('transform', 'rotate(' + deg.toFixed(1) + ' ' + cx + ' ' + cy + ')');
+    const [ax, ay] = pt(deg, r - 3);
+    const largeArc = (deg - START_DEG) > 180 ? 1 : 0;
+    activeArc.setAttribute('d', 'M ' + bx0.toFixed(1) + ' ' + by0.toFixed(1) + ' A ' + (r - 3) + ' ' + (r - 3) + ' 0 ' + largeArc + ' 1 ' + ax.toFixed(1) + ' ' + ay.toFixed(1));
+    svg.setAttribute('aria-valuenow', String(hz));
+    if (valEl) valEl.textContent = hz + ' Hz';
+  }
+
+  function userSet(f) {
+    const n = snap(f);
+    if (n === hz) return;
+    updateVisual(n);
+    lastChangeTime = Date.now();
+    if (onChange) onChange(hz);
+  }
+
+  // Drag: 1 px = 1/180 of the scale; wheel / arrow keys: one 10 Hz step (shift = x10)
+  svg.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    pointerId = e.pointerId;
+    svg.setPointerCapture(e.pointerId);
+    lastY = e.clientY;
+    pending = 0;
+  });
+  svg.addEventListener('pointermove', (e) => {
+    if (pointerId === null || e.pointerId !== pointerId || lastY === null) return;
+    e.preventDefault();
+    pending += (lastY - e.clientY) / 180;
+    lastY = e.clientY;
+    const next = fromFrac(toFrac(hz) + pending);
+    if (snap(next) !== hz) {
+      pending = 0;
+      userSet(next);
+    }
+  });
+  const end = (e) => {
+    if (pointerId !== null && e.pointerId === pointerId) {
+      try { svg.releasePointerCapture(pointerId); } catch (err) {}
+      pointerId = null;
+      lastY = null;
+      pending = 0;
+    }
+  };
+  svg.addEventListener('pointerup', end);
+  svg.addEventListener('pointercancel', end);
+  svg.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    userSet(hz + (e.deltaY > 0 ? -10 : 10) * (e.shiftKey ? 10 : 1));
+  }, { passive: false });
+  svg.setAttribute('tabindex', '0');
+  svg.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 100 : 10;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') { e.preventDefault(); userSet(hz + step); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') { e.preventDefault(); userSet(hz - step); }
+  });
+
+  updateVisual(hz);
+  return {
+    setValue(f, isExternal) {
+      if (isExternal && Date.now() - lastChangeTime < USER_CHANGE_HOLD_MS) return;
+      updateVisual(f);
+    },
+    getValue: () => hz
+  };
+}
+
+function makeNotchControl(name, sub) {
+  const btn = document.getElementById('notchBtn' + name);
+  let on = false, lastBtnChange = 0, supported = true;
+  const mark = notchMarks[sub ? 1 : 0];
+  function show(v) {
+    on = v;
+    mark.on = v;
+    btn.textContent = v ? 'ON' : 'OFF';
+    btn.classList.toggle('active', v);
+    btn.setAttribute('aria-pressed', v ? 'true' : 'false');
+  }
+  const knob = makeNotchKnob('knobNotch' + name, 'valNotch' + name, sub, (hz) => {
+    mark.hz = hz;
+    if (sub) lastUserChangeNotchSub = Date.now(); else lastUserChangeNotchMain = Date.now();
+    sendCatCommand({ target: sub ? 'sub' : 'main', notch_hz: hz });
+  });
+  btn.addEventListener('click', () => {
+    if (!supported) return;
+    lastBtnChange = Date.now();
+    show(!on);
+    sendCatCommand({ target: sub ? 'sub' : 'main', notch: on ? 1 : 0 });
+  });
+  // mark.hz stays 0 (no line) until the radio has told us the real frequency
+  return {
+    // The manual notch does not exist in FM-type modes (the radio ignores BP there)
+    setMode(modeName) {
+      const ok = !/FM|C4FM/.test(modeName || '');
+      if (ok === supported) return;
+      supported = ok;
+      btn.disabled = !ok;
+      btn.title = ok ? '' : 'Manual notch is not available in FM modes';
+      if (!ok) { show(false); mark.hz = 0; }
+    },
+    apply(isOn, hz) {
+      if (!supported) return;
+      if (isOn !== undefined && Date.now() - lastBtnChange > USER_CHANGE_HOLD_MS) show(!!isOn);
+      if (hz) {
+        knob.setValue(hz, true);
+        mark.hz = knob.getValue();       // what the knob actually shows (it holds the user's value for a moment)
+      }
+    }
+  };
+}
+
+const notchMain = makeNotchControl('Main', false);
+const notchSub = makeNotchControl('Sub', true);
+
+// After a VFO swap/copy the audio already buffered for a channel belongs to the old
+// frequency: drop the FT8 slot audio and the waterfall history so nothing is
+// decoded or displayed under the wrong dial frequency.
+function resetChannelAudio(idx) {
+  ft8Chans[idx].ring.fill(0);
+  ft8Chans[idx].resampleAcc = 0;
+  ft8Chans[idx].resampleSum = 0;
+  ft8Chans[idx].resampleCount = 0;
+  scopes[idx].clearWaterfall();
+}
+
+document.getElementById('btnSwapVfo').addEventListener('click', () => {
+  resetChannelAudio(0);
+  resetChannelAudio(1);
+  lastUserChangeMain = Date.now();
+  lastUserChangeSub = Date.now();
+  const tf = curFreqMain; curFreqMain = curFreqSub; curFreqSub = tf;
+  updateFreqDisplay(false, curFreqMain);
+  updateFreqDisplay(true, curFreqSub);
+  const tm = modeBadgeMain.textContent;
+  modeBadgeMain.textContent = modeBadgeSub.textContent;
+  modeSelectMain.value = modeBadgeMain.textContent;
+  updateModeButtons(false, modeBadgeMain.textContent);
+  modeBadgeSub.textContent = tm;
+  modeSelectSub.value = tm;
+  updateModeButtons(true, tm);
+  sendCatCommand({ action: 'swap' });
+});
+
+document.getElementById('btnCopyAtoB').addEventListener('click', () => {
+  resetChannelAudio(1);
+  lastUserChangeSub = Date.now();
+  curFreqSub = curFreqMain;
+  updateFreqDisplay(true, curFreqSub);
+  modeBadgeSub.textContent = modeBadgeMain.textContent;
+  modeSelectSub.value = modeBadgeMain.textContent;
+  updateModeButtons(true, modeBadgeMain.textContent);
+  sendCatCommand({ action: 'copy_main_to_sub' });
+});
+
+document.getElementById('btnCopyBtoA').addEventListener('click', () => {
+  resetChannelAudio(0);
+  lastUserChangeMain = Date.now();
+  curFreqMain = curFreqSub;
+  updateFreqDisplay(false, curFreqMain);
+  modeBadgeMain.textContent = modeBadgeSub.textContent;
+  modeSelectMain.value = modeBadgeSub.textContent;
+  updateModeButtons(false, modeBadgeSub.textContent);
+  sendCatCommand({ action: 'copy_sub_to_main' });
+});
+
+// VFO Display Font Persistence & Selector
+const VFO_FONT_KEY = 'vfo_font_style_v1';
+const vfoFontSelect = document.getElementById('vfoFontSelect');
+const vfdBezelMain = document.getElementById('vfdBezelMain');
+const vfdBezelSub = document.getElementById('vfdBezelSub');
+const FONT_CLASSES = ['font-chakra', 'font-chakra-italic', 'font-jetbrains', 'font-rajdhani', 'font-sharetech', 'font-system'];
+
+function applyVfoFont(fontClass) {
+  const elements = [vfdBezelMain, vfdBezelSub, freqMainDisplay, freqSubDisplay].filter(Boolean);
+  FONT_CLASSES.forEach(c => {
+    elements.forEach(el => el.classList.remove(c));
+  });
+  const targetClass = FONT_CLASSES.includes(fontClass) ? fontClass : 'font-chakra';
+  elements.forEach(el => el.classList.add(targetClass));
+  if (vfoFontSelect) vfoFontSelect.value = targetClass;
+}
+
+try {
+  const sf = localStorage.getItem(VFO_FONT_KEY);
+  applyVfoFont(sf || 'font-chakra');
+} catch (e) {
+  applyVfoFont('font-chakra');
+}
+
+if (vfoFontSelect) {
+  vfoFontSelect.addEventListener('change', () => {
+    const selected = vfoFontSelect.value;
+    applyVfoFont(selected);
+    try { localStorage.setItem(VFO_FONT_KEY, selected); } catch (e) {}
+  });
+}
+
+modeSelectMain.addEventListener('change', () => setMode(false, modeSelectMain.value));
+modeSelectSub.addEventListener('change', () => setMode(true, modeSelectSub.value));
+
+function handleFreqWheel(e, sub) {
+  e.preventDefault();
+  const dir = e.deltaY < 0 ? 1 : -1;
+  // The digit under the pointer decides the step (10 MHz ... 1 Hz); off the digits the step buttons apply
+  const seg = e.target.closest ? e.target.closest('[data-step]') : null;
+  let step = seg ? parseInt(seg.dataset.step, 10) : getStep(sub);
+  if (!step || isNaN(step) || step <= 0) step = getStep(sub);
+  stepFreq(sub, dir * step);
+}
+
+freqMainDisplay.addEventListener('wheel', (e) => handleFreqWheel(e, false), { passive: false });
+freqSubDisplay.addEventListener('wheel', (e) => handleFreqWheel(e, true), { passive: false });
+
+document.getElementById('formFreqMain').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const hz = parseFreqInput(freqMainInput.value);
+  if (hz > 0) {
+    setFreq(false, hz);
+    freqMainInput.value = '';
+    freqMainInput.blur();
+  }
+});
+
+document.getElementById('formFreqSub').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const hz = parseFreqInput(freqSubInput.value);
+  if (hz > 0) {
+    setFreq(true, hz);
+    freqSubInput.value = '';
+    freqSubInput.blur();
+  }
+});
+
+freqMainInput.addEventListener('focus', () => { isUserEditingMain = true; });
+freqMainInput.addEventListener('blur', () => { isUserEditingMain = false; });
+freqSubInput.addEventListener('focus', () => { isUserEditingSub = true; });
+freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
+
+const SM_POLL_MS = 400;
+
+async function smPoll() {
+  try {
+    const res = await fetch('/cat', { cache: 'no-store' });
+    const d = await res.json();
+    const now = Date.now();
+    if (d.connected) {
+      ledCat.classList.add('on-green');
+      radioBusy = !!d.busy;
+      ledBusy.classList.toggle('on-amber', d.busy);
+      smMeters[0].set(d.s_main);
+      smMeters[1].set(d.s_sub);
+
+      if (d.freq_main && d.freq_main > 0) {
+        if (now - lastUserChangeMain > USER_CHANGE_HOLD_MS || d.freq_main === curFreqMain) {
+          curFreqMain = d.freq_main;
+          updateFreqDisplay(false, d.freq_main);
+          if (!isUserEditingMain && !freqMainInput.value) {
+            freqMainInput.placeholder = (d.freq_main / 1e6).toFixed(3);
+          }
+        }
+      }
+
+      if (d.freq_sub && d.freq_sub > 0) {
+        if (now - lastUserChangeSub > USER_CHANGE_HOLD_MS || d.freq_sub === curFreqSub) {
+          curFreqSub = d.freq_sub;
+          updateFreqDisplay(true, d.freq_sub);
+          if (!isUserEditingSub && !freqSubInput.value) {
+            freqSubInput.placeholder = (d.freq_sub / 1e6).toFixed(3);
+          }
+        }
+      }
+
+      if (d.mode_main && document.activeElement !== modeSelectMain) {
+        if (now - lastUserChangeMain > USER_CHANGE_HOLD_MS) {
+          modeSelectMain.value = d.mode_main;
+          modeBadgeMain.textContent = d.mode_main;
+          updateModeButtons(false, d.mode_main);
+        }
+      }
+      if (d.mode_sub && document.activeElement !== modeSelectSub) {
+        if (now - lastUserChangeSub > USER_CHANGE_HOLD_MS) {
+          modeSelectSub.value = d.mode_sub;
+          modeBadgeSub.textContent = d.mode_sub;
+          updateModeButtons(true, d.mode_sub);
+        }
+      }
+      if (d.vol_main !== undefined) {
+        if (now - lastUserChangeVolSub > USER_CHANGE_HOLD_MS || d.vol_main !== d.vol_sub) {
+          knobVolMain.setValue(d.vol_main, true);
+        }
+      }
+      if (d.sq_main !== undefined) {
+        if (now - lastUserChangeSqSub > USER_CHANGE_HOLD_MS || d.sq_main !== d.sq_sub) {
+          knobSqMain.setValue(d.sq_main, true);
+        }
+      }
+      if (d.vol_sub !== undefined) {
+        if (now - lastUserChangeVolMain > USER_CHANGE_HOLD_MS || d.vol_sub !== d.vol_main) {
+          knobVolSub.setValue(d.vol_sub, true);
+        }
+      }
+      if (d.sq_sub !== undefined) {
+        if (now - lastUserChangeSqMain > USER_CHANGE_HOLD_MS || d.sq_sub !== d.sq_main) {
+          knobSqSub.setValue(d.sq_sub, true);
+        }
+      }
+      notchMain.setMode(d.mode_main);
+      notchSub.setMode(d.mode_sub);
+      notchMain.apply(d.notch_main, d.notch_hz_main);
+      notchSub.apply(d.notch_sub, d.notch_hz_sub);
+    } else {
+      radioBusy = false;
+      ledCat.classList.remove('on-green');
+      ledBusy.classList.remove('on-amber');
+      smMeters.forEach((m) => m.set(null));
+      updateFreqDisplay(false, 0);
+      updateFreqDisplay(true, 0);
+    }
+  } catch (e) {
+    radioBusy = false;
+    ledCat.classList.remove('on-green');
+    ledBusy.classList.remove('on-amber');
+    smMeters.forEach((m) => m.set(null));
+  }
+  setTimeout(smPoll, SM_POLL_MS);
+}
+smPoll();
+
+// ============================================================================
+// FT8 Full-Stack Real-Time Browser-Side Decoder Module
+// JavaScript implementation written for this project, with the specifications and
+// implementations of the open-source projects below as reference.
+//
+// Protocol constants and data tables are derived from the following
+// open-source projects — gratitude to their authors:
+//
+//   ft8_lib  by Karlis Goba (YL3JG)
+//     https://github.com/kgoba/ft8_lib  (MIT License)
+//     Source of: LDPC(174,91) parity-check matrices (NM / MN), CRC-14
+//     polynomial (0x2757), 8-FSK Gray code mapping, and 77-bit message
+//     unpacking tables.
+//
+//   WSJT-X  by Joe Taylor (K1JT), Steve Franke (K9AN), Bill Somerville (G4WJS)
+//     et al.  https://wsjt.sourceforge.io/  (GNU GPL v3)
+//     Source of: FT8 protocol specification — Costas array [3,1,4,0,6,5,2],
+//     77-bit message format, LDPC(174,91) code parameters, and
+//     15-second transmission timing.
+//
+// To the best of the author's knowledge no source code from either project
+// was copied verbatim; the signal-processing logic (STFT, sync search, LLR
+// extraction, BP decoder) was written for this project.  The protocol
+// constants above are re-used because interoperability requires exact
+// agreement with the specification.  See the NOTICE file.
+// ============================================================================
+//
+// Algorithms implemented:
+// - STFT / Costas Pattern 2D Sync (Time Offset DT & Frequency Fine Search)
+// - 8-FSK Gray Demodulation & Soft Log-Likelihood Ratio (LLR) Extraction
+// - LDPC(174, 91) Belief Propagation Decoder (Sum-Product / Parity Checks)
+// - CRC-14 Validation & Standard 77-bit Message Unpacking (Std/Free/Telemetry)
+// ============================================================================
+
+const FT8_SAMPLE_RATE = 6400; // 6400 Hz downsampled audio (1024-point FFT = exactly 6.25 Hz/bin)
+const FT8_PERIOD_SEC = 15;
+const FT8_SLOT_SAMPLES = FT8_SAMPLE_RATE * FT8_PERIOD_SEC; // 96,000 samples @ 6.4kHz
+
+// One independent decoder state per receiver channel (left = MAIN, right = SUB)
+const ft8Chans = ['Main', 'Sub'].map((name, idx) => {
+  const f = {
+    name, idx,
+    enabled: false,
+    ring: new Float32Array(FT8_SLOT_SAMPLES),
+    ringIdx: 0,
+    decodedInPeriod: false,
+    resampleAcc: 0,
+    resampleSum: 0,
+    resampleCount: 0,
+    enableBtn: document.getElementById('ft8EnableBtn' + name),
+    clearBtn: document.getElementById('ft8ClearBtn' + name),
+    syncBadge: document.getElementById('ft8SyncBadge' + name),
+    progressFill: document.getElementById('ft8ProgressFill' + name),
+    msgBody: document.getElementById('ft8MsgBody' + name),
+    emptyRow: document.getElementById('ft8EmptyRow' + name)
+  };
+  f.enableBtn.addEventListener('click', () => {
+    f.enabled = !f.enabled;
+    f.enableBtn.classList.toggle('active', f.enabled);
+    f.enableBtn.textContent = f.enabled ? 'DECODER ON' : 'DECODER OFF';
+    if (f.enabled) openFt8Map(); // must run inside the click handler or popup blockers reject it
+  });
+  f.clearBtn.addEventListener('click', () => {
+    f.msgBody.innerHTML = '';
+    f.msgBody.appendChild(f.emptyRow);
+  });
+  return f;
+});
+
+// Low-pass filtered decimation audio feeder (any input rate -> 6400Hz)
+function ft8FeedAudio(f, samples, inRate) {
+  if (!f.enabled || !samples || samples.length === 0) return;
+  const ratio = inRate / FT8_SAMPLE_RATE;
+  for (let i = 0; i < samples.length; i++) {
+    f.resampleSum += samples[i];
+    f.resampleCount++;
+    f.resampleAcc += 1.0;
+    if (f.resampleAcc >= ratio) {
+      f.resampleAcc -= ratio;
+      const val = f.resampleSum / f.resampleCount;
+      f.resampleSum = 0;
+      f.resampleCount = 0;
+      f.ring[f.ringIdx] = val;
+      f.ringIdx = (f.ringIdx + 1) % FT8_SLOT_SAMPLES;
+    }
+  }
+}
+
+// FT8 Sync & Period Tracking (15s UTC Interval)
+setInterval(() => {
+  const now = new Date();
+  const sec = now.getUTCSeconds() + now.getUTCMilliseconds() / 1000;
+  const periodSec = sec % FT8_PERIOD_SEC;
+
+  ft8Chans.forEach((f) => {
+    f.progressFill.style.width = ((periodSec / FT8_PERIOD_SEC) * 100).toFixed(1) + '%';
+    f.syncBadge.textContent = 'SYNC: ' + Math.floor(periodSec).toString().padStart(2, '0') + 's';
+
+    // Trigger decode at 14.0s of the 15s window. A transmission starts 0.5s into the slot and
+    // lasts 12.64s (ends at 13.14s for DT=0), so decoding earlier would cut off late signals.
+    if (f.enabled && periodSec >= 14.0 && !f.decodedInPeriod) {
+      f.decodedInPeriod = true;
+      runFt8Decode(f, now, periodSec);
+    } else if (periodSec < 2.0) {
+      f.decodedInPeriod = false;
+    }
+  });
+}, 100);
+
+// Hand the slot audio to the decoder worker (see <script id="ft8-worker-src"> at the end of the page).
+let ft8Worker = null;
+function ft8GetWorker() {
+  if (ft8Worker) return ft8Worker;
+  const src = document.getElementById('ft8-worker-src').textContent;
+  ft8Worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+  ft8Worker.onmessage = (e) => {
+    const r = e.data;
+    const f = ft8Chans[r.idx];
+    for (const m of r.results) addFt8Message(f, r.utc, m.snr, m.dt, m.freq, m.msg, r.dialHz);
+  };
+  ft8Worker.onerror = (e) => { console.error('FT8 worker error:', e.message); };
+  return ft8Worker;
+}
+
+function runFt8Decode(f, utcDate, periodSec) {
+  // Snapshot 15.0 seconds of contiguous audio aligned precisely to second 0.0 of this cycle
+  const samplesSinceSlotStart = Math.round(periodSec * FT8_SAMPLE_RATE);
+  const slotStartIdx = (f.ringIdx - samplesSinceSlotStart + FT8_SLOT_SAMPLES) % FT8_SLOT_SAMPLES;
+
+  // Only audio received so far is valid; the rest of the ring still holds the previous slot's
+  // tail, which would put stale tones on top of the last symbols, so leave it at zero.
+  const audio = new Float32Array(FT8_SLOT_SAMPLES);
+  const validSamples = Math.min(FT8_SLOT_SAMPLES, samplesSinceSlotStart);
+  for (let i = 0; i < validSamples; i++) {
+    audio[i] = f.ring[(slotStartIdx + i) % FT8_SLOT_SAMPLES];
+  }
+
+  const slotStartMs = Math.floor(utcDate.getTime() / (FT8_PERIOD_SEC * 1000)) * (FT8_PERIOD_SEC * 1000);
+  const utc = new Date(slotStartMs).toISOString().substr(11, 8);
+  ft8GetWorker().postMessage({ idx: f.idx, utc, dialHz: f.idx === 0 ? curFreqMain : curFreqSub, audio }, [audio.buffer]);
+}
+
+// FT8 messages come off the air, so they are untrusted: escape everything that is put into markup
+function escapeHtml(v) {
+  return String(v).replace(/[&<>"'`]/g, (c) => '&#' + c.charCodeAt(0) + ';');
+}
+
+function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
+  if (f.emptyRow.parentNode) {
+    f.emptyRow.parentNode.removeChild(f.emptyRow);
+  }
+
+  const tr = document.createElement('tr');
+  let msgClass = '';
+  if (msg.startsWith('CQ')) msgClass = 'ft8-msg-cq';
+  else if (msg.includes(' 73') || msg.includes(' RR73')) msgClass = 'ft8-msg-73';
+  else if (msg.includes(' +') || msg.includes(' -') || msg.includes(' R+')) msgClass = 'ft8-msg-report';
+
+  const dial = dialHz > 0 ? dialHz : 0;
+  const dialStr = dial > 0 ? (dial / 1e6).toFixed(3) : '--';
+  const rfTitle = dial > 0 ? `RF: ${((dial + freq) / 1e6).toFixed(6)} MHz (${(dial / 1e6).toFixed(3)} MHz + ${freq} Hz)` : `Audio: ${freq} Hz`;
+
+  tr.innerHTML = `
+    <td>${escapeHtml(utc)}</td>
+    <td>${db >= 0 ? '+' : ''}${escapeHtml(db)}</td>
+    <td>${dt >= 0 ? '+' : ''}${escapeHtml(dt.toFixed(1))}</td>
+    <td style="color:#38bdf8; font-weight:600;" title="${escapeHtml(rfTitle)}">${escapeHtml(dialStr)}</td>
+    <td title="${escapeHtml(rfTitle)}">${escapeHtml(freq)}</td>
+    <td class="${msgClass}">${escapeHtml(msg)}</td>
+  `;
+
+  f.msgBody.insertBefore(tr, f.msgBody.firstChild);
+
+  // Keep maximum 80 messages in list
+  while (f.msgBody.children.length > 80) {
+    f.msgBody.removeChild(f.msgBody.lastChild);
+  }
+
+  ft8PublishSpot(f, msg, db, dial);
+}
+
+// ---- Firmware build time (shown in the rig header) ----
+fetch('/status', { cache: 'no-store' })
+  .then((r) => r.json())
+  .then((s) => {
+    if (typeof s.build === 'string' && /^[A-Za-z0-9 :]{1,32}$/.test(s.build)) {
+      const ver = typeof s.version === 'string' && /^[0-9.]{1,12}$/.test(s.version) ? 'V' + s.version + '  ' : '';
+      document.getElementById('buildInfo').textContent = ver + 'BUILD ' + s.build;
+    }
+  })
+  .catch(() => { /* build time is informational only */ });
+
+
+// ---- World map window (/map): plots stations whose Maidenhead grid was received ----
+const FT8_MAP_CHANNEL = 'ftx1-ft8-map';
+const FT8_SPOT_GRID_RE = /^[A-R]{2}[0-9]{2}$/;
+const FT8_SPOT_CALL_RE = /^[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,3}[A-Z](\/[A-Z0-9]{1,4})?$/;
+const ft8MapChannel = new BroadcastChannel(FT8_MAP_CHANNEL);
+const ft8Spots = new Map(); // callsign -> latest spot, replayed to a map window opened later
+let ft8MapWin = null;
+
+function openFt8Map() {
+  if (ft8MapWin && !ft8MapWin.closed) return;
+  ft8MapWin = window.open('/map', 'ftx1_ft8_map', 'popup=yes,width=1100,height=680');
+}
+
+// The sender is the callsign directly before the grid ("CQ DX JA1XXX PM95", "JA1YYY JA1XXX R PM95").
+// "RR73" also looks like a grid square, so it is excluded explicitly.
+function ft8ParseSpot(msg) {
+  const tok = msg.trim().split(/\s+/);
+  if (tok.length < 3) return null;
+  const grid = tok[tok.length - 1];
+  if (grid === 'RR73' || !FT8_SPOT_GRID_RE.test(grid)) return null;
+  let ci = tok.length - 2;
+  if (tok[ci] === 'R' && ci > 0) ci--;
+  const call = tok[ci];
+  if (!FT8_SPOT_CALL_RE.test(call)) return null;
+  return { call, grid };
+}
+
+// A directed message is "<to> <from> <payload>". A link (who is working whom) exists when both are real callsigns.
+// "<JA1XXX>" (hashed call that was resolved) is accepted; "<...>" (unresolved) and CQ/QRZ/DE are not.
+function ft8ParseLink(msg) {
+  const tok = msg.trim().split(/\s+/);
+  if (tok.length < 3) return null;
+  const strip = (s) => s.replace(/^<(.+)>$/, '$1');
+  const to = strip(tok[0]), from = strip(tok[1]);
+  if (!FT8_SPOT_CALL_RE.test(to) || !FT8_SPOT_CALL_RE.test(from) || to === from) return null;
+  return { a: from, b: to };
+}
+
+const ft8Links = new Map(); // "A|B" (sorted) -> latest link, replayed to a map window opened later
+
+// Band name of a dial frequency, "" when it is outside the amateur bands the map knows (map.html colours by this)
+const FT8_BANDS = [
+  ['160m', 1800000, 2000000], ['80m', 3500000, 3805000], ['60m', 5351500, 5366500], ['40m', 7000000, 7200000],
+  ['30m', 10100000, 10150000], ['20m', 14000000, 14350000], ['17m', 18068000, 18168000], ['15m', 21000000, 21450000],
+  ['12m', 24890000, 24990000], ['10m', 28000000, 29700000], ['6m', 50000000, 54000000], ['2m', 144000000, 146000000],
+  ['70cm', 430000000, 440000000]
+];
+function ft8BandOf(hz) {
+  for (const b of FT8_BANDS) if (hz >= b[1] && hz <= b[2]) return b[0];
+  return '';
+}
+
+function ft8PublishSpot(f, msg, snr, dialHz) {
+  const now = Date.now();
+  const p = ft8ParseSpot(msg);
+  if (p) {
+    const spot = { call: p.call, grid: p.grid, snr, ch: f.name, t: now, band: ft8BandOf(dialHz) };
+    ft8Spots.set(spot.call, spot);
+    if (ft8Spots.size > 500) ft8Spots.delete(ft8Spots.keys().next().value);
+    ft8MapChannel.postMessage({ type: 'spot', spot });
+  }
+  const l = ft8ParseLink(msg);
+  if (l) {
+    const key = [l.a, l.b].sort().join('|');
+    const link = { a: l.a, b: l.b, t: now };
+    ft8Links.delete(key);   // re-insert so the oldest entry is always first
+    ft8Links.set(key, link);
+    if (ft8Links.size > 1000) ft8Links.delete(ft8Links.keys().next().value);
+    ft8MapChannel.postMessage({ type: 'link', link });
+  }
+}
+
+ft8MapChannel.onmessage = (e) => {
+  if (e.data && e.data.type === 'hello') {
+    ft8MapChannel.postMessage({ type: 'snapshot', spots: [...ft8Spots.values()], links: [...ft8Links.values()] });
+  }
+};
+</script>
+<script type="text/plain" id="ft8-worker-src">
+// ---- FT8 decoder: runs in a Web Worker so that the 1-2 s of heavy computation per slot does not
+// stall audio playback and the UI. This block is plain text for the page (type=text/plain) and is
+// loaded into a Worker through a Blob URL (CSP: worker-src blob:).
+const FT8_SAMPLE_RATE = 6400;
+const FT8_SLOT_SAMPLES = FT8_SAMPLE_RATE * 15;
+
+// FT8 Protocol Constants
+const FT8_COSTAS = [3, 1, 4, 0, 6, 5, 2];
+const FT8_GRAY_MAP = [0, 1, 3, 2, 6, 4, 5, 7];
+const FT8_GRAY_INV = (() => { const g = new Array(8); for (let t = 0; t < 8; t++) g[FT8_GRAY_MAP[t]] = t; return g; })(); // Inverse FT8 Gray map: Tone (0..7) -> 3-bit binary (0..7)
+const FT8_TONE_SPACING = 6.25; // Hz
+const FT8_SYM_SAMPLES = 1024;  // 0.160s @ 6400Hz
+const FT8_CRC_POLY = 0x2757;
+
+// Precomputed Hann Window & FFT Tables for 1024-point FFT
+const FT8_HANN = new Float32Array(1024);
+for (let i = 0; i < 1024; i++) {
+  FT8_HANN[i] = 0.5 * (1.0 - Math.cos(2.0 * Math.PI * i / 1023.0));
+}
+
+const FFT_COS = new Float32Array(512);
+const FFT_SIN = new Float32Array(512);
+for (let i = 0; i < 512; i++) {
+  FFT_COS[i] = Math.cos(-2.0 * Math.PI * i / 1024.0);
+  FFT_SIN[i] = Math.sin(-2.0 * Math.PI * i / 1024.0);
+}
+
+function fft1024(re, im) {
+  // Bit-reversal permutation
+  let j = 0;
+  for (let i = 0; i < 1024; i++) {
+    if (i < j) {
+      let tr = re[i]; re[i] = re[j]; re[j] = tr;
+      let ti = im[i]; im[i] = im[j]; im[j] = ti;
+    }
+    let m = 512;
+    while (m >= 1 && j >= m) {
+      j -= m;
+      m >>= 1;
+    }
+    j += m;
+  }
+
+  // Cooley-Tukey Radix-2 stages
+  for (let step = 2; step <= 1024; step <<= 1) {
+    const half = step >> 1;
+    const kStep = 1024 / step;
+    for (let i = 0; i < 1024; i += step) {
+      for (let k = 0; k < half; k++) {
+        const idx = k * kStep;
+        const wRe = FFT_COS[idx];
+        const wIm = FFT_SIN[idx];
+        const uRe = re[i + k];
+        const uIm = im[i + k];
+        const vRe = re[i + k + half] * wRe - im[i + k + half] * wIm;
+        const vIm = re[i + k + half] * wIm + im[i + k + half] * wRe;
+        re[i + k] = uRe + vRe;
+        im[i + k] = uIm + vIm;
+        re[i + k + half] = uRe - vRe;
+        im[i + k + half] = uIm - vIm;
+      }
+    }
+  }
+}
+
+// LDPC(174, 91) Parity Check Matrices from WSJT-X / ft8_lib
+const LDPC_NM = new Uint8Array([4, 31, 59, 91, 92, 96, 153, 5, 32, 60, 93, 115, 146, 0, 6, 24, 61, 94, 122, 151, 0, 7, 33, 62, 95, 96, 143, 0, 8, 25, 63, 83, 93, 96, 148, 6, 32, 64, 97, 126, 138, 0, 5, 34, 65, 78, 98, 107, 154, 9, 35, 66, 99, 139, 146, 0, 10, 36, 67, 100, 107, 126, 0, 11, 37, 67, 87, 101, 139, 158, 12, 38, 68, 102, 105, 155, 0, 13, 39, 69, 103, 149, 162, 0, 8, 40, 70, 82, 104, 114, 145, 14, 41, 71, 88, 102, 123, 156, 15, 42, 59, 106, 123, 159, 0, 1, 33, 72, 106, 107, 157, 0, 16, 43, 73, 108, 141, 160, 0, 17, 37, 74, 81, 109, 131, 154, 11, 44, 75, 110, 121, 166, 0, 45, 55, 64, 111, 130, 161, 173, 8, 46, 71, 112, 119, 166, 0, 18, 36, 76, 89, 113, 114, 143, 19, 38, 77, 104, 116, 163, 0, 20, 47, 70, 92, 138, 165, 0, 2, 48, 74, 113, 128, 160, 0, 21, 45, 78, 83, 117, 121, 151, 22, 47, 58, 118, 127, 164, 0, 16, 39, 62, 112, 134, 158, 0, 23, 43, 79, 120, 131, 145, 0, 19, 35, 59, 73, 110, 125, 161, 20, 36, 63, 94, 136, 161, 0, 14, 31, 79, 98, 132, 164, 0, 3, 44, 80, 124, 127, 169, 0, 19, 46, 81, 117, 135, 167, 0, 7, 49, 58, 90, 100, 105, 168, 12, 50, 61, 118, 119, 144, 0, 13, 51, 64, 114, 118, 157, 0, 24, 52, 76, 129, 148, 149, 0, 25, 53, 69, 90, 101, 130, 156, 20, 46, 65, 80, 120, 140, 170, 21, 54, 77, 100, 140, 171, 0, 35, 82, 133, 142, 171, 174, 0, 14, 30, 83, 113, 125, 170, 0, 4, 29, 68, 120, 134, 173, 0, 1, 4, 52, 57, 86, 136, 152, 26, 51, 56, 91, 122, 137, 168, 52, 84, 110, 115, 145, 168, 0, 7, 50, 81, 99, 132, 173, 0, 23, 55, 67, 95, 172, 174, 0, 26, 41, 77, 109, 141, 148, 0, 2, 27, 41, 61, 62, 115, 133, 27, 40, 56, 124, 125, 126, 0, 18, 49, 55, 124, 141, 167, 0, 6, 33, 85, 108, 116, 156, 0, 28, 48, 70, 85, 105, 129, 158, 9, 54, 63, 131, 147, 155, 0, 22, 53, 68, 109, 121, 174, 0, 3, 13, 48, 78, 95, 123, 0, 31, 69, 133, 150, 155, 169, 0, 12, 43, 66, 89, 97, 135, 159, 5, 39, 75, 102, 136, 167, 0, 2, 54, 86, 101, 135, 164, 0, 15, 56, 87, 108, 119, 171, 0, 10, 44, 82, 91, 111, 144, 149, 23, 34, 71, 94, 127, 153, 0, 11, 49, 88, 92, 142, 157, 0, 29, 34, 87, 97, 147, 162, 0, 30, 50, 60, 86, 137, 142, 162, 10, 53, 66, 84, 112, 128, 165, 22, 57, 85, 93, 140, 159, 0, 28, 32, 72, 103, 132, 166, 0, 28, 29, 84, 88, 117, 143, 150, 1, 26, 45, 80, 128, 147, 0, 17, 27, 89, 103, 116, 153, 0, 51, 57, 98, 163, 165, 172, 0, 21, 37, 73, 138, 152, 169, 0, 16, 47, 76, 130, 137, 154, 0, 3, 24, 30, 72, 104, 139, 0, 9, 40, 90, 106, 134, 151, 0, 15, 58, 60, 74, 111, 150, 163, 18, 42, 79, 144, 146, 152, 0, 25, 38, 65, 99, 122, 160, 0, 17, 42, 75, 129, 170, 172, 0]);
+const LDPC_MN = new Uint8Array([16, 45, 73, 25, 51, 62, 33, 58, 78, 1, 44, 45, 2, 7, 61, 3, 6, 54, 4, 35, 48, 5, 13, 21, 8, 56, 79, 9, 64, 69, 10, 19, 66, 11, 36, 60, 12, 37, 58, 14, 32, 43, 15, 63, 80, 17, 28, 77, 18, 74, 83, 22, 53, 81, 23, 30, 34, 24, 31, 40, 26, 41, 76, 27, 57, 70, 29, 49, 65, 3, 38, 78, 5, 39, 82, 46, 50, 73, 51, 52, 74, 55, 71, 72, 44, 67, 72, 43, 68, 78, 1, 32, 59, 2, 6, 71, 4, 16, 54, 7, 65, 67, 8, 30, 42, 9, 22, 31, 10, 18, 76, 11, 23, 82, 12, 28, 61, 13, 52, 79, 14, 50, 51, 15, 81, 83, 17, 29, 60, 19, 33, 64, 20, 26, 73, 21, 34, 40, 24, 27, 77, 25, 55, 58, 35, 53, 66, 36, 48, 68, 37, 46, 75, 38, 45, 47, 39, 57, 69, 41, 56, 62, 20, 49, 53, 46, 52, 63, 45, 70, 75, 27, 35, 80, 1, 15, 30, 2, 68, 80, 3, 36, 51, 4, 28, 51, 5, 31, 56, 6, 20, 37, 7, 40, 82, 8, 60, 69, 9, 10, 49, 11, 44, 57, 12, 39, 59, 13, 24, 55, 14, 21, 65, 16, 71, 78, 17, 30, 76, 18, 25, 80, 19, 61, 83, 22, 38, 77, 23, 41, 50, 7, 26, 58, 29, 32, 81, 33, 40, 73, 18, 34, 48, 13, 42, 64, 5, 26, 43, 47, 69, 72, 54, 55, 70, 45, 62, 68, 10, 63, 67, 14, 66, 72, 22, 60, 74, 35, 39, 79, 1, 46, 64, 1, 24, 66, 2, 5, 70, 3, 31, 65, 4, 49, 58, 1, 4, 5, 6, 60, 67, 7, 32, 75, 8, 48, 82, 9, 35, 41, 10, 39, 62, 11, 14, 61, 12, 71, 74, 13, 23, 78, 11, 35, 55, 15, 16, 79, 7, 9, 16, 17, 54, 63, 18, 50, 57, 19, 30, 47, 20, 64, 80, 21, 28, 69, 22, 25, 43, 13, 22, 37, 2, 47, 51, 23, 54, 74, 26, 34, 72, 27, 36, 37, 21, 36, 63, 29, 40, 44, 19, 26, 57, 3, 46, 82, 14, 15, 58, 33, 52, 53, 30, 43, 52, 6, 9, 52, 27, 33, 65, 25, 69, 73, 38, 55, 83, 20, 39, 77, 18, 29, 56, 32, 48, 71, 42, 51, 59, 28, 44, 79, 34, 60, 62, 31, 45, 61, 46, 68, 77, 6, 24, 76, 8, 10, 78, 40, 41, 70, 17, 50, 53, 42, 66, 68, 4, 22, 72, 36, 64, 81, 13, 29, 47, 2, 8, 81, 56, 67, 73, 5, 38, 50, 12, 38, 64, 59, 72, 80, 3, 26, 79, 45, 76, 81, 1, 65, 74, 7, 18, 77, 11, 56, 59, 14, 39, 54, 16, 37, 66, 10, 28, 55, 15, 60, 70, 17, 25, 82, 20, 30, 31, 12, 67, 68, 23, 75, 80, 27, 32, 62, 24, 69, 75, 19, 21, 71, 34, 53, 61, 35, 46, 47, 33, 59, 76, 40, 43, 83, 41, 42, 63, 49, 75, 83, 20, 44, 48, 42, 49, 57]);
+const LDPC_NUM_ROWS = new Uint8Array([7, 6, 6, 6, 7, 6, 7, 6, 6, 7, 6, 6, 7, 7, 6, 6, 6, 7, 6, 7, 6, 7, 6, 6, 6, 7, 6, 6, 6, 7, 6, 6, 6, 6, 7, 6, 6, 6, 7, 7, 6, 6, 6, 6, 7, 7, 6, 6, 6, 6, 7, 6, 6, 6, 7, 6, 6, 6, 6, 7, 6, 6, 6, 7, 6, 6, 6, 7, 7, 6, 6, 7, 6, 6, 6, 6, 6, 6, 6, 7, 6, 6, 6]);
+
+// Parity Check equations verifier
+function ldpcCheck(plain) {
+  let errors = 0;
+  for (let m = 0; m < 83; m++) {
+    let p = 0;
+    const count = LDPC_NUM_ROWS[m];
+    const base = m * 7;
+    for (let i = 0; i < count; i++) {
+      p ^= plain[LDPC_NM[base + i] - 1];
+    }
+    if (p !== 0) errors++;
+  }
+  return errors;
+}
+
+// Belief Propagation (Sum-Product) LDPC Decoder
+function bpDecode(llr, maxIters = 35) {
+  const N = 174, M = 83;
+  const tov = new Float32Array(N * 3);
+  const toc = new Float32Array(M * 7);
+  const plain = new Uint8Array(N);
+  let minErrors = M;
+
+  for (let iter = 0; iter < maxIters; iter++) {
+    // Hard decision guess: LLR = ln(P0/P1) -> < 0 means bit 1
+    for (let n = 0; n < N; n++) {
+      const idx = n * 3;
+      plain[n] = (llr[n] + tov[idx] + tov[idx + 1] + tov[idx + 2] < 0) ? 1 : 0;
+    }
+
+    const err = ldpcCheck(plain);
+    if (err < minErrors) {
+      minErrors = err;
+      if (err === 0) break; // Perfect match found!
+    }
+
+    // Variable nodes to Check nodes
+    for (let m = 0; m < M; m++) {
+      const count = LDPC_NUM_ROWS[m];
+      const mBase = m * 7;
+      for (let nIdx = 0; nIdx < count; nIdx++) {
+        const n = LDPC_NM[mBase + nIdx] - 1;
+        let tnm = llr[n];
+        const nBase = n * 3;
+        for (let mIdx = 0; mIdx < 3; mIdx++) {
+          if (LDPC_MN[nBase + mIdx] - 1 !== m) {
+            tnm += tov[nBase + mIdx];
+          }
+        }
+        toc[mBase + nIdx] = Math.tanh(Math.max(-20, Math.min(20, tnm / 2.0)));
+      }
+    }
+
+    // Check nodes to Variable nodes
+    for (let n = 0; n < N; n++) {
+      const nBase = n * 3;
+      for (let mIdx = 0; mIdx < 3; mIdx++) {
+        const m = LDPC_MN[nBase + mIdx] - 1;
+        let tmn = 1.0;
+        const count = LDPC_NUM_ROWS[m];
+        const mBase = m * 7;
+        for (let nIdx = 0; nIdx < count; nIdx++) {
+          if (LDPC_NM[mBase + nIdx] - 1 !== n) {
+            tmn *= toc[mBase + nIdx];
+          }
+        }
+        tmn = Math.max(-0.999999, Math.min(0.999999, tmn));
+        tov[nBase + mIdx] = 2.0 * Math.atanh(tmn);
+      }
+    }
+  }
+
+  return { plain, errors: minErrors };
+}
+
+// 14-bit CRC calculation
+function computeCrc14(dataBytes, numBits) {
+  let remainder = 0;
+  let byteIdx = 0;
+  const topBit = 1 << 13;
+  for (let bit = 0; bit < numBits; bit++) {
+    if (bit % 8 === 0) {
+      remainder ^= (dataBytes[byteIdx] << 6);
+      byteIdx++;
+    }
+    if (remainder & topBit) {
+      remainder = ((remainder << 1) ^ FT8_CRC_POLY) & 0x3FFF;
+    } else {
+      remainder = (remainder << 1) & 0x3FFF;
+    }
+  }
+  return remainder;
+}
+
+// Character tables for WSJT-X 77-bit standard unpacker
+const FT8_ALPHANUM_SPACE = ' 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const FT8_ALPHANUM = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const FT8_NUMERIC = '0123456789';
+const FT8_LETTERS_SPACE = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const FT8_FREE_CHARS = ' 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ+-./?';
+const FT8_NTOKENS = 2063592;
+const FT8_MAX22 = 4194304;
+const FT8_MAXGRID4 = 32400;
+
+// Callsign hash tables (WSJT-X compatible). A non-standard callsign such as "JA1SHC/QRP" does not fit
+// into 28 bits, so other messages carry only its 22-bit (or 12-bit) hash. Every callsign seen in full
+// is remembered here so that later hashed references can be shown as "<JA1SHC/QRP>".
+const FT8_HASH_CHARS = ' 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ/';
+const ft8HashCalls = { 22: new Map(), 12: new Map() };
+
+function ft8CallHash(call, bits) {
+  let n58 = 0n;
+  for (let i = 0; i < 11; i++) {
+    const j = i < call.length ? FT8_HASH_CHARS.indexOf(call[i]) : 0;
+    if (j < 0) return -1;
+    n58 = n58 * 38n + BigInt(j);
+  }
+  const prod = (47055833459n * n58) & 0xFFFFFFFFFFFFFFFFn;
+  return Number(prod >> BigInt(64 - bits));
+}
+
+function ft8SaveCall(call) {
+  if (call.length < 3 || call.length > 11) return;
+  for (const bits of [22, 12]) {
+    const h = ft8CallHash(call, bits);
+    if (h >= 0) {
+      const m = ft8HashCalls[bits];
+      m.delete(h);          // re-insert so the oldest entry is always first
+      m.set(h, call);
+      if (m.size > 2000) m.delete(m.keys().next().value);
+    }
+  }
+}
+
+function ft8HashedCall(hash, bits) {
+  const call = ft8HashCalls[bits].get(hash);
+  return call ? `<${call}>` : '<...>';
+}
+
+function unpack28(n28) {
+  if (n28 < FT8_NTOKENS) {
+    if (n28 === 0) return 'DE';
+    if (n28 === 1) return 'QRZ';
+    if (n28 === 2) return 'CQ';
+    if (n28 <= 1002) return 'CQ ' + String(n28 - 3).padStart(3, '0');
+    if (n28 <= 532443) {
+      let n = n28 - 1003;
+      const c4 = FT8_LETTERS_SPACE[n % 27]; n = Math.floor(n / 27);
+      const c3 = FT8_LETTERS_SPACE[n % 27]; n = Math.floor(n / 27);
+      const c2 = FT8_LETTERS_SPACE[n % 27]; n = Math.floor(n / 27);
+      const c1 = FT8_LETTERS_SPACE[n % 27];
+      return ('CQ ' + c1 + c2 + c3 + c4).trim();
+    }
+    return 'CQ';
+  }
+  n28 -= FT8_NTOKENS;
+  if (n28 < FT8_MAX22) {
+    return ft8HashedCall(n28, 22);
+  }
+  let n = n28 - FT8_MAX22;
+  const c6 = FT8_LETTERS_SPACE[n % 27]; n = Math.floor(n / 27);
+  const c5 = FT8_LETTERS_SPACE[n % 27]; n = Math.floor(n / 27);
+  const c4 = FT8_LETTERS_SPACE[n % 27]; n = Math.floor(n / 27);
+  const c3 = FT8_NUMERIC[n % 10]; n = Math.floor(n / 10);
+  const c2 = FT8_ALPHANUM[n % 36]; n = Math.floor(n / 36);
+  const c1 = FT8_ALPHANUM_SPACE[n % 37];
+  let call = (c1 + c2 + c3 + c4 + c5 + c6).trim();
+  if (call.startsWith('3D0') && call.length > 3) call = '3DA0' + call.slice(3);
+  else if (call.length > 1 && call[0] === 'Q' && call[1] >= 'A' && call[1] <= 'Z') call = '3X' + call.slice(1);
+  ft8SaveCall(call);
+  return call;
+}
+
+function unpackGrid(igrid4, ir) {
+  if (igrid4 <= FT8_MAXGRID4) {
+    let n = igrid4;
+    const d4 = String(n % 10); n = Math.floor(n / 10);
+    const d3 = String(n % 10); n = Math.floor(n / 10);
+    const d2 = String.fromCharCode(65 + (n % 18)); n = Math.floor(n / 18);
+    const d1 = String.fromCharCode(65 + (n % 18));
+    const grid = d1 + d2 + d3 + d4;
+    return ir > 0 ? 'R ' + grid : grid;
+  }
+  const irpt = igrid4 - FT8_MAXGRID4;
+  if (irpt === 1) return '';
+  if (irpt === 2) return 'RRR';
+  if (irpt === 3) return 'RR73';
+  if (irpt === 4) return '73';
+  const rpt = irpt - 35;
+  const rptStr = (rpt >= 0 ? '+' : '') + String(rpt).padStart(2, '0');
+  return ir > 0 ? 'R' + rptStr : rptStr;
+}
+
+function unpackFt8Payload(plain) {
+  function getBits(start, len) {
+    let val = 0;
+    for (let i = start; i < start + len; i++) {
+      val = (val << 1) | plain[i];
+    }
+    return val;
+  }
+
+  const i3 = getBits(74, 3);
+  if (i3 === 1 || i3 === 2) {
+    // Standard Type 1 / Type 2 Message (77 bits: n28a[28] + ipa[1] + n28b[28] + ipb[1] + ir[1] + igrid4[15] + i3[3])
+    const n28a = getBits(0, 28);
+    const ipa = plain[28];
+    const n28b = getBits(29, 28);
+    const ipb = plain[57];
+    const ir = plain[58];
+    const igrid4 = getBits(59, 15);
+
+    // ipa / ipb: "/R" suffix for Type 1, "/P" suffix for Type 2
+    const suffix = i3 === 1 ? '/R' : '/P';
+    const call1 = unpack28(n28a) + (ipa ? suffix : '');
+    const call2 = unpack28(n28b) + (ipb ? suffix : '');
+    const extra = unpackGrid(igrid4, ir);
+    return `${call1} ${call2} ${extra}`.trim();
+  } else if (i3 === 4) {
+    // Type 4, non-standard callsign: h12[12] + n58[58] + iflip[1] + nrpt[2] + icq[1] + i3[3].
+    // The full callsign (up to 11 chars) is sent; the other station is only a 12-bit hash.
+    const h12 = getBits(0, 12);
+    let n58 = 0n;
+    for (let b = 12; b < 70; b++) {
+      n58 = (n58 << 1n) | BigInt(plain[b]);
+    }
+    const iflip = plain[70];
+    const nrpt = getBits(71, 2);
+    const icq = plain[73];
+    let c11 = '';
+    for (let i = 0; i < 11; i++) {
+      c11 = FT8_HASH_CHARS[Number(n58 % 38n)] + c11;
+      n58 /= 38n;
+    }
+    c11 = c11.trim();
+    ft8SaveCall(c11);
+    if (icq) return `CQ ${c11}`;
+    const hashed = ft8HashedCall(h12, 12);
+    const first = iflip ? c11 : hashed;
+    const second = iflip ? hashed : c11;
+    return `${first} ${second} ${['', 'RRR', 'RR73', '73'][nrpt]}`.trim();
+  } else if (i3 === 0) {
+    const n3 = getBits(71, 3);
+    if (n3 === 0) {
+      // Free Text (up to 13 chars)
+      let val = 0n;
+      for (let b = 0; b < 71; b++) {
+        val = (val << 1n) | BigInt(plain[b]);
+      }
+      let res = '';
+      for (let i = 0; i < 13; i++) {
+        const c = Number(val % 42n);
+        val /= 42n;
+        res = FT8_FREE_CHARS[c] + res;
+      }
+      return res.trim();
+    } else if (n3 === 5) {
+      // Telemetry (18 hex digits)
+      let hex = '';
+      for (let i = 0; i < 71; i += 4) {
+        const h = getBits(i, Math.min(4, 71 - i));
+        hex += h.toString(16).toUpperCase();
+      }
+      return `TLM ${hex}`;
+    }
+  }
+  return null;
+}
+
+
+// ---- Fine synchronisation + coherent demodulation -------------------------------------------
+// The coarse search above works on a 6.25 Hz / 40 ms grid with a Hann window, which costs several
+// dB for signals that fall between grid points. For each candidate the audio is mixed down to a
+// complex 400 Hz baseband (64 samples per symbol), then frequency and time are refined and every
+// symbol is demodulated with a rectangular window (orthogonal tones, no window loss).
+const FT8_MAX_START_SLICE = 56;                // latest frame start searched: 56 * 0.04 s = 2.24 s
+const FT8_MIN_COSTAS_RATIO = 3.5;              // candidates below this contrast are not worth an LDPC run
+const FT8_BB_DECIM = 16;                       // 6400 Hz -> 400 Hz
+const FT8_BB_SYM = 64;                         // baseband samples per symbol
+const FT8_BB_RATE = FT8_SAMPLE_RATE / FT8_BB_DECIM;
+const FT8_TONE_COS = new Float32Array(FT8_BB_SYM);
+const FT8_TONE_SIN = new Float32Array(FT8_BB_SYM);
+for (let i = 0; i < FT8_BB_SYM; i++) {
+  FT8_TONE_COS[i] = Math.cos(2.0 * Math.PI * i / FT8_BB_SYM);
+  FT8_TONE_SIN[i] = -Math.sin(2.0 * Math.PI * i / FT8_BB_SYM);
+}
+
+// Anti-alias FIR for the 16:1 decimation: Hann-windowed sinc, 180 Hz cutoff, 96 taps. Pass band covers
+// the 8 tones (0..44 Hz) and everything that would alias onto them (>= ~310 Hz away) is rejected.
+// A plain average over 16 samples has nulls only at exact multiples of 400 Hz, so a strong signal
+// 800 Hz away leaked in and was decoded under the wrong frequency.
+const FT8_BB_TAPS = 96;
+const FT8_BB_FIR = new Float32Array(FT8_BB_TAPS);
+(() => {
+  const fc = 180.0 / FT8_SAMPLE_RATE;
+  let sum = 0;
+  for (let k = 0; k < FT8_BB_TAPS; k++) {
+    const x = k - (FT8_BB_TAPS - 1) / 2.0;
+    const sinc = Math.abs(x) < 1e-9 ? 2.0 * fc : Math.sin(2.0 * Math.PI * fc * x) / (Math.PI * x);
+    const win = 0.5 - 0.5 * Math.cos(2.0 * Math.PI * (k + 0.5) / FT8_BB_TAPS);
+    FT8_BB_FIR[k] = sinc * win;
+    sum += FT8_BB_FIR[k];
+  }
+  for (let k = 0; k < FT8_BB_TAPS; k++) FT8_BB_FIR[k] /= sum;
+})();
+
+function ft8Downconvert(audio, f0Hz) {
+  const total = audio.length;
+  const n = Math.floor(total / FT8_BB_DECIM);
+  // 1. mix to baseband at the full 6400 Hz rate
+  const mr = new Float32Array(total);
+  const mi = new Float32Array(total);
+  const w = 2.0 * Math.PI * f0Hz / FT8_SAMPLE_RATE;
+  const stepR = Math.cos(w), stepI = -Math.sin(w);   // phasor e^{-jw}
+  let pr = 1.0, pi = 0.0;
+  for (let i = 0; i < total; i++) {
+    mr[i] = audio[i] * pr;
+    mi[i] = audio[i] * pi;
+    const nr = pr * stepR - pi * stepI;
+    pi = pr * stepI + pi * stepR;
+    pr = nr;
+    if ((i & 1023) === 1023) { const mag = Math.sqrt(pr * pr + pi * pi); pr /= mag; pi /= mag; }
+  }
+  // 2. low-pass + decimate; output m is centred on input sample 16m + 8 (same alignment as a 16-sample average)
+  const re = new Float32Array(n);
+  const im = new Float32Array(n);
+  const half = FT8_BB_TAPS >> 1;
+  for (let m = 0; m < n; m++) {
+    const c0 = m * FT8_BB_DECIM + (FT8_BB_DECIM >> 1) - half;
+    let sr = 0, si = 0;
+    for (let k = 0; k < FT8_BB_TAPS; k++) {
+      const idx = c0 + k;
+      if (idx < 0 || idx >= total) continue;
+      sr += mr[idx] * FT8_BB_FIR[k];
+      si += mi[idx] * FT8_BB_FIR[k];
+    }
+    re[m] = sr;
+    im[m] = si;
+  }
+  return { re, im, n };
+}
+
+// Rotate the baseband by -dfHz
+function ft8Shift(bb, dfHz) {
+  const re = new Float32Array(bb.n);
+  const im = new Float32Array(bb.n);
+  const w = 2.0 * Math.PI * dfHz / FT8_BB_RATE;
+  const stepR = Math.cos(w), stepI = -Math.sin(w);
+  let pr = 1.0, pi = 0.0;
+  for (let m = 0; m < bb.n; m++) {
+    re[m] = bb.re[m] * pr - bb.im[m] * pi;
+    im[m] = bb.re[m] * pi + bb.im[m] * pr;
+    const nr = pr * stepR - pi * stepI;
+    pi = pr * stepI + pi * stepR;
+    pr = nr;
+    if ((m & 255) === 255) { const mag = Math.sqrt(pr * pr + pi * pi); pr /= mag; pi /= mag; }
+  }
+  return { re, im, n: bb.n };
+}
+
+// Power of one tone in one symbol starting at baseband sample `start`
+function ft8TonePower(z, start, tone) {
+  let sr = 0, si = 0;
+  let ph = 0;
+  for (let i = 0; i < FT8_BB_SYM; i++) {
+    const zr = z.re[start + i], zi = z.im[start + i];
+    sr += zr * FT8_TONE_COS[ph] - zi * FT8_TONE_SIN[ph];
+    si += zr * FT8_TONE_SIN[ph] + zi * FT8_TONE_COS[ph];
+    ph = (ph + tone) & (FT8_BB_SYM - 1);
+  }
+  return sr * sr + si * si;
+}
+
+// Complex amplitude of one tone in one symbol -> out[0]=re, out[1]=im
+function ft8ToneAmp(z, start, tone, out) {
+  let sr = 0, si = 0;
+  let ph = 0;
+  for (let i = 0; i < FT8_BB_SYM; i++) {
+    const zr = z.re[start + i], zi = z.im[start + i];
+    sr += zr * FT8_TONE_COS[ph] - zi * FT8_TONE_SIN[ph];
+    si += zr * FT8_TONE_SIN[ph] + zi * FT8_TONE_COS[ph];
+    ph = (ph + tone) & (FT8_BB_SYM - 1);
+  }
+  out[0] = sr; out[1] = si;
+}
+
+// Soft bits from nsym (1..3) consecutive symbols combined coherently: 8^nsym hypotheses per group.
+// Returns Float32Array(174) or null. Groups never straddle the middle Costas block.
+function ft8SoftBits(z, fineStart, nsym, gray) {
+  const out = new Float32Array(174);
+  const nh = 1 << (3 * nsym);
+  const amp = new Float32Array(3 * 8 * 2);
+  const tmp = new Float32Array(2);
+  const pw = new Float32Array(nh);
+  let bitIdx = 0;
+  for (const [first, count] of [[7, 29], [43, 29]]) {
+    for (let g = 0; g < count; g += nsym) {
+      const n = Math.min(nsym, count - g);
+      for (let j = 0; j < n; j++) {
+        const st = fineStart + (first + g + j) * FT8_BB_SYM;
+        if (st + FT8_BB_SYM > z.n) return null;
+        for (let t = 0; t < 8; t++) {
+          ft8ToneAmp(z, st, t, tmp);
+          amp[(j * 8 + t) * 2] = tmp[0];
+          amp[(j * 8 + t) * 2 + 1] = tmp[1];
+        }
+      }
+      const nhg = 1 << (3 * n);
+      for (let h = 0; h < nhg; h++) {
+        let re = 0, im = 0;
+        for (let j = 0; j < n; j++) {
+          const val = (h >> (3 * (n - 1 - j))) & 7;      // Gray-decoded 3-bit value of symbol j
+          const tone = gray[val];
+          re += amp[(j * 8 + tone) * 2];
+          im += amp[(j * 8 + tone) * 2 + 1];
+        }
+        pw[h] = re * re + im * im;
+      }
+      for (let b = 0; b < 3 * n; b++) {
+        let m0 = 0, m1 = 0;
+        const mask = 1 << (3 * n - 1 - b);
+        for (let h = 0; h < nhg; h++) {
+          if (h & mask) { if (pw[h] > m1) m1 = pw[h]; } else { if (pw[h] > m0) m0 = pw[h]; }
+        }
+        out[bitIdx++] = Math.sqrt(m0) - Math.sqrt(m1);
+      }
+    }
+  }
+  return bitIdx === 174 ? out : null;
+}
+
+// Returns { dfHz, start, z } maximising the Costas power, or null
+function ft8FineSync(bb, coarseStart) {
+  let best = null;
+  const lastStart = bb.n - 79 * FT8_BB_SYM;
+  const shifted = [];
+  for (let df = -4; df <= 4; df++) shifted.push(ft8Shift(bb, df));
+  for (let di = 0; di < shifted.length; di++) {
+    const z = shifted[di];
+    for (let d = coarseStart - 20; d <= coarseStart + 20; d++) {
+      if (d < 0 || d > lastStart) continue;
+      let score = 0;
+      for (let blk = 0; blk < 3; blk++) {
+        for (let k = 0; k < 7; k++) {
+          score += ft8TonePower(z, d + (blk * 36 + k) * FT8_BB_SYM, FT8_COSTAS[k]);
+        }
+      }
+      if (!best || score > best.score) best = { score, dfHz: di - 4, start: d, z, ratio: 0 };
+    }
+  }
+  if (best) {
+    // Costas contrast: power on the Costas tones / mean power of the other 7 tones in the same symbols.
+    // Noise gives about 1 to 4, a real signal well above 6; used to skip hopeless candidates before LDPC.
+    let other = 0;
+    for (let blk = 0; blk < 3; blk++) {
+      for (let k = 0; k < 7; k++) {
+        const st = best.start + (blk * 36 + k) * FT8_BB_SYM;
+        for (let t = 0; t < 8; t++) if (t !== FT8_COSTAS[k]) other += ft8TonePower(best.z, st, t);
+      }
+    }
+    best.ratio = best.score / Math.max(1e-12, other / 7.0);
+  }
+  return best;
+}
+
+// Decode one slot: audio = FT8_SLOT_SAMPLES samples at 6400 Hz, aligned to the slot boundary.
+// Returns [{ snr, dt, freq, msg }].
+function ft8DecodeSlot(audio) {
+  // 1. High-Resolution STFT Spectrogram Generation (371 slices of 1024-pt FFT, step = 256 samples / 0.040s)
+  const step = 256;
+  const numSlices = Math.floor((FT8_SLOT_SAMPLES - 1024) / step);
+  const numBins = 512; // 0..3200 Hz with 6.25 Hz resolution
+  const spec = new Float32Array(numSlices * numBins);
+
+  const reBuf = new Float32Array(1024);
+  const imBuf = new Float32Array(1024);
+
+  for (let s = 0; s < numSlices; s++) {
+    const sOff = s * step;
+    for (let i = 0; i < 1024; i++) {
+      reBuf[i] = audio[sOff + i] * FT8_HANN[i];
+      imBuf[i] = 0;
+    }
+    fft1024(reBuf, imBuf);
+    const specRow = s * numBins;
+    for (let b = 0; b < numBins; b++) {
+      spec[specRow + b] = reBuf[b] * reBuf[b] + imBuf[b] * imBuf[b];
+    }
+  }
+
+  // 2. 2D Costas Sync Candidate Search (frame start 0..2.24s after the slot boundary [tS: 0..56], Freq: 125Hz..3000Hz [b0: 20..480]).
+  //    A frame starts 0.5s + DT after the boundary and the audio arrives late (radio -> USB -> ESP32 -> network -> browser),
+  //    so the window has to reach well past the nominal 0.5s. 2.24s is the latest start whose 12.64s still fits in 15s.
+  const candidates = [];
+  for (let b0 = 20; b0 <= 480; b0++) {
+    let bestScore = 0;
+    let bestSlice = 0;
+    // local noise floor for this frequency: mean power over all slices in the 8 tone bins
+    let localPow = 0;
+    for (let sl = 0; sl < numSlices; sl += 4) {
+      for (let o = 0; o < 8; o++) localPow += spec[sl * numBins + b0 + o];
+    }
+    localPow = Math.max(1e-12, localPow / (Math.ceil(numSlices / 4) * 8));
+
+    for (let tS = 0; tS <= FT8_MAX_START_SLICE; tS++) {
+      let score = 0;
+      for (let m = 0; m < 3; m++) {
+        const sBase = m * 36;
+        for (let k = 0; k < 7; k++) {
+          const symK = sBase + k;
+          const sliceIdx = tS + symK * 4;
+          if (sliceIdx >= numSlices) continue;
+          const tone = FT8_COSTAS[k];
+          const pSig = spec[sliceIdx * numBins + b0 + tone];
+          let pNoise = 0;
+          for (let o = 0; o < 8; o++) {
+            if (o !== tone) pNoise += spec[sliceIdx * numBins + b0 + o];
+          }
+          score += (pSig - pNoise / 7.0);
+        }
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestSlice = tS;
+      }
+    }
+
+    if (bestScore > 0) {
+      candidates.push({ b0: b0, slice: bestSlice, score: bestScore / localPow, freq: b0 * FT8_TONE_SPACING });
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+
+  // 3. Cluster and deduplicate candidates
+  const filtered = [];
+  for (const c of candidates) {
+    const isNearby = filtered.some(f => Math.abs(f.b0 - c.b0) < 3 && Math.abs(f.slice - c.slice) < 6);
+    if (!isNearby) {
+      filtered.push(c);
+      if (filtered.length >= 200) break; // Evaluate top 200 candidate signals (a busy 40 m slot needs more than 120)
+    }
+  }
+
+  const results = [];
+  const decodedMessages = new Set();
+  const dataSyms = [];
+  for (let i = 7; i <= 35; i++) dataSyms.push(i);
+  for (let i = 43; i <= 71; i++) dataSyms.push(i);
+
+  // 4. Soft demodulation, BP LDPC decoding, CRC-14 verification
+  for (const cand of filtered) {
+    const b0 = cand.b0;
+    const tS = cand.slice;
+    const log174 = new Float32Array(174);
+    let logIdx = 0;
+    let totalSigP = 0;
+    let totalNoiseP = 0;
+
+    const bb = ft8Downconvert(audio, cand.freq);
+    const fine = ft8FineSync(bb, tS * 4 * 4);
+    if (!fine) continue;
+    cand.fineStart = fine.start;
+    cand.fineDf = fine.dfHz;
+
+    // SNR estimate from the single-symbol powers
+    for (const symK of dataSyms) {
+      const start = fine.start + symK * FT8_BB_SYM;
+      if (start + FT8_BB_SYM > bb.n) break;
+      let symSum = 0, maxP = 0;
+      for (let tone = 0; tone < 8; tone++) {
+        const p = ft8TonePower(fine.z, start, tone);
+        symSum += p;
+        if (p > maxP) maxP = p;
+      }
+      totalSigP += maxP;
+      totalNoiseP += (symSum - maxP) / 7.0;
+    }
+
+    if (fine.ratio < FT8_MIN_COSTAS_RATIO) continue;
+
+    // Try single-symbol soft bits first, then 2- and 3-symbol coherent combining
+    let plain = null;
+    for (const nsym of [1, 2, 3]) {
+      const llr = ft8SoftBits(fine.z, fine.start, nsym, FT8_GRAY_INV);
+      if (!llr) break;
+      let mean = 0, sumSq = 0;
+      for (let i = 0; i < 174; i++) mean += llr[i];
+      mean /= 174;
+      for (let i = 0; i < 174; i++) sumSq += (llr[i] - mean) ** 2;
+      const std = Math.sqrt(sumSq / 174);
+      const normFactor = 5.0 / Math.max(1e-6, std);
+      for (let i = 0; i < 174; i++) llr[i] = (llr[i] - mean) * normFactor;
+      const r = bpDecode(llr, 35);
+      if (r.errors === 0) { plain = r.plain; break; }
+    }
+    if (!plain) continue;
+
+    // Pack 91 bits
+    const a91 = new Uint8Array(12);
+    for (let i = 0; i < 91; i++) {
+      if (plain[i]) {
+        a91[Math.floor(i / 8)] |= (1 << (7 - (i % 8)));
+      }
+    }
+
+    // CRC-14 check over 82 bits (77 payload bits + 5 zero bits)
+    const extractedCrc = ((a91[9] & 0x07) << 11) | (a91[10] << 3) | (a91[11] >> 5);
+    const a91Zero = new Uint8Array(a91);
+    a91Zero[9] &= 0xF8;
+    a91Zero[10] = 0;
+    a91Zero[11] = 0;
+    const computedCrc = computeCrc14(a91Zero, 82);
+
+    if (extractedCrc !== computedCrc) continue;
+
+    // Unpack payload message
+    const msg = unpackFt8Payload(plain);
+    if (!msg || msg.length < 3 || decodedMessages.has(msg)) continue;
+    decodedMessages.add(msg);
+
+    // Calculate DT and SNR
+    // DT as WSJT-X shows it: frame start relative to 0.5 s after the slot boundary. It includes the
+    // delay of the audio path, so with perfect clocks the median DT of the stations equals that delay.
+    const dt = cand.fineStart / FT8_BB_RATE - 0.5;
+    const avgSig = totalSigP / 58.0;
+    const avgNoise = Math.max(1e-6, totalNoiseP / 58.0);
+    const snrLinear = Math.max(0.001, (avgSig - avgNoise) / (avgNoise * (2500.0 / FT8_TONE_SPACING)));
+    const snrDb = Math.max(-28, Math.min(22, Math.round(10 * Math.log10(snrLinear))));
+
+    results.push({ snr: snrDb, dt, freq: Math.round(cand.freq), msg });
+  }
+  return results;
+
+}
+
+if (typeof self !== 'undefined' && typeof self.postMessage === 'function') {
+  self.onmessage = (e) => {
+    const job = e.data;
+    const t0 = Date.now();
+    let results = [];
+    try { results = ft8DecodeSlot(job.audio); } catch (err) { /* a bad slot must not kill the worker */ }
+    self.postMessage({ idx: job.idx, utc: job.utc, dialHz: job.dialHz, ms: Date.now() - t0, results });
+  };
+}
+</script>
+</body>
+</html>

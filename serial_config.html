@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FTX-1 Companion - Serial Config Tool</title>
+  <style>
+    body {
+      background: #0f172a;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      margin: 0;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      box-sizing: border-box;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    h1 {
+      font-size: 1.25rem;
+      margin: 0;
+      color: #38bdf8;
+    }
+    button {
+      background: #0284c7;
+      color: #fff;
+      border: none;
+      padding: .5rem 1rem;
+      border-radius: 6px;
+      font-size: .9rem;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:hover { background: #0369a1; }
+    button:disabled { background: #475569; cursor: not-allowed; }
+    #status {
+      font-size: .85rem;
+      color: #94a3b8;
+    }
+    #terminal {
+      flex: 1;
+      background: #020617;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      padding: 1rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: .9rem;
+      color: #4efdc7;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .input-row {
+      display: flex;
+      gap: .5rem;
+      margin-top: 1rem;
+    }
+    input[type="text"] {
+      flex: 1;
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #fff;
+      padding: .5rem .75rem;
+      border-radius: 6px;
+      font-size: .95rem;
+      outline: none;
+    }
+    input[type="text"]:focus {
+      border-color: #38bdf8;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>FTX-1 Companion - Web Serial Console</h1>
+    <button id="btnConnect">Connect</button>
+    <button id="btnReset" disabled>Reboot Device</button>
+    <button id="btnClear">Clear Output</button>
+    <span id="status">Not connected (works in Chrome / Edge)</span>
+  </div>
+
+  <div id="terminal" tabindex="0"></div>
+
+  <div class="input-row">
+    <input type="text" id="cmdInput" placeholder="Type and press Enter, or click the terminal and type" disabled>
+    <button id="btnSend" disabled>Send</button>
+  </div>
+
+  <script>
+    let port, reader, writer;
+    const btnConnect = document.getElementById('btnConnect');
+    const btnReset = document.getElementById('btnReset');
+    const btnClear = document.getElementById('btnClear');
+    const btnSend = document.getElementById('btnSend');
+    const cmdInput = document.getElementById('cmdInput');
+    const terminal = document.getElementById('terminal');
+    const status = document.getElementById('status');
+
+    function log(text) {
+      terminal.textContent += text;
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    btnClear.addEventListener('click', () => { terminal.textContent = ''; });
+
+    btnConnect.addEventListener('click', async () => {
+      if (!navigator.serial) {
+        alert('Please use a browser that supports the Web Serial API (Google Chrome / Microsoft Edge).');
+        return;
+      }
+      try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+
+        status.textContent = 'Connected (115200 bps)';
+        status.style.color = '#4efdc7';
+        btnConnect.disabled = true;
+        btnReset.disabled = false;
+        btnSend.disabled = false;
+        cmdInput.disabled = false;
+        cmdInput.focus();
+
+        const textDecoder = new TextDecoderStream();
+        port.readable.pipeTo(textDecoder.writable);
+        reader = textDecoder.readable.getReader();
+
+        const textEncoder = new TextEncoderStream();
+        textEncoder.readable.pipeTo(port.writable);
+        writer = textEncoder.writable.getWriter();
+
+        readLoop();
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.style.color = '#ef4444';
+      }
+    });
+
+    async function readLoop() {
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value) log(value);
+        }
+      } catch (e) {
+        log('\n[Disconnected: ' + e.message + ']\n');
+      }
+    }
+
+    async function sendString(str) {
+      if (!writer) return;
+      await writer.write(str);
+    }
+
+    btnSend.addEventListener('click', async () => {
+      const val = cmdInput.value;
+      await sendString(val + '\r\n');
+      cmdInput.value = '';
+    });
+
+    cmdInput.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        btnSend.click();
+      }
+    });
+
+    // Directly forward keypresses if terminal has focus
+    terminal.addEventListener('keydown', async (e) => {
+      if (!writer) return;
+      if (e.key === 'Enter') {
+        await sendString('\r\n');
+      } else if (e.key === 'Backspace') {
+        await sendString('\b');
+      } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+        await sendString(e.key);
+      }
+    });
+
+    btnReset.addEventListener('click', async () => {
+      if (!port) return;
+      // DTR/RTS pulse to reset ESP32
+      await port.setSignals({ dataTerminalReady: false, requestToSend: true });
+      await new Promise(r => setTimeout(r, 100));
+      await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+    });
+  </script>
+</body>
+</html>
