@@ -1,5 +1,41 @@
 /*
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+ *
+ * CAT control for the Yaesu FTX-1 (the only radio this file has been written for and tested on).
+ *
+ * CAT commands used by this file, for comparing with a radio's CAT manual.
+ * Every command is "<2 letters><parameters>;".  R = receiver: 0 = MAIN, 1 = SUB.  n = a digit.
+ * Everything that is sent passes cat_cmd_allowed(); a command that is not accepted there is never sent.
+ *
+ *   Command         Dir    Meaning (as used here)
+ *   --------------  -----  ------------------------------------------------------------------
+ *   ID;             read   identify; the port that answers is used as the CAT port
+ *   AI1;            set    auto information ON (the radio pushes changes by itself)
+ *   FA; FB;         read   frequency of MAIN (FA) / SUB (FB). Answer: FA/FB + up to 10 digits, in Hz
+ *   FAnnnnnnnnn;    set    frequency in Hz, 9 digits, 30000 - 470000000 (FB for SUB)
+ *   MDR;            read   mode of receiver R. Answer: MDR + one mode code (see s_modes[])
+ *   MDRc;           set    mode; c is one of the codes in s_modes[]
+ *   AGR;            read   AF gain of receiver R. Answer: AGR + 3 digits (000 - 255)
+ *   AGRnnn;         set    AF gain, 000 - 255
+ *   SQR;            read   squelch level of receiver R. Answer: SQR + 3 digits (000 - 255)
+ *   SQRnnn;         set    squelch level, 000 - 255
+ *   RI0;            read   radio information. Answer: "RI" + parameters P1 - P8 + ";" (11 characters);
+ *                          P4 = transmitting (1 = yes), P8 (the last) = squelch open (1 = BUSY)
+ *   RM0;            read   S meter. Answer: RM0 + 3 digits MAIN + 3 digits SUB (000 - 255)
+ *   BPR0;  BPR1;    read   manual notch of receiver R: kind 0 = ON/OFF, kind 1 = frequency.
+ *                          Answer: BPR0nnn (000 = off, 001 = on) / BPR1nnn (001 - 320, 10 Hz steps)
+ *   BPR0nnn; BPR1nnn;  set the same two values
+ *   SV;             set    swap MAIN and SUB
+ *   AB;             set    copy MAIN to SUB
+ *   BA;             set    copy SUB to MAIN
+ *   PSn;            set    power, 0 = OFF, 1 = ON (the browser's POWER button)
+ *   EX010411nnn;    set    menu item RADIO SETTING / MODE DATA / USB OUT LEVEL, 000 - 100
+ *                          (set to 100 whenever a receiver is in DATA-USB; this item is never read)
+ *
+ * Radio-specific values in this file: the allow-list in cat_cmd_allowed(), FREQ_MIN_HZ / FREQ_MAX_HZ,
+ * the mode table s_modes[], the answer parsers (parse_freq, parse_mode, parse_gain, parse_notch,
+ * parse_ri, parse_rm), the EX menu item, the MAIN / SUB (two receiver) assumption, and how the CAT port is
+ * found (Silicon Labs CP210x, VID 0x10C4, the one that answers "ID;").
  */
 
 #include <ctype.h>

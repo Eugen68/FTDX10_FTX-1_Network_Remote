@@ -580,6 +580,10 @@ So that the radio cannot be put into transmit over the network, the CAT commands
 | [`main/index.html`](main/index.html) | Browser player (Web Audio API) with a pseudo squelch |
 | [`main/map.html`](main/map.html) | FT8 world map window (`/map`). The coastline data is embedded, so it works offline |
 
+### Using it with another radio (a hint)
+
+This project is written for the FTX-1 only and has been tested only on it. It is not meant to grow into a multi-radio library. If you want to try another radio in your own fork, start from the comment at the top of [`main/cat.c`](main/cat.c): it lists every CAT command the firmware sends, with its parameters and the answers it reads, so you can compare it with that radio's CAT manual. The same comment names the radio-specific places (the allow-list, the frequency range, the mode table, the answer parsers, the `EX` menu item, the MAIN / SUB assumption and how the CAT port is found). Whatever you change, re-check that no command that could make the radio transmit can pass the allow-list.
+
 ## Glossary
 
 Short explanations of the technical terms used in this document.
