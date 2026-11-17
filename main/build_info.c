@@ -1,3 +1,7 @@
+/*
+ * Build date and time, embedded in the firmware and shown in the browser header and /status.
+ */
+
 #include "build_info.h"
 
 // CMakeLists.txt makes this file depend on every other source and on the embedded HTML,

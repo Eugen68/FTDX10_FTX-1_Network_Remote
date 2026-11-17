@@ -2,6 +2,11 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Access control for the HTTPS server (see web_auth.c): authenticate a request and add the security
+ * headers to a response.
+ */
+
 #pragma once
 
 #include <stdbool.h>

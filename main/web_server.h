@@ -2,6 +2,10 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * The HTTPS server (see web_server.c): start it and register all URLs.
+ */
+
 #pragma once
 
 #include "esp_err.h"

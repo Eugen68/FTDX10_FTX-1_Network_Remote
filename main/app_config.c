@@ -2,6 +2,11 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Saved settings (Wi-Fi, OTA / web credentials, host name) kept in NVS: load, save, erase, the default
+ * values, and the validity checks (for example the host name rules).
+ */
+
 #include <string.h>
 #include "esp_log.h"
 #include "nvs_flash.h"

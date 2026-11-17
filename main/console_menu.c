@@ -2,6 +2,12 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Serial setup menu: lets you enter the Wi-Fi, OTA / web credentials and host name from a terminal, and
+ * stores them in NVS. It opens when no Wi-Fi is configured, when the BOOT button is held at power-on, or
+ * when a key is pressed during the 3 s window at boot.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

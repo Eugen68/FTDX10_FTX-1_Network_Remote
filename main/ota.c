@@ -2,6 +2,12 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Firmware update over the network (OTA): POST /ota on the HTTPS server receives the new image, writes it
+ * to the next app slot and reboots. Protected by the OTA credentials. A new image is rolled back by the
+ * bootloader unless ota_confirm_running() is reached after the next boot.
+ */
+
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -2,6 +2,11 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Saved settings (Wi-Fi, OTA / web credentials, host name) kept in NVS, and the functions to read and
+ * change them. The defaults and length limits are defined here.
+ */
+
 #pragma once
 
 #include <stdbool.h>

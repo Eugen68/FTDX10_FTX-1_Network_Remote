@@ -2,6 +2,11 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Entry point (app_main). Starts everything in order: NVS and saved settings, the serial setup menu
+ * (3 s window at boot), USB audio, CAT, Wi-Fi, the HTTPS server, and finally mDNS (https://<host name>.local/).
+ */
+
 #include "esp_log.h"
 #include "app_config.h"
 #include "cat.h"

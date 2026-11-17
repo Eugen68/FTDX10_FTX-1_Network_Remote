@@ -2,6 +2,11 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Wi-Fi station: connects to the access point saved in NVS, sets the DHCP host name, and reconnects
+ * automatically when the link drops.
+ */
+
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"

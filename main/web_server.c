@@ -2,6 +2,11 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * The HTTPS server: serves the embedded pages (/, /map), the status JSON (/status, /cat), the CAT command
+ * input (POST /cat) and the audio streams (/stream.wav, /stream.pcm). Every request goes through web_auth.
+ */
+
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>

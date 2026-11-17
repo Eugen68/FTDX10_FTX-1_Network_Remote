@@ -2,6 +2,11 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Access control for the HTTPS server: Basic authentication (web and OTA credentials), temporary lock-out
+ * after repeated failures, the CSRF check for state changing requests, and the security / CSP headers.
+ */
+
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>

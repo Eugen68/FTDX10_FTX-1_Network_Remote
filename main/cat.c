@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  *
  * CAT control for the Yaesu FTX-1 (the only radio this file has been written for and tested on).
+ * Finds the radio's CAT serial port over USB, keeps a copy of the radio's state (frequency, mode, S meter, ...)
+ * up to date, and sends the control commands requested from the browser.
  *
  * CAT commands used by this file, for comparing with a radio's CAT manual.
  * Every command is "<2 letters><parameters>;".  R = receiver: 0 = MAIN, 1 = SUB.  n = a digit.

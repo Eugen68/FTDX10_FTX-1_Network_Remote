@@ -2,6 +2,10 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Serial setup menu (see console_menu.c): how it is started from main.c.
+ */
+
 #pragma once
 
 #include <stdbool.h>

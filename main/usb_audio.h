@@ -2,6 +2,10 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Receiving the radio's USB audio (see usb_audio.c): stream format and PCM read functions.
+ */
+
 #pragma once
 
 #include <stdbool.h>

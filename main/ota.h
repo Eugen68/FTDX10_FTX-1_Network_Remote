@@ -2,6 +2,10 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Firmware update over the network (OTA), see ota.c.
+ */
+
 #pragma once
 
 #include "esp_err.h"
@@ -14,9 +18,9 @@ extern "C" {
 /**
  * @brief Register POST /ota on the HTTPS server
  *
- * The request body is the raw application image (build/usb_host_lib.bin). It is protected by HTTP
- * Basic authentication (user "ota", password CONFIG_OTA_PASSWORD) and, with an empty password, OTA is
- * disabled. After a valid image is written, the device reboots into it.
+ * The request body is the raw application image (build/ftx1_companion.bin). It is protected by HTTP
+ * Basic authentication with the OTA credentials saved in NVS (user "ota" unless changed) and, with an
+ * empty OTA password, OTA is disabled. After a valid image is written, the device reboots into it.
  */
 esp_err_t ota_register(httpd_handle_t server);
 

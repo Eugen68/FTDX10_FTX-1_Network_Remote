@@ -2,6 +2,11 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Interface to the CAT control code (cat.c): a snapshot of the radio's state (frequency, mode, S meter,
+ * AF gain, squelch, notch, ...) and the functions that change it.
+ */
+
 #pragma once
 
 #include <stdbool.h>

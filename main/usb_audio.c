@@ -9,6 +9,12 @@
  * That part remains subject to the Apache License 2.0. See the NOTICE file at the repository root.
  */
 
+/*
+ * Receives the radio's audio. The FTX-1 shows up on USB as an audio input; this file starts the USB Host
+ * UAC class driver, opens that device when it is plugged in, and makes the PCM data available to the
+ * web server through usb_audio_read().
+ */
+
 #include <string.h>
 #include <inttypes.h>
 #include "freertos/FreeRTOS.h"

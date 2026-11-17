@@ -2,6 +2,10 @@
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  */
 
+/*
+ * Wi-Fi station connection (see wifi_sta.c).
+ */
+
 #pragma once
 
 #include "esp_err.h"

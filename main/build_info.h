@@ -1,3 +1,7 @@
+/*
+ * Firmware version and build date / time (see build_info.c).
+ */
+
 #pragma once
 
 // Firmware version, shown in the GUI header and returned by /status
