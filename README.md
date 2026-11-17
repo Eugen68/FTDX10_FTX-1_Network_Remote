@@ -538,6 +538,7 @@ So that the radio cannot be put into transmit over the network, the CAT commands
 - Only one audio input device is used (a second and later ones are ignored).
 - Only UAC 1.0 devices are supported.
 - Browser playback has a delay of a few hundred milliseconds.
+- Smartphone browsers are not supported. The UI is designed for the browser of a PC / Mac.
 
 ## Troubleshooting
 
