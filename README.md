@@ -365,6 +365,7 @@ All of them require Basic authentication (see "Security notes" below).
 | `/` | Browser player |
 | `/status` | Stream state and diagnostics (JSON): firmware version (`version`), build time (`build`), audio format, uptime, heap (`heap_free` / `heap_min` / `heap_block`; these include PSRAM if it is enabled), internal-RAM-only heap (`int_free` / `int_min` / `int_block`), Wi-Fi `rssi`, and stream send statistics (`stream.slow_sends` / `stream.max_send_ms`, and others) |
 | `POST /cat` | Controls the radio (frequency, mode, volume, and so on; JSON, `X-Requested-With: ftx1` required) |
+| `POST /reboot` | Reboot the ESP32-S3 (JSON, `X-Requested-With: ftx1` required) |
 | `/stream.pcm` | Raw PCM (little endian). The format is reported in the `X-Sample-Rate` / `X-Channels` / `X-Bytes-Per-Sample` headers |
 | `/stream.wav` | With a WAV header (indefinite length). For external players |
 | `POST /ota` | Firmware update (Basic authentication; see "OTA update" below) |
@@ -508,13 +509,13 @@ Changing the host name in the serial menu does not change the certificate SAN. T
 
 ### Authentication
 
-All endpoints (`/`, `/map`, `/status`, `/cat`, `/stream.*`, `POST /ota`) are protected by HTTP Basic authentication. Use them over HTTPS only.
+All endpoints (`/`, `/map`, `/status`, `/cat`, `POST /reboot`, `/stream.*`, `POST /ota`) are protected by HTTP Basic authentication. Use them over HTTPS only.
 
 - Set the web ID and password with `9` (Web User ID, default `admin`) and `0` (Web Password) in the serial menu. They are stored in NVS.
 - Passwords must be at least 12 characters. IDs cannot contain `:` or spaces.
 - If no web password is set, the OTA ID / password is used instead. If neither is set, access is refused with 403 (it never opens without authentication).
 - Five failures from the same client IP lock it out for 60 seconds and return 429.
-- Requests that change state (`POST /cat`, `POST /ota`) require the `X-Requested-With: ftx1` header and a same-origin `Origin` / `Sec-Fetch-Site` as CSRF protection.
+- Requests that change state (`POST /cat`, `POST /reboot`, `POST /ota`) require the `X-Requested-With: ftx1` header and a same-origin `Origin` / `Sec-Fetch-Site` as CSRF protection.
 - Responses carry `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and a CSP.
 
 ### Restrictions that keep the radio from transmitting

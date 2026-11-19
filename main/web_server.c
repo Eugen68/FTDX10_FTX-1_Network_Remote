@@ -17,6 +17,7 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_https_server.h"
+#include "esp_system.h"
 #include "build_info.h"
 #include "cat.h"
 #include "ota.h"
@@ -646,6 +647,21 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     return httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"Request rejected\"}", HTTPD_RESP_USE_STRLEN);
 }
 
+static esp_err_t reboot_handler(httpd_req_t *req)
+{
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, true)) {
+        return ESP_OK;
+    }
+    web_auth_set_common_headers(req);
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_set_type(req, "application/json");
+    ESP_LOGI(TAG, "Reboot requested via web API");
+    httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"Rebooting...\"}", HTTPD_RESP_USE_STRLEN);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
 static esp_err_t pcm_handler(httpd_req_t *req)
 {
     return start_stream(req, false);
@@ -691,6 +707,7 @@ esp_err_t web_server_start(void)
         {.uri = "/status",     .method = HTTP_GET,  .handler = status_handler},
         {.uri = "/cat",        .method = HTTP_GET,  .handler = cat_handler},
         {.uri = "/cat",        .method = HTTP_POST, .handler = cat_post_handler},
+        {.uri = "/reboot",     .method = HTTP_POST, .handler = reboot_handler},
         {.uri = "/stream.pcm", .method = HTTP_GET,  .handler = pcm_handler},
         {.uri = "/stream.wav", .method = HTTP_GET,  .handler = wav_handler},
     };

@@ -365,6 +365,7 @@ Enter Host name without ".local" [Current: ftx-1c] (a-z, 0-9, '-'; DEFAULT to re
 | `/` | ブラウザ用プレーヤー |
 | `/status` | ストリーム状態と診断値（JSON）。ファームのバージョン（`version`）、ビルド時刻（`build`）、音声形式、稼働時間、ヒープ（`heap_free` / `heap_min` / `heap_block`。PSRAM を有効にした場合はその分を含む）、内部 RAM のみのヒープ（`int_free` / `int_min` / `int_block`）、Wi-Fi の `rssi`、ストリームの送信統計（`stream.slow_sends` / `stream.max_send_ms` など） |
 | `POST /cat` | 無線機の操作（周波数、モード、音量など。JSON、`X-Requested-With: ftx1` 必須） |
+| `POST /reboot` | ESP32-S3 の再起動（JSON、`X-Requested-With: ftx1` 必須） |
 | `/stream.pcm` | 生の PCM（リトルエンディアン）。形式は `X-Sample-Rate` / `X-Channels` / `X-Bytes-Per-Sample` ヘッダーで通知 |
 | `/stream.wav` | WAV ヘッダー付き（長さ不定）。外部プレーヤー向け |
 | `POST /ota` | ファームウェア更新（Basic 認証。下記「OTA 更新」参照） |
@@ -508,13 +509,13 @@ HTTPS 用の自己署名証明書（EC P-256、有効期間 2 年、SAN: `ftx-1c
 
 ### 認証
 
-すべてのエンドポイント（`/`、`/map`、`/status`、`/cat`、`/stream.*`、`POST /ota`）は HTTP Basic 認証で保護しています。HTTPS 上でだけ使ってください。
+すべてのエンドポイント（`/`、`/map`、`/status`、`/cat`、`POST /reboot`、`/stream.*`、`POST /ota`）は HTTP Basic 認証で保護しています。HTTPS 上でだけ使ってください。
 
 - Web 用の ID とパスワードは、シリアルメニューの `9`（Web User ID、既定 `admin`）と `0`（Web Password）で設定し、NVS に保存します。
 - パスワードは 12 文字以上が必須です。ID に `:` と空白は使えません。
 - Web パスワードが未設定の場合は、OTA の ID / パスワードで代用します。両方未設定のときは、アクセスを 403 で拒否します（無認証で開くことはありません）。
 - 同じクライアント IP から 5 回失敗すると 60 秒ロックし、429 を返します。
-- 状態を変える要求（`POST /cat`、`POST /ota`）は CSRF 対策として、`X-Requested-With: ftx1` ヘッダーと、同一オリジンの `Origin` / `Sec-Fetch-Site` を要求します。
+- 状態を変える要求（`POST /cat`、`POST /reboot`、`POST /ota`）は CSRF 対策として、`X-Requested-With: ftx1` ヘッダーと、同一オリジンの `Origin` / `Sec-Fetch-Site` を要求します。
 - 応答には `nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、CSP を付けます。
 
 ### 電波を送信させないための制限

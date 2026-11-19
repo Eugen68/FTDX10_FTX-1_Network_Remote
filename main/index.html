@@ -107,6 +107,31 @@
     border-color: #10b981;
     box-shadow: 0 0 12px rgba(16, 185, 129, 0.5);
   }
+  .reboot-btn {
+    font-size: .75rem;
+    font-weight: bold;
+    padding: .3rem .8rem;
+    background: linear-gradient(180deg, #334155 0%, #1e293b 100%);
+    color: #cbd5e1;
+    border: 1px solid #475569;
+    border-radius: 5px;
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    gap: .3rem;
+    transition: all 0.2s ease;
+  }
+  .reboot-btn:hover {
+    background: linear-gradient(180deg, #475569 0%, #334155 100%);
+    color: #f8fafc;
+    border-color: #64748b;
+    box-shadow: 0 0 8px rgba(100, 116, 139, 0.4);
+  }
+  .reboot-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
   .rig-off-btn {
     font-size: .75rem;
     font-weight: bold;
@@ -939,6 +964,7 @@
         <div class="led-item"><div class="led" id="ledBusy"></div>BUSY</div>
         <div class="led-item"><div class="led" id="ledRx"></div>RX</div>
       </div>
+      <button class="reboot-btn" id="btnReboot" title="Reboot the ESP32-S3 companion device">REBOOT</button>
       <button class="rig-off-btn" id="btnRigOff" title="Turn the FTX-1 power OFF (CAT: PS0;)">RIG OFF</button>
       <button class="pwr-btn" id="btnPlay">POWER / PLAY</button>
     </div>
@@ -2018,6 +2044,28 @@ function stop() {
 }
 
 btnPlay.addEventListener('click', () => { if (abort) stop(); else start(); });
+
+const btnReboot = document.getElementById('btnReboot');
+if (btnReboot) {
+  btnReboot.addEventListener('click', async () => {
+    if (confirm("Reboot the ESP32-S3 device?\n(Audio streaming and connection will restart in a few seconds)")) {
+      try {
+        if (abort) stop();
+        btnReboot.disabled = true;
+        btnReboot.textContent = 'REBOOTING...';
+        await fetch('/reboot', {
+          method: 'POST',
+          headers: CAT_POST_HEADERS
+        });
+      } catch (e) {
+        // Network error is expected as device reboots immediately
+      }
+      setTimeout(() => {
+        location.reload();
+      }, 3500);
+    }
+  });
+}
 
 const btnRigOff = document.getElementById('btnRigOff');
 if (btnRigOff) {
