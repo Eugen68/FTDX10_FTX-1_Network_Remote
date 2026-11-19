@@ -93,6 +93,7 @@ If it works, lucky you. If it doesn't, have a look inside and fix it. If you can
 
 It only contains the features I wanted in order to be lazier. Whatever is missing, please feel free to fork it and build more features for the lazy ham.
 I would love to see more improvements out there that make life easier.
+For technical evaluations and future improvement ideas (such as on-device FT8 decoding directly on the ESP32-S3), see [`docs/future_ideas.md`](docs/future_ideas.md).
 
 ### About issues
 
@@ -432,6 +433,14 @@ This project would not exist without the contributions of those who came before.
 - Decoding runs once per slot in a Web Worker (a separate thread). A crowded slot takes 1.5 to 1.8 seconds on a Mac, but audio playback and the UI do not stop. The Worker is created from a Blob URL, so the CSP allows `worker-src blob:`.
 - The second pass (subtracting decoded signals and searching again) is not implemented. For that reason it cannot pick up weak stations hidden behind strong ones as well as WSJT-X or ft8_lib.
 
+### Time synchronization (NTP) and latency considerations
+
+Due to Wi-Fi transmission and browser audio buffering, an unavoidable transmission latency (typically 100 to 300 ms) exists between when the transceiver receives audio and when it arrives at the browser. The system is designed to account for this:
+
+- **Absorption by DT (Time Offset) search**: The FT8 protocol is inherently designed to tolerate propagation delays and clock skews between stations. The decoder searches for timing offsets (DT) during sync detection (Costas array search). The network latency is naturally absorbed as a positive shift in DT (typically +0.1s to +0.4s) and does not affect decoding success.
+- **Adjusted decode trigger timing (14.0s)**: In a standard 15-second FT8 slot, transmission takes place between 0.5s and 13.14s (for DT=0). To accommodate transmission delay and buffering of late-arriving symbols, the decoder snapshots 15.0 seconds of audio and triggers the Web Worker at **14.0s** into the cycle rather than the 15.0s slot boundary. This ensures trailing symbols are not cut off.
+- **Waveform continuity**: Network jitter in packet arrival does not alter the sample rate timing; audio is placed into the continuous ring buffer at fixed sample rates (48 kHz / 6.4 kHz), preserving the exact relative phase and timing across symbols.
+
 ### FT8 world map
 
 ![FT8 world map window: stations plotted by grid locator, with the list of decoded stations below (callsigns in the screenshot are dummies)](docs/ft8_map.png)
@@ -446,6 +455,10 @@ Pressing `DECODER ON` opens a world map in a separate window (`/map`) and plots 
 - Old spots fade and disappear after 15 minutes. Closing and reopening the map window restores the spots so far.
 - The coastline is the [Natural Earth](https://www.naturalearthdata.com/) (public domain) 50m land data, thinned at 0.02 degrees and embedded as vectors in [`main/map.html`](main/map.html) (about 220 KB). The outline stays smooth when zoomed in, and it works without an Internet connection.
 - If the pop-up is blocked, allow pop-ups for this site from the blocked indicator in the address bar.
+
+### Future improvement ideas
+
+For technical evaluations, memory estimations on on-device FT8 decoding on the ESP32-S3, two-pass decoding, and other ideas, see [`docs/future_ideas.md`](docs/future_ideas.md).
 
 ## OTA update
 
