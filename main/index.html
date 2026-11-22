@@ -1481,7 +1481,10 @@ const PREBUFFER_SEC = 0.25;
 // 0.5 s from the start: on the bench Wi-Fi a 0.25 s start still gave one or two gaps before it grew
 const TARGET_MIN = 0.5, TARGET_MAX = 1.2, TARGET_STEP = 0.15;
 const TARGET_DECAY_MS = 30000, TARGET_DECAY = 0.05;
-const CATCHUP_RATE = 1.04;
+// Catch-up: 2 % faster, entered only well above the target and left only back at it. A single threshold
+// made the rate flip on every other block with the normal arrival jitter, which was heard as a warble.
+const CATCHUP_RATE = 1.02;
+const CATCHUP_ENTER = 0.20, CATCHUP_EXIT = 0.02;   // seconds above the target
 const DROP_ABOVE = 0.35;   // seconds beyond the target: later than this, a block is skipped
 
 let abort = null;
@@ -2010,9 +2013,10 @@ async function start() {
     const reader = res.body.getReader();
 
     // Diagnostics (console: audioDiag): tells a server/network stall (maxReadMs) from a browser stall (maxProcMs)
-    const diag = window.audioDiag = { underruns: 0, maxReadMs: 0, maxProcMs: 0, slowReads: 0, chunks: 0, dropped: 0, target: TARGET_MIN };
+    const diag = window.audioDiag = { underruns: 0, maxReadMs: 0, maxProcMs: 0, slowReads: 0, chunks: 0, dropped: 0, target: TARGET_MIN, catchups: 0 };
     let target = TARGET_MIN;
     let lastUnderrun = performance.now();
+    let catchingUp = false;
     let diagLog = performance.now();
 
     for (;;) {
@@ -2067,8 +2071,10 @@ async function start() {
         diag.dropped++;
         continue;
       }
-      // Slightly behind the target after a burst: play this block a little faster to catch up
-      const playRate = ahead > target + 0.05 ? CATCHUP_RATE : 1;
+      // Well behind the target after a burst: play a little faster until back at it (with hysteresis)
+      if (!catchingUp && ahead > target + CATCHUP_ENTER) { catchingUp = true; diag.catchups++; }
+      else if (catchingUp && ahead <= target + CATCHUP_EXIT) catchingUp = false;
+      const playRate = catchingUp ? CATCHUP_RATE : 1;
 
       const buf = ctx.createBuffer(ch, d.frames, rate);
       for (let c = 0; c < ch; c++) buf.copyToChannel(d.channels[c], c);

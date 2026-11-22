@@ -34,13 +34,38 @@ if errorlevel 1 (
     )
 )
 
-rem --- Portul ---------------------------------------------------------------
+rem --- Portul: cautat automat dupa chipul USB-serial al placii (WCH CH343 / CH340, VID 1A86) ----------
+rem Porturile Silicon Labs (VID 10C4) sunt ale radioului (CAT) si nu se aleg niciodata automat:
+rem resetul esptool misca DTR/RTS, care pe portul Standard al radioului poate porni emisia.
+set "PORT="
+set "NFOUND=0"
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPDeviceID -match 'VID_1A86' -and $_.Name -match '\((COM\d+)\)' } | ForEach-Object { if ($_.Name -match '\((COM\d+)\)') { $Matches[1] } }"`) do (
+    set /a NFOUND+=1
+    set "PORT=%%P"
+)
+
+if "%NFOUND%"=="1" (
+    echo Placa gasita pe %PORT% ^(chip WCH CH343/CH340^).
+    goto :port_ok
+)
+
 echo Porturi seriale gasite:
 powershell -NoProfile -Command "Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match '\(COM\d+\)' } | ForEach-Object { '   ' + $_.Name }"
 echo.
-set "PORT=COM13"
-set /p "PORT=Portul COM al placii (Enter = COM13): "
+if "%NFOUND%"=="0" (
+    echo Nu am gasit automat placa ^(niciun port WCH CH343/CH340^).
+) else (
+    echo Am gasit %NFOUND% porturi WCH: alege-l pe cel al placii.
+)
+echo NU alege un port "Silicon Labs CP210x": acela este al radioului.
+set "PORT="
+set /p "PORT=Scrie portul placii (de exemplu COM30): "
+if "%PORT%"=="" (
+    echo [EROARE] Nu ai ales niciun port.
+    goto :end
+)
 
+:port_ok
 rem --- Ce scriem -------------------------------------------------------------
 echo.
 echo  1 = Actualizare, PASTREAZA Wi-Fi-ul si parolele (recomandat)
