@@ -103,6 +103,11 @@ typedef struct {
 static audio_fifo_t s_fifo;
 static uint8_t s_usb_read_buf[USB_READ_BYTES];
 static volatile uint32_t s_st_rate;         // sample rate of the current / last stream
+// Measured USB input rate: frames actually received from the radio per second since the stream started.
+// Below the nominal rate means isochronous packets were lost between the radio and the reader.
+static volatile uint64_t s_st_usb_bytes;
+static volatile int64_t s_st_usb_t0_us;
+static volatile uint32_t s_st_in_frame_bytes;
 
 // Decimator state: only the USB reader task touches it while a stream runs
 typedef struct {
@@ -240,6 +245,13 @@ static void usb_reader_task(void *arg)
         if (n > sizeof(s_usb_read_buf)) {
             n = sizeof(s_usb_read_buf);
         }
+        if (n > 0) {
+            if (s_st_usb_t0_us == 0) {
+                s_st_usb_t0_us = esp_timer_get_time();   // from the first data, not the stream request
+            } else {
+                s_st_usb_bytes += n;                     // the first read only marks the start
+            }
+        }
         if (n > 0 && s_dec.factor > 1) {
             n = (uint32_t)decimate(&s_dec, s_usb_read_buf, n);
             if (n > 0) {
@@ -351,6 +363,9 @@ static void stream_task(void *arg)
     audio_fifo_t *f = &s_fifo;
     const uint32_t bytes_per_ms = (ctx->out_rate * frame_bytes + 999) / 1000;
     s_st_rate = ctx->out_rate;
+    s_st_usb_bytes = 0;
+    s_st_usb_t0_us = 0;
+    s_st_in_frame_bytes = frame_bytes;
     s_dec.factor = 1;
     if (ctx->decim > 1) {
         decimator_init(&s_dec, ctx->decim, ctx->fmt.channels, ctx->fmt.sample_rate, ctx->out_rate);
@@ -580,6 +595,13 @@ static esp_err_t status_handler(httpd_req_t *req)
         n = snprintf(json, sizeof(json), "{\"streaming\":false,\"version\":\"%s\",\"build\":\"%s\"", FTX1_VERSION, build_info_get());
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
+        // Measured USB input rate, in tenths of a hertz
+        uint64_t usb_in_dhz = 0;
+        const int64_t t0 = s_st_usb_t0_us;
+        const int64_t el = t0 ? esp_timer_get_time() - t0 : 0;
+        if (el > 1000000 && s_st_in_frame_bytes) {
+            usb_in_dhz = (s_st_usb_bytes / s_st_in_frame_bytes) * 10000000ULL / (uint64_t)el;
+        }
         wifi_ap_record_t ap;
         const int rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
         // heap_* include PSRAM when it is enabled; int_* are the internal RAM only
@@ -588,7 +610,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       "\"int_free\":%lu,\"int_min\":%lu,\"int_block\":%lu,\"rssi\":%d,"
                       "\"conn_opened\":%lu,\"conn_closed\":%lu,"
                       "\"stream\":{\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
-                      "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu}}",
+                      "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu}}",
                       (unsigned long)(esp_timer_get_time() / 1000000),
                       (unsigned long)esp_get_free_heap_size(),
                       (unsigned long)esp_get_minimum_free_heap_size(),
@@ -602,7 +624,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)s_st_usb_timeouts, (unsigned long)s_st_slow_sends,
                       (unsigned long)s_st_max_send_ms,
                       (unsigned long)s_st_buf_ms, (unsigned long)s_st_buf_max_ms, (unsigned long)s_st_overflows,
-                      (unsigned long)s_st_rate);
+                      (unsigned long)s_st_rate, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10));
     }
     return send_json(req, json, n, sizeof(json));
 }

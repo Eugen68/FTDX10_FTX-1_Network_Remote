@@ -2013,7 +2013,10 @@ async function start() {
     const reader = res.body.getReader();
 
     // Diagnostics (console: audioDiag): tells a server/network stall (maxReadMs) from a browser stall (maxProcMs)
-    const diag = window.audioDiag = { underruns: 0, maxReadMs: 0, maxProcMs: 0, slowReads: 0, chunks: 0, dropped: 0, target: TARGET_MIN, catchups: 0 };
+    const diag = window.audioDiag = { underruns: 0, maxReadMs: 0, maxProcMs: 0, slowReads: 0, chunks: 0, dropped: 0, target: TARGET_MIN, catchups: 0, hz: 0, playPpm: 0 };
+    // Measured stream rate (frames received per second of wall time, from the first frame): if it is
+    // below the nominal rate, samples are lost before the browser and the playout delay drains slowly.
+    let rxFrames = 0, rxT0 = 0, rxCtx0 = 0;
     let target = TARGET_MIN;
     let lastUnderrun = performance.now();
     let catchingUp = false;
@@ -2042,6 +2045,12 @@ async function start() {
 
       const d = decode(pending, ch, width);
       pending = pending.slice(d.used);
+      if (!rxT0) { rxT0 = tGot; rxCtx0 = ctx.currentTime; } else rxFrames += d.frames;
+      if (tGot - rxT0 > 5000) {
+        const wall = (tGot - rxT0) / 1000;
+        diag.hz = Math.round(rxFrames / wall);                                     // stream rate as received
+        diag.playPpm = Math.round(((ctx.currentTime - rxCtx0) / wall - 1) * 1e6);  // this PC's audio clock
+      }
       // The radio's USB audio is [left = MAIN, right = SUB] and follows a VFO swap (SV;),
       // so no channel reordering is done here.
       recFeed(d.channels, rate);
