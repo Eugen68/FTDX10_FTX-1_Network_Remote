@@ -5,6 +5,10 @@
 /*
  * Interface to the CAT control code (cat.c): a snapshot of the radio's state (frequency, mode, S meter,
  * AF gain, squelch, notch, ...) and the functions that change it.
+ *
+ * Supported radios (detected from the answer to "ID;"): Yaesu FTX-1 (ID 0840) and Yaesu FTDX10 (ID 0761).
+ * The FTX-1 has two receivers (MAIN / SUB). The FTDX10 has one receiver: "sub" then means VFO-B
+ * (frequency and mode only); AF gain, squelch, notch and the S meter exist for MAIN only.
  */
 
 #pragma once
@@ -17,11 +21,28 @@
 extern "C" {
 #endif
 
+/** @brief Radio model, detected from the answer to "ID;" */
+typedef enum {
+    CAT_RIG_NONE = 0,       /*!< No CAT port open yet */
+    CAT_RIG_UNKNOWN,        /*!< A port answered ID; with a model this firmware does not know: read-only */
+    CAT_RIG_FTX1,           /*!< Yaesu FTX-1 (ID 0840) */
+    CAT_RIG_FTDX10,         /*!< Yaesu FTDX10 (ID 0761) */
+} cat_rig_t;
+
 /**
  * @brief Radio state read over CAT (the FTX-1's CP210x USB serial port)
  */
 typedef struct {
     bool connected;         /*!< A CAT port is open and answering */
+    cat_rig_t rig;          /*!< Detected radio model */
+    char rig_name[12];      /*!< "FTX-1", "FTDX10", "UNKNOWN" or "" */
+    char rig_id[5];         /*!< The 4 characters of the ID; answer, "" before a radio answered */
+    bool dual_rx;           /*!< The radio has a separate SUB receiver (AF gain / squelch / notch / S meter) */
+    uint16_t sq_max;        /*!< Highest squelch value the radio accepts (255 FTX-1, 100 FTDX10) */
+    uint32_t freq_min;      /*!< Lowest frequency accepted by cat_set_freq(), Hz */
+    uint32_t freq_max;      /*!< Highest frequency accepted by cat_set_freq(), Hz */
+    bool can_control;       /*!< Set commands are allowed (false for an unknown radio) */
+    bool c4fm;              /*!< The radio has the C4FM modes */
     bool busy;              /*!< Squelch is open on the receiver reported by RI (BUSY) */
     bool tx;                /*!< The radio is transmitting (RI P4 = 1) */
     uint8_t s_main;         /*!< S meter, MAIN side, 0-255 */
@@ -50,7 +71,8 @@ typedef struct {
 /**
  * @brief Start the CAT client. Requires usb_audio_init() (it installs the USB Host Library) first.
  *
- * When the CP210x serial port is attached, it is opened at 38400 bps 8N1 and polled.
+ * When a CP210x serial port is attached, it is opened at 8N1 and the CAT rates (115200, 38400, 4800, 9600,
+ * 19200 bps) are tried until a port answers "ID;". The answer selects the radio profile.
  */
 esp_err_t cat_init(void);
 
@@ -77,7 +99,8 @@ esp_err_t cat_copy_sub_to_main(void);
 /**
  * @brief Set frequency in Hz
  * @param sub true for SUB (VFO-B), false for MAIN (VFO-A)
- * @param freq_hz Frequency in Hz, 30000 - 470000000 (e.g. 14074000); ESP_ERR_INVALID_ARG outside it
+ * @param freq_hz Frequency in Hz within the radio's range (FTX-1 30 kHz - 470 MHz, FTDX10 30 kHz - 75 MHz);
+ *                ESP_ERR_INVALID_ARG outside it
  */
 esp_err_t cat_set_freq(bool sub, uint32_t freq_hz);
 
@@ -103,7 +126,7 @@ esp_err_t cat_set_mode(bool sub, const char *mode_name);
 esp_err_t cat_set_volume(bool sub, uint8_t volume);
 
 /**
- * @brief Set hardware Squelch level (0-255)
+ * @brief Set hardware Squelch level (0-255 on the FTX-1, 0-100 on the FTDX10)
  * @param sub true for SUB (VFO-B), false for MAIN (VFO-A)
  * @param squelch Squelch level (0-255)
  */

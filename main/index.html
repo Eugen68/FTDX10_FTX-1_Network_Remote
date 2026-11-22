@@ -525,7 +525,9 @@
   .scope-rec-btn { margin-right: .2rem; }
   .scope-rec-btn:hover { background: #7f1d1d; border-color: #ef4444; }
   .scope-rec-btn.flash { background: #dc2626; color: #fff; border-color: #fca5a5; }
-  .scope-mute-btn { margin-right: .5rem; }
+  .scope-mute-btn { margin-right: .2rem; }
+  .scope-vol { width: 56px; height: 10px; margin-right: .4rem; accent-color: #38bdf8; }
+  .ft8-dtcorr { width: 3.6em; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .65rem; }
   .scope-mute-btn.muted {
     background: #b91c1c;
     color: #fff;
@@ -573,6 +575,9 @@
   .sub-tag { color: var(--accent-green); }
 
   /* FT8 Live Decoder Panel */
+  /* One-receiver radios (FTDX10): the SUB receiver controls are hidden, "SUB" is only VFO-B */
+  body.single-rx .dual-rx-only { display: none !important; }
+  body.single-rx .scope-pair, body.single-rx .screen-meters { grid-template-columns: 1fr; }
   .ft8-panel {
     background: #0b1120;
     border: 1px solid #1e293b;
@@ -606,8 +611,11 @@
   }
   .ft8-ctrls {
     display: flex;
+    align-items: center;
     gap: .25rem;
   }
+  #streamRateSel { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .58rem; padding: 0 .2rem; margin-right: .4rem; }
+  .ft8-dtcorr-label { font-size: .6rem; color: #94a3b8; margin-right: .3rem; white-space: nowrap; }
   .ft8-btn {
     font-size: .6rem;
     font-weight: 600;
@@ -955,7 +963,7 @@
   <!-- Header -->
   <div class="rig-header">
     <div class="brand-logo">
-      <div class="brand-title">FTX-1 Companion</div>
+      <div class="brand-title" id="brandTitle">FTX-1 Companion</div>
       <div class="brand-build" id="buildInfo" title="Firmware build time"></div>
     </div>
     <div class="header-controls">
@@ -965,7 +973,7 @@
         <div class="led-item"><div class="led" id="ledRx"></div>RX</div>
       </div>
       <button class="reboot-btn" id="btnReboot" title="Reboot the ESP32-S3 companion device">REBOOT</button>
-      <button class="rig-off-btn" id="btnRigOff" title="Turn the FTX-1 power OFF (CAT: PS0;)">RIG OFF</button>
+      <button class="rig-off-btn" id="btnRigOff" title="Turn the radio power OFF (CAT: PS0;)">RIG OFF</button>
       <button class="pwr-btn" id="btnPlay">POWER / PLAY</button>
     </div>
   </div>
@@ -1110,7 +1118,7 @@
 
         <div class="vfo-box sub-box">
           <div class="vfo-box-top">
-            <span>SUB (VFO-B)</span>
+            <span id="vfoLabelSub">SUB (VFO-B)</span>
           </div>
           <div class="vfd-bezel" id="vfdBezelSub">
             <span class="vfd-mode-tag" id="modeBadgeSub">LSB</span>
@@ -1151,6 +1159,7 @@
             <div class="scope-spans" data-scope="Main">
               <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecMain" title="Save the last 30 s of MAIN as WAV">REC</button>
               <button type="button" class="scope-span-btn scope-mute-btn" id="btnMuteMain" aria-pressed="false" title="Mute MAIN audio (scope and FT8 keep running)">MUTE</button>
+              <input type="range" class="scope-vol" id="volMain" min="0" max="200" step="5" value="100" title="MAIN volume on this PC (the radio, the scope and FT8 are not affected)" aria-label="MAIN volume on this PC">
               <span class="scope-span-label">SPAN:</span>
               <button type="button" class="scope-span-btn" data-span="1000" title="Narrow span for CW">1k</button>
               <button type="button" class="scope-span-btn active" data-span="3500">3.5k</button>
@@ -1164,12 +1173,13 @@
             <span class="scope-base-val" id="wfBaseValMain">0</span>
           </div>
         </div>
-        <div class="scope-container">
+        <div class="scope-container dual-rx-only">
           <div class="scope-header">
             <span class="scope-title sub-tag">SUB SCOPE</span>
             <div class="scope-spans" data-scope="Sub">
               <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecSub" title="Save the last 30 s of SUB as WAV">REC</button>
               <button type="button" class="scope-span-btn scope-mute-btn" id="btnMuteSub" aria-pressed="false" title="Mute SUB audio (scope and FT8 keep running)">MUTE</button>
+              <input type="range" class="scope-vol" id="volSub" min="0" max="200" step="5" value="100" title="SUB volume on this PC (the radio, the scope and FT8 are not affected)" aria-label="SUB volume on this PC">
               <span class="scope-span-label">SPAN:</span>
               <button type="button" class="scope-span-btn" data-span="1000" title="Narrow span for CW">1k</button>
               <button type="button" class="scope-span-btn active" data-span="3500">3.5k</button>
@@ -1184,7 +1194,16 @@
           </div>
         </div>
       </div>
-      <div class="scope-rate-row"><span id="scopeRateText">48.0 kHz AUDIO</span></div>
+      <div class="scope-rate-row">
+        <label title="Stream rate. 16 kHz needs a third of the Wi-Fi bandwidth of 48 kHz and still carries audio up to 8 kHz (SSB, CW, AM, FM, FT8, the 6k scope)">AUDIO
+          <select id="streamRateSel">
+            <option value="16000">16 kHz (Wi-Fi friendly)</option>
+            <option value="24000">24 kHz</option>
+            <option value="48000">48 kHz (full)</option>
+          </select>
+        </label>
+        <span id="scopeRateText">48.0 kHz AUDIO</span>
+      </div>
 
       <!-- FT8 Live Decoder Panels (MAIN / SUB) -->
       <div class="ft8-panel">
@@ -1195,6 +1214,8 @@
             <span class="ft8-sync-badge" id="ft8SyncBadgeMain">SYNC: 00s</span>
           </div>
           <div class="ft8-ctrls">
+            <label class="ft8-dtcorr-label" title="Subtracted from every DT shown (MAIN and SUB): the delay the audio picks up on its way here (USB, Wi-Fi, browser). Set it to the DT most stations show, so DTs read as in WSJT-X">DT corr
+              <input type="number" class="ft8-dtcorr" id="ft8DtCorr" min="-1" max="2" step="0.1" value="0.3"></label>
             <button type="button" class="ft8-btn" id="ft8EnableBtnMain">DECODER OFF</button>
             <button type="button" class="ft8-btn" id="ft8ClearBtnMain">CLEAR</button>
           </div>
@@ -1219,7 +1240,7 @@
         </div>
       </div>
 
-      <div class="ft8-panel">
+      <div class="ft8-panel dual-rx-only">
         <div class="ft8-header">
           <div class="ft8-title">
             <span class="ft8-icon">📻</span>
@@ -1255,7 +1276,7 @@
     <!-- RIGHT: SUB Controls Card -->
     <div class="control-card sub-card">
       <div class="card-title">
-        <span>SUB VFO-B</span>
+        <span id="cardTitleSub">SUB VFO-B</span>
         <select id="modeSelectSub" title="SUB mode">
           <option value="LSB">LSB</option>
           <option value="USB">USB</option>
@@ -1341,8 +1362,8 @@
       </form>
 
       <!-- AF GAIN & SQUELCH (CAT) -->
-      <div class="button-group-label">AF GAIN / SQL (CAT):</div>
-      <div class="analog-knobs-row">
+      <div class="button-group-label dual-rx-only">AF GAIN / SQL (CAT):</div>
+      <div class="analog-knobs-row dual-rx-only">
         <div class="mini-knob-box">
           <div class="mini-knob-label">AF GAIN</div>
           <svg class="mini-knob-svg" id="knobVolSub" viewBox="0 0 60 60" role="slider" aria-label="SUB AF GAIN"></svg>
@@ -1356,8 +1377,8 @@
       </div>
 
       <!-- MANUAL NOTCH (CAT BP) -->
-      <div class="button-group-label">MANUAL NOTCH (CAT):</div>
-      <div class="analog-knobs-row">
+      <div class="button-group-label dual-rx-only">MANUAL NOTCH (CAT):</div>
+      <div class="analog-knobs-row dual-rx-only">
         <div class="mini-knob-box">
           <div class="mini-knob-label">NOTCH</div>
           <button type="button" class="rig-btn notch-btn" id="notchBtnSub" aria-pressed="false">OFF</button>
@@ -1407,7 +1428,7 @@
       </div>
 
       <!-- SUB Squelch -->
-      <div class="sq-box" id="sqCardSub">
+      <div class="sq-box dual-rx-only" id="sqCardSub">
         <label><input type="checkbox" id="sqOnSub"> <strong>SUB (R) SQUELCH</strong></label>
         <div class="sq-row">
           <span>Type:</span>
@@ -1453,17 +1474,43 @@ const ledRx = document.getElementById('ledRx');
 
 const BUFFER_SEC = 0.08;
 const PREBUFFER_SEC = 0.25;
-const MAX_LATENCY = 0.8;
+// Adaptive playout delay: how far ahead of "now" the audio is scheduled. It starts small, grows after
+// each underrun (a Wi-Fi stall), and shrinks back slowly while the network is steady. Audio that
+// arrives in a burst after a stall is played a little faster (CATCHUP_RATE) to get back to the target,
+// and whatever is far beyond it is dropped instead of being played late.
+// 0.5 s from the start: on the bench Wi-Fi a 0.25 s start still gave one or two gaps before it grew
+const TARGET_MIN = 0.5, TARGET_MAX = 1.2, TARGET_STEP = 0.15;
+const TARGET_DECAY_MS = 30000, TARGET_DECAY = 0.05;
+// Catch-up: 2 % faster, entered only well above the target and left only back at it. A single threshold
+// made the rate flip on every other block with the normal arrival jitter, which was heard as a warble.
+const CATCHUP_RATE = 1.02;
+const CATCHUP_ENTER = 0.20, CATCHUP_EXIT = 0.02;   // seconds above the target
+const DROP_ABOVE = 0.35;   // seconds beyond the target: later than this, a block is skipped
 
 let abort = null;
 let ctx = null;
 let scopeAnalysers = [null, null]; // [MAIN(left), SUB(right)]
 let speakerGains = [null, null];   // per-channel speaker gain nodes (mute switches)
 const speakerMuted = [false, false];
+const speakerVolume = [1, 1];        // PC playback volume per channel, 0 - 2 (the sliders)
+const SPEAKER_VOL_KEYS = ['ftx1.volMain', 'ftx1.volSub'];
 
 function applySpeakerMute(i) {
-  if (speakerGains[i]) speakerGains[i].gain.value = speakerMuted[i] ? 0 : 1;
+  if (speakerGains[i]) speakerGains[i].gain.value = speakerMuted[i] ? 0 : speakerVolume[i];
 }
+
+['Main', 'Sub'].forEach((name, i) => {
+  const slider = document.getElementById('vol' + name);
+  try { const v = parseInt(localStorage.getItem(SPEAKER_VOL_KEYS[i]), 10); if (v >= 0 && v <= 200) slider.value = v; } catch (e) {}
+  const set = () => {
+    speakerVolume[i] = slider.value / 100;
+    slider.title = (i ? 'SUB' : 'MAIN') + ' volume on this PC: ' + slider.value + ' %';
+    applySpeakerMute(i);
+    try { localStorage.setItem(SPEAKER_VOL_KEYS[i], slider.value); } catch (e) {}
+  };
+  slider.addEventListener('input', set);
+  set();
+});
 
 ['Main', 'Sub'].forEach((name, i) => {
   const btn = document.getElementById('btnMute' + name);
@@ -1895,15 +1942,26 @@ requestAnimationFrame(renderScope);
 let isUserStopped = true;
 let reconnectTimer = null;
 
+// Stream rate asked from the device (it low-pass filters and decimates the radio's 48 kHz)
+const STREAM_RATE_KEY = 'ftx1.streamRate';
+const streamRateSel = document.getElementById('streamRateSel');
+try { const r = localStorage.getItem(STREAM_RATE_KEY); if (r) streamRateSel.value = r; } catch (e) {}
+if (!streamRateSel.value) streamRateSel.value = '16000';
+streamRateSel.addEventListener('change', () => {
+  try { localStorage.setItem(STREAM_RATE_KEY, streamRateSel.value); } catch (e) {}
+  if (abort) { stop(); start(); }   // a new rate needs a new stream and a new AudioContext
+});
+
 async function start() {
   isUserStopped = false;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  abort = new AbortController();
+  const myAbort = abort = new AbortController();
   btnPlay.textContent = 'PWR OFF / STOP';
   btnPlay.classList.add('running');
   try {
-    const res = await fetch('/stream.pcm', { signal: abort.signal, cache: 'no-store' });
+    const res = await fetch('/stream.pcm?rate=' + encodeURIComponent(streamRateSel.value), { signal: abort.signal, cache: 'no-store' });
     if (!res.ok) {
+      if (abort !== myAbort) return;
       if (!isUserStopped) scheduleReconnect();
       else stop();
       return;
@@ -1913,6 +1971,10 @@ async function start() {
     const width = +res.headers.get('X-Bytes-Per-Sample');
     document.getElementById('scopeRateText').textContent = (rate / 1000).toFixed(1) + ' kHz ' + ch + 'ch ' + (width * 8) + 'bit';
 
+    if (ctx && ctx.state !== 'closed' && ctx.sampleRate !== rate) {
+      ctx.close();          // the scope and the decoders assume the context runs at the stream's rate
+      ctx = null;
+    }
     if (!ctx || ctx.state === 'closed') {
       ctx = new AudioContext({ sampleRate: rate });
     }
@@ -1951,7 +2013,13 @@ async function start() {
     const reader = res.body.getReader();
 
     // Diagnostics (console: audioDiag): tells a server/network stall (maxReadMs) from a browser stall (maxProcMs)
-    const diag = window.audioDiag = { underruns: 0, maxReadMs: 0, maxProcMs: 0, slowReads: 0, chunks: 0 };
+    const diag = window.audioDiag = { underruns: 0, maxReadMs: 0, maxProcMs: 0, slowReads: 0, chunks: 0, dropped: 0, target: TARGET_MIN, catchups: 0, hz: 0, playPpm: 0 };
+    // Measured stream rate (frames received per second of wall time, from the first frame): if it is
+    // below the nominal rate, samples are lost before the browser and the playout delay drains slowly.
+    let rxFrames = 0, rxT0 = 0, rxCtx0 = 0;
+    let target = TARGET_MIN;
+    let lastUnderrun = performance.now();
+    let catchingUp = false;
     let diagLog = performance.now();
 
     for (;;) {
@@ -1969,13 +2037,20 @@ async function start() {
       if (isPrebuffering) {
         if (pending.length < prebufferBytes) continue;
         isPrebuffering = false;
-        nextTime = ctx.currentTime + 0.15;
+        // The pre-buffered block itself (PREBUFFER_SEC) plus this = about the target ahead
+        nextTime = ctx.currentTime + Math.max(0.05, target - PREBUFFER_SEC);
       }
 
       if (pending.length < minBytes) continue;
 
       const d = decode(pending, ch, width);
       pending = pending.slice(d.used);
+      if (!rxT0) { rxT0 = tGot; rxCtx0 = ctx.currentTime; } else rxFrames += d.frames;
+      if (tGot - rxT0 > 5000) {
+        const wall = (tGot - rxT0) / 1000;
+        diag.hz = Math.round(rxFrames / wall);                                     // stream rate as received
+        diag.playPpm = Math.round(((ctx.currentTime - rxCtx0) / wall - 1) * 1e6);  // this PC's audio clock
+      }
       // The radio's USB audio is [left = MAIN, right = SUB] and follows a VFO swap (SV;),
       // so no channel reordering is done here.
       recFeed(d.channels, rate);
@@ -1988,26 +2063,43 @@ async function start() {
 
       const now = ctx.currentTime;
       if (nextTime < now) {
+        // Underrun: the network stalled longer than the cushion. Grow the cushion and restart from it.
         diag.underruns++;
-        nextTime = now + 0.12;
-      } else if (nextTime - now > MAX_LATENCY) {
-        nextTime = now + 0.20;
+        target = Math.min(TARGET_MAX, target + TARGET_STEP);
+        lastUnderrun = tGot;
+        nextTime = now + target;
+      } else if (tGot - lastUnderrun > TARGET_DECAY_MS && target > TARGET_MIN) {
+        target = Math.max(TARGET_MIN, target - TARGET_DECAY);   // steady network: shorten the delay again
+        lastUnderrun = tGot;
       }
+      diag.target = target;
+
+      const ahead = nextTime - now;
+      if (ahead > target + DROP_ABOVE) {
+        // A burst after a long stall: far too late to play. Skip this block (the decoders above have it).
+        diag.dropped++;
+        continue;
+      }
+      // Well behind the target after a burst: play a little faster until back at it (with hysteresis)
+      if (!catchingUp && ahead > target + CATCHUP_ENTER) { catchingUp = true; diag.catchups++; }
+      else if (catchingUp && ahead <= target + CATCHUP_EXIT) catchingUp = false;
+      const playRate = catchingUp ? CATCHUP_RATE : 1;
 
       const buf = ctx.createBuffer(ch, d.frames, rate);
       for (let c = 0; c < ch; c++) buf.copyToChannel(d.channels[c], c);
       const src = ctx.createBufferSource();
       src.buffer = buf;
+      src.playbackRate.value = playRate;
       src.connect(mix);
       src.start(nextTime);
-      nextTime += d.frames / rate;
+      nextTime += d.frames / rate / playRate;
 
       const procMs = performance.now() - tGot;
       if (procMs > diag.maxProcMs) diag.maxProcMs = procMs;
       if (tGot - diagLog > 10000) {
         diagLog = tGot;
         if (diag.underruns || diag.slowReads) {
-          console.warn('audioDiag', JSON.stringify({ ...diag, maxReadMs: Math.round(diag.maxReadMs), maxProcMs: Math.round(diag.maxProcMs) }));
+          console.warn('audioDiag', JSON.stringify({ ...diag, maxReadMs: Math.round(diag.maxReadMs), maxProcMs: Math.round(diag.maxProcMs), target: diag.target.toFixed(2) }));
         }
       }
     }
@@ -2015,6 +2107,7 @@ async function start() {
     if (e.name !== 'AbortError') console.error('Stream error:', e);
   }
 
+  if (abort !== myAbort) return;   // replaced by a newer stream (e.g. the rate was changed)
   if (!isUserStopped) {
     scheduleReconnect();
   } else {
@@ -2070,7 +2163,8 @@ if (btnReboot) {
 const btnRigOff = document.getElementById('btnRigOff');
 if (btnRigOff) {
   btnRigOff.addEventListener('click', async () => {
-    if (confirm("Turn the FTX-1 power OFF?\n(It cannot be turned back on via CAT. Use the power button on the rig.)")) {
+    const rigName = rigProfileKey ? rigProfileKey.split('|')[0] : 'radio';
+    if (confirm("Turn the " + rigName + " power OFF?\n(It cannot be turned back on via CAT. Use the power button on the rig.)")) {
       try {
         await fetch('/cat', {
           method: 'POST',
@@ -2726,13 +2820,14 @@ function makeMiniKnob(svgId, valElId, sub, type, onChange) {
   svgEl('line', { x1: cx, y1: cy - 7, x2: cx, y2: cy - (r - 9), stroke: color, 'stroke-width': 2, 'stroke-linecap': 'round' }, pointerGroup);
 
   let currentVal = 0;
+  let maxVal = 255;          // squelch: 100 on the FTDX10 (see applyRigProfile)
   let lastY = null;
   let lastChangeTime = 0;
   let pointerId = null;
 
   function updateVisual(val) {
-    currentVal = Math.max(0, Math.min(255, Math.round(val)));
-    const frac = currentVal / 255.0;
+    currentVal = Math.max(0, Math.min(maxVal, Math.round(val)));
+    const frac = currentVal / maxVal;
     const deg = START_DEG + frac * SWEEP_DEG;
     pointerGroup.setAttribute('transform', 'rotate(' + deg.toFixed(1) + ' ' + cx + ' ' + cy + ')');
 
@@ -2796,7 +2891,10 @@ function makeMiniKnob(svgId, valElId, sub, type, onChange) {
       if (isExternal && Date.now() - lastChangeTime < USER_CHANGE_HOLD_MS) return;
       updateVisual(val);
     },
-    getValue: () => currentVal
+    getValue: () => currentVal,
+    setMax: (max) => {
+      if (max > 0 && max !== maxVal) { maxVal = max; updateVisual(currentVal); }
+    }
   };
 }
 
@@ -3099,6 +3197,48 @@ freqMainInput.addEventListener('blur', () => { isUserEditingMain = false; });
 freqSubInput.addEventListener('focus', () => { isUserEditingSub = true; });
 freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
 
+// ---- Radio profile (from GET /cat): FTX-1 (two receivers) or FTDX10 (one receiver, VFO-A / VFO-B) ----
+// Applied once per change of the reported radio. Nothing here is a safety check: the firmware enforces
+// the frequency range, the squelch range and which receiver exists on its own.
+let rigProfileKey = '';
+function applyRigProfile(d) {
+  if (!d.rig) return;                         // no radio identified yet: keep the current layout
+  const key = [d.rig, d.dual_rx, d.c4fm, d.sq_max, d.freq_max].join('|');
+  if (key === rigProfileKey) return;
+  rigProfileKey = key;
+
+  const name = d.rig === 'UNKNOWN' ? 'Radio' : d.rig;
+  document.getElementById('brandTitle').textContent = name + ' Companion';
+  document.title = name + ' Companion';
+
+  const single = d.dual_rx === false;
+  document.body.classList.toggle('single-rx', single);
+  document.getElementById('vfoLabelSub').textContent = single ? 'VFO-B' : 'SUB (VFO-B)';
+  document.getElementById('cardTitleSub').textContent = single ? 'VFO-B' : 'SUB VFO-B';
+  const subMeter = smHost.children[1];
+  if (subMeter) subMeter.style.display = single ? 'none' : '';
+  if (single) {
+    // No SUB receiver: its decoder would only decode the MAIN audio again under the VFO-B frequency
+    const f = ft8Chans[1];
+    if (f.enabled) f.enableBtn.click();
+  }
+
+  // Modes and bands the radio does not have
+  document.querySelectorAll('[data-mode^="C4FM"], option[value^="C4FM"]').forEach((el) => {
+    el.style.display = d.c4fm === false ? 'none' : '';
+    if (el.tagName === 'OPTION') el.disabled = d.c4fm === false;
+  });
+  document.querySelectorAll('.band-grid button').forEach((btn) => {
+    const m = /setBand\((?:true|false),\s*(\d+)/.exec(btn.getAttribute('onclick') || '');
+    btn.style.display = (m && d.freq_max && Number(m[1]) > d.freq_max) ? 'none' : '';
+  });
+
+  if (d.sq_max) {
+    knobSqMain.setMax(d.sq_max);
+    knobSqSub.setMax(d.sq_max);
+  }
+}
+
 const SM_POLL_MS = 400;
 
 async function smPoll() {
@@ -3106,6 +3246,7 @@ async function smPoll() {
     const res = await fetch('/cat', { cache: 'no-store' });
     const d = await res.json();
     const now = Date.now();
+    applyRigProfile(d);
     if (d.connected) {
       ledCat.classList.add('on-green');
       radioBusy = !!d.busy;
@@ -3226,6 +3367,18 @@ smPoll();
 const FT8_SAMPLE_RATE = 6400; // 6400 Hz downsampled audio (1024-point FFT = exactly 6.25 Hz/bin)
 const FT8_PERIOD_SEC = 15;
 const FT8_SLOT_SAMPLES = FT8_SAMPLE_RATE * FT8_PERIOD_SEC; // 96,000 samples @ 6.4kHz
+
+// DT correction: the audio's delay on its way here, subtracted from the DT shown (not from decoding)
+const FT8_DTCORR_KEY = 'ftx1.ft8DtCorr';
+const ft8DtCorrInput = document.getElementById('ft8DtCorr');
+try { const v = localStorage.getItem(FT8_DTCORR_KEY); if (v !== null && v !== '' && isFinite(+v)) ft8DtCorrInput.value = v; } catch (e) {}
+ft8DtCorrInput.addEventListener('change', () => {
+  try { localStorage.setItem(FT8_DTCORR_KEY, ft8DtCorrInput.value); } catch (e) {}
+});
+function ft8DtCorrection() {
+  const v = parseFloat(ft8DtCorrInput.value);
+  return isFinite(v) ? Math.max(-1, Math.min(2, v)) : 0;
+}
 
 // One independent decoder state per receiver channel (left = MAIN, right = SUB)
 const ft8Chans = ['Main', 'Sub'].map((name, idx) => {
@@ -3351,6 +3504,7 @@ function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
   const dialStr = dial > 0 ? (dial / 1e6).toFixed(3) : '--';
   const rfTitle = dial > 0 ? `RF: ${((dial + freq) / 1e6).toFixed(6)} MHz (${(dial / 1e6).toFixed(3)} MHz + ${freq} Hz)` : `Audio: ${freq} Hz`;
 
+  dt = dt - ft8DtCorrection();
   tr.innerHTML = `
     <td>${escapeHtml(utc)}</td>
     <td>${db >= 0 ? '+' : ''}${escapeHtml(db)}</td>
