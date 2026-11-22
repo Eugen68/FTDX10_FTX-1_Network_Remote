@@ -24,6 +24,7 @@
 #include "ota.h"
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
+#include <math.h>
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "usb_audio.h"
@@ -42,6 +43,12 @@
 #define STREAM_BUF_MS        1500    // the browser plays at most about 1.2 s + 0.35 s behind anyway
 #define STREAM_BUF_MS_SMALL  250
 #define USB_READ_BYTES       2048    // one read from the USB audio driver
+// Optional lower stream rate (?rate=24000 or ?rate=16000): a third of the data at 16 kHz, for a Wi-Fi
+// link that cannot carry 48 kHz stereo (1.5 Mbit/s) steadily. Low-pass FIR, then keep every Nth frame.
+#define DECIM_TAPS           64
+#define DECIM_MAX_FACTOR     6
+#define DECIM_MIN_RATE       8000
+#define DECIM_MAX_CHANNELS   2
 #define WAV_HEADER_SIZE      44
 
 extern const char index_html_start[] asm("_binary_index_html_start");
@@ -57,7 +64,9 @@ extern const uint8_t prvtkey_pem_end[] asm("_binary_prvtkey_pem_end");
 typedef struct {
     httpd_req_t *req;
     bool wav;
-    usb_audio_format_t fmt;
+    usb_audio_format_t fmt;     // what the radio sends
+    uint32_t out_rate;          // what is streamed: fmt.sample_rate / decim
+    uint8_t decim;              // 1 = as the radio sends it
 } stream_ctx_t;
 
 static const char *TAG = "web_server";
@@ -93,6 +102,82 @@ typedef struct {
 
 static audio_fifo_t s_fifo;
 static uint8_t s_usb_read_buf[USB_READ_BYTES];
+static volatile uint32_t s_st_rate;         // sample rate of the current / last stream
+
+// Decimator state: only the USB reader task touches it while a stream runs
+typedef struct {
+    uint8_t factor;
+    uint8_t channels;
+    uint8_t phase;
+    uint16_t pos;
+    float taps[DECIM_TAPS];
+    float hist[DECIM_MAX_CHANNELS][2 * DECIM_TAPS];   // each sample stored twice: a contiguous window
+    uint8_t carry[2 * DECIM_MAX_CHANNELS];             // a frame split between two USB reads
+    uint8_t carry_len;
+} decimator_t;
+
+static decimator_t s_dec;
+static uint8_t s_dec_in[USB_READ_BYTES + sizeof(s_dec.carry)];
+static int16_t s_dec_out[USB_READ_BYTES / 2];
+
+static void decimator_init(decimator_t *d, uint8_t factor, uint8_t channels, uint32_t in_rate, uint32_t out_rate)
+{
+    memset(d, 0, sizeof(*d));
+    d->factor = factor;
+    d->channels = channels;
+    // Windowed-sinc low-pass (Blackman), cut-off at 45 % of the output rate, unity gain at DC
+    const float fc = 0.45f * (float)out_rate / (float)in_rate;
+    const float mid = (DECIM_TAPS - 1) / 2.0f;
+    float sum = 0;
+    for (int k = 0; k < DECIM_TAPS; k++) {
+        const float x = (float)k - mid;
+        const float sinc = (x == 0.0f) ? 2.0f * fc : sinf(2.0f * (float)M_PI * fc * x) / ((float)M_PI * x);
+        const float w = 0.42f - 0.5f * cosf(2.0f * (float)M_PI * k / (DECIM_TAPS - 1)) +
+                        0.08f * cosf(4.0f * (float)M_PI * k / (DECIM_TAPS - 1));
+        d->taps[k] = sinc * w;
+        sum += d->taps[k];
+    }
+    for (int k = 0; k < DECIM_TAPS; k++) {
+        d->taps[k] /= sum;
+    }
+}
+
+/** 16-bit little-endian frames in, decimated frames out (into s_dec_out). Returns the output byte count. */
+static size_t decimate(decimator_t *d, const uint8_t *in, size_t n)
+{
+    const size_t frame_bytes = 2u * d->channels;
+    memcpy(s_dec_in, d->carry, d->carry_len);
+    memcpy(s_dec_in + d->carry_len, in, n);
+    const size_t total = d->carry_len + n;
+    const size_t frames = total / frame_bytes;
+    d->carry_len = (uint8_t)(total - frames * frame_bytes);
+    memcpy(d->carry, s_dec_in + frames * frame_bytes, d->carry_len);
+
+    size_t out = 0;
+    const uint8_t *p = s_dec_in;
+    for (size_t f = 0; f < frames; f++, p += frame_bytes) {
+        for (int c = 0; c < d->channels; c++) {
+            const float v = (float)(int16_t)(p[2 * c] | (p[2 * c + 1] << 8));
+            d->hist[c][d->pos] = v;
+            d->hist[c][d->pos + DECIM_TAPS] = v;
+        }
+        d->pos = (uint16_t)((d->pos + 1) % DECIM_TAPS);
+        if (++d->phase < d->factor) {
+            continue;
+        }
+        d->phase = 0;
+        for (int c = 0; c < d->channels; c++) {
+            const float *h = &d->hist[c][d->pos];     // the last DECIM_TAPS samples, oldest first
+            float acc = 0;
+            for (int k = 0; k < DECIM_TAPS; k++) {
+                acc += d->taps[k] * h[k];
+            }
+            const long r = lroundf(acc);
+            s_dec_out[out++] = (int16_t)(r > 32767 ? 32767 : (r < -32768 ? -32768 : r));
+        }
+    }
+    return out * sizeof(int16_t);
+}
 
 static void fifo_write(audio_fifo_t *f, const uint8_t *src, size_t n)
 {
@@ -155,7 +240,13 @@ static void usb_reader_task(void *arg)
         if (n > sizeof(s_usb_read_buf)) {
             n = sizeof(s_usb_read_buf);
         }
-        if (n > 0) {
+        if (n > 0 && s_dec.factor > 1) {
+            n = (uint32_t)decimate(&s_dec, s_usb_read_buf, n);
+            if (n > 0) {
+                fifo_write(f, (const uint8_t *)s_dec_out, n);
+            }
+            xTaskNotifyGive(f->sender);
+        } else if (n > 0) {
             fifo_write(f, s_usb_read_buf, n);
             xTaskNotifyGive(f->sender);
         }
@@ -234,7 +325,7 @@ static void stream_task(void *arg)
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     web_auth_set_common_headers(req);
     if (!ctx->wav) {
-        snprintf(rate_s, sizeof(rate_s), "%lu", (unsigned long)ctx->fmt.sample_rate);
+        snprintf(rate_s, sizeof(rate_s), "%lu", (unsigned long)ctx->out_rate);
         snprintf(ch_s, sizeof(ch_s), "%u", ctx->fmt.channels);
         snprintf(width_s, sizeof(width_s), "%u", ctx->fmt.subframe_size);
         httpd_resp_set_hdr(req, "X-Sample-Rate", rate_s);
@@ -245,7 +336,9 @@ static void stream_task(void *arg)
     esp_err_t err = ESP_OK;
     if (ctx->wav) {
         uint8_t header[WAV_HEADER_SIZE];
-        build_wav_header(header, &ctx->fmt);
+        usb_audio_format_t out_fmt = ctx->fmt;
+        out_fmt.sample_rate = ctx->out_rate;
+        build_wav_header(header, &out_fmt);
         err = httpd_resp_send_chunk(req, (const char *)header, sizeof(header));
     }
 
@@ -256,7 +349,12 @@ static void stream_task(void *arg)
 
     // The FIFO between the USB reader and this task
     audio_fifo_t *f = &s_fifo;
-    const uint32_t bytes_per_ms = (ctx->fmt.sample_rate * frame_bytes + 999) / 1000;
+    const uint32_t bytes_per_ms = (ctx->out_rate * frame_bytes + 999) / 1000;
+    s_st_rate = ctx->out_rate;
+    s_dec.factor = 1;
+    if (ctx->decim > 1) {
+        decimator_init(&s_dec, ctx->decim, ctx->fmt.channels, ctx->fmt.sample_rate, ctx->out_rate);
+    }
     size_t buf_ms = STREAM_BUF_MS;
     size_t size = ((bytes_per_ms * buf_ms) / frame_bytes) * frame_bytes;
     uint8_t *data = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -290,7 +388,8 @@ static void stream_task(void *arg)
             err = ESP_ERR_NO_MEM;
         }
     }
-    ESP_LOGI(TAG, "Stream started (%s), buffer %u ms in %s", ctx->wav ? "wav" : "pcm", (unsigned)buf_ms,
+    ESP_LOGI(TAG, "Stream started (%s, %lu Hz), buffer %u ms in %s", ctx->wav ? "wav" : "pcm",
+             (unsigned long)ctx->out_rate, (unsigned)buf_ms,
              (data != NULL && esp_ptr_external_ram(data)) ? "PSRAM" : "internal RAM");
 
     uint32_t idle_waits = 0;
@@ -363,6 +462,21 @@ static esp_err_t start_stream(httpd_req_t *req, bool wav)
         return httpd_resp_send(req, "No usable USB audio device streaming", HTTPD_RESP_USE_STRLEN);
     }
 
+    // Optional ?rate=N: a lower stream rate, an exact divisor of the radio's rate (16-bit audio only)
+    uint32_t out_rate = fmt.sample_rate;
+    uint8_t decim = 1;
+    char query[48], value[12];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "rate", value, sizeof(value)) == ESP_OK) {
+        const unsigned long want = strtoul(value, NULL, 10);
+        if (want >= DECIM_MIN_RATE && want < fmt.sample_rate && fmt.sample_rate % want == 0 &&
+            fmt.sample_rate / want <= DECIM_MAX_FACTOR && fmt.subframe_size == 2 &&
+            fmt.channels <= DECIM_MAX_CHANNELS) {
+            out_rate = (uint32_t)want;
+            decim = (uint8_t)(fmt.sample_rate / want);
+        }
+    }
+
     bool expected = false;
     if (!atomic_compare_exchange_strong(&s_stream_active, &expected, true)) {
         httpd_resp_set_status(req, "503 Service Unavailable");
@@ -375,7 +489,7 @@ static esp_err_t start_stream(httpd_req_t *req, bool wav)
         return httpd_resp_send_500(req);
     }
 
-    s_ctx = (stream_ctx_t) {.req = async_req, .wav = wav, .fmt = fmt};
+    s_ctx = (stream_ctx_t) {.req = async_req, .wav = wav, .fmt = fmt, .out_rate = out_rate, .decim = decim};
     // TLS record encryption runs in this task, so it needs more stack than plain HTTP
     // Core 1: keep TLS encryption and sending away from Wi-Fi / USB, which run on core 0
     if (xTaskCreatePinnedToCore(stream_task, "stream", 8192, &s_ctx, 5, NULL, 1) != pdPASS) {
@@ -474,7 +588,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       "\"int_free\":%lu,\"int_min\":%lu,\"int_block\":%lu,\"rssi\":%d,"
                       "\"conn_opened\":%lu,\"conn_closed\":%lu,"
                       "\"stream\":{\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
-                      "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu}}",
+                      "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu}}",
                       (unsigned long)(esp_timer_get_time() / 1000000),
                       (unsigned long)esp_get_free_heap_size(),
                       (unsigned long)esp_get_minimum_free_heap_size(),
@@ -487,7 +601,8 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)s_st_starts, (unsigned long)s_st_chunks,
                       (unsigned long)s_st_usb_timeouts, (unsigned long)s_st_slow_sends,
                       (unsigned long)s_st_max_send_ms,
-                      (unsigned long)s_st_buf_ms, (unsigned long)s_st_buf_max_ms, (unsigned long)s_st_overflows);
+                      (unsigned long)s_st_buf_ms, (unsigned long)s_st_buf_max_ms, (unsigned long)s_st_overflows,
+                      (unsigned long)s_st_rate);
     }
     return send_json(req, json, n, sizeof(json));
 }

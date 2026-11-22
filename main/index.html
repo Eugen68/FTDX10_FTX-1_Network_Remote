@@ -1187,7 +1187,16 @@
           </div>
         </div>
       </div>
-      <div class="scope-rate-row"><span id="scopeRateText">48.0 kHz AUDIO</span></div>
+      <div class="scope-rate-row">
+        <label title="Stream rate. 16 kHz needs a third of the Wi-Fi bandwidth of 48 kHz and still carries audio up to 8 kHz (SSB, CW, AM, FM, FT8, the 6k scope)">AUDIO
+          <select id="streamRateSel">
+            <option value="16000">16 kHz (Wi-Fi friendly)</option>
+            <option value="24000">24 kHz</option>
+            <option value="48000">48 kHz (full)</option>
+          </select>
+        </label>
+        <span id="scopeRateText">48.0 kHz AUDIO</span>
+      </div>
 
       <!-- FT8 Live Decoder Panels (MAIN / SUB) -->
       <div class="ft8-panel">
@@ -1905,15 +1914,26 @@ requestAnimationFrame(renderScope);
 let isUserStopped = true;
 let reconnectTimer = null;
 
+// Stream rate asked from the device (it low-pass filters and decimates the radio's 48 kHz)
+const STREAM_RATE_KEY = 'ftx1.streamRate';
+const streamRateSel = document.getElementById('streamRateSel');
+try { const r = localStorage.getItem(STREAM_RATE_KEY); if (r) streamRateSel.value = r; } catch (e) {}
+if (!streamRateSel.value) streamRateSel.value = '16000';
+streamRateSel.addEventListener('change', () => {
+  try { localStorage.setItem(STREAM_RATE_KEY, streamRateSel.value); } catch (e) {}
+  if (abort) { stop(); start(); }   // a new rate needs a new stream and a new AudioContext
+});
+
 async function start() {
   isUserStopped = false;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  abort = new AbortController();
+  const myAbort = abort = new AbortController();
   btnPlay.textContent = 'PWR OFF / STOP';
   btnPlay.classList.add('running');
   try {
-    const res = await fetch('/stream.pcm', { signal: abort.signal, cache: 'no-store' });
+    const res = await fetch('/stream.pcm?rate=' + encodeURIComponent(streamRateSel.value), { signal: abort.signal, cache: 'no-store' });
     if (!res.ok) {
+      if (abort !== myAbort) return;
       if (!isUserStopped) scheduleReconnect();
       else stop();
       return;
@@ -1923,6 +1943,10 @@ async function start() {
     const width = +res.headers.get('X-Bytes-Per-Sample');
     document.getElementById('scopeRateText').textContent = (rate / 1000).toFixed(1) + ' kHz ' + ch + 'ch ' + (width * 8) + 'bit';
 
+    if (ctx && ctx.state !== 'closed' && ctx.sampleRate !== rate) {
+      ctx.close();          // the scope and the decoders assume the context runs at the stream's rate
+      ctx = null;
+    }
     if (!ctx || ctx.state === 'closed') {
       ctx = new AudioContext({ sampleRate: rate });
     }
@@ -2042,6 +2066,7 @@ async function start() {
     if (e.name !== 'AbortError') console.error('Stream error:', e);
   }
 
+  if (abort !== myAbort) return;   // replaced by a newer stream (e.g. the rate was changed)
   if (!isUserStopped) {
     scheduleReconnect();
   } else {
