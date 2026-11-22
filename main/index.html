@@ -525,7 +525,9 @@
   .scope-rec-btn { margin-right: .2rem; }
   .scope-rec-btn:hover { background: #7f1d1d; border-color: #ef4444; }
   .scope-rec-btn.flash { background: #dc2626; color: #fff; border-color: #fca5a5; }
-  .scope-mute-btn { margin-right: .5rem; }
+  .scope-mute-btn { margin-right: .2rem; }
+  .scope-vol { width: 56px; height: 10px; margin-right: .4rem; accent-color: #38bdf8; }
+  .ft8-dtcorr { width: 3.6em; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .65rem; }
   .scope-mute-btn.muted {
     background: #b91c1c;
     color: #fff;
@@ -609,8 +611,11 @@
   }
   .ft8-ctrls {
     display: flex;
+    align-items: center;
     gap: .25rem;
   }
+  #streamRateSel { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .58rem; padding: 0 .2rem; margin-right: .4rem; }
+  .ft8-dtcorr-label { font-size: .6rem; color: #94a3b8; margin-right: .3rem; white-space: nowrap; }
   .ft8-btn {
     font-size: .6rem;
     font-weight: 600;
@@ -1154,6 +1159,7 @@
             <div class="scope-spans" data-scope="Main">
               <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecMain" title="Save the last 30 s of MAIN as WAV">REC</button>
               <button type="button" class="scope-span-btn scope-mute-btn" id="btnMuteMain" aria-pressed="false" title="Mute MAIN audio (scope and FT8 keep running)">MUTE</button>
+              <input type="range" class="scope-vol" id="volMain" min="0" max="200" step="5" value="100" title="MAIN volume on this PC (the radio, the scope and FT8 are not affected)" aria-label="MAIN volume on this PC">
               <span class="scope-span-label">SPAN:</span>
               <button type="button" class="scope-span-btn" data-span="1000" title="Narrow span for CW">1k</button>
               <button type="button" class="scope-span-btn active" data-span="3500">3.5k</button>
@@ -1173,6 +1179,7 @@
             <div class="scope-spans" data-scope="Sub">
               <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecSub" title="Save the last 30 s of SUB as WAV">REC</button>
               <button type="button" class="scope-span-btn scope-mute-btn" id="btnMuteSub" aria-pressed="false" title="Mute SUB audio (scope and FT8 keep running)">MUTE</button>
+              <input type="range" class="scope-vol" id="volSub" min="0" max="200" step="5" value="100" title="SUB volume on this PC (the radio, the scope and FT8 are not affected)" aria-label="SUB volume on this PC">
               <span class="scope-span-label">SPAN:</span>
               <button type="button" class="scope-span-btn" data-span="1000" title="Narrow span for CW">1k</button>
               <button type="button" class="scope-span-btn active" data-span="3500">3.5k</button>
@@ -1207,6 +1214,8 @@
             <span class="ft8-sync-badge" id="ft8SyncBadgeMain">SYNC: 00s</span>
           </div>
           <div class="ft8-ctrls">
+            <label class="ft8-dtcorr-label" title="Subtracted from every DT shown (MAIN and SUB): the delay the audio picks up on its way here (USB, Wi-Fi, browser). Set it to the DT most stations show, so DTs read as in WSJT-X">DT corr
+              <input type="number" class="ft8-dtcorr" id="ft8DtCorr" min="-1" max="2" step="0.1" value="0.3"></label>
             <button type="button" class="ft8-btn" id="ft8EnableBtnMain">DECODER OFF</button>
             <button type="button" class="ft8-btn" id="ft8ClearBtnMain">CLEAR</button>
           </div>
@@ -1469,7 +1478,8 @@ const PREBUFFER_SEC = 0.25;
 // each underrun (a Wi-Fi stall), and shrinks back slowly while the network is steady. Audio that
 // arrives in a burst after a stall is played a little faster (CATCHUP_RATE) to get back to the target,
 // and whatever is far beyond it is dropped instead of being played late.
-const TARGET_MIN = 0.25, TARGET_MAX = 1.2, TARGET_STEP = 0.15;
+// 0.5 s from the start: on the bench Wi-Fi a 0.25 s start still gave one or two gaps before it grew
+const TARGET_MIN = 0.5, TARGET_MAX = 1.2, TARGET_STEP = 0.15;
 const TARGET_DECAY_MS = 30000, TARGET_DECAY = 0.05;
 const CATCHUP_RATE = 1.04;
 const DROP_ABOVE = 0.35;   // seconds beyond the target: later than this, a block is skipped
@@ -1479,10 +1489,25 @@ let ctx = null;
 let scopeAnalysers = [null, null]; // [MAIN(left), SUB(right)]
 let speakerGains = [null, null];   // per-channel speaker gain nodes (mute switches)
 const speakerMuted = [false, false];
+const speakerVolume = [1, 1];        // PC playback volume per channel, 0 - 2 (the sliders)
+const SPEAKER_VOL_KEYS = ['ftx1.volMain', 'ftx1.volSub'];
 
 function applySpeakerMute(i) {
-  if (speakerGains[i]) speakerGains[i].gain.value = speakerMuted[i] ? 0 : 1;
+  if (speakerGains[i]) speakerGains[i].gain.value = speakerMuted[i] ? 0 : speakerVolume[i];
 }
+
+['Main', 'Sub'].forEach((name, i) => {
+  const slider = document.getElementById('vol' + name);
+  try { const v = parseInt(localStorage.getItem(SPEAKER_VOL_KEYS[i]), 10); if (v >= 0 && v <= 200) slider.value = v; } catch (e) {}
+  const set = () => {
+    speakerVolume[i] = slider.value / 100;
+    slider.title = (i ? 'SUB' : 'MAIN') + ' volume on this PC: ' + slider.value + ' %';
+    applySpeakerMute(i);
+    try { localStorage.setItem(SPEAKER_VOL_KEYS[i], slider.value); } catch (e) {}
+  };
+  slider.addEventListener('input', set);
+  set();
+});
 
 ['Main', 'Sub'].forEach((name, i) => {
   const btn = document.getElementById('btnMute' + name);
@@ -2005,7 +2030,8 @@ async function start() {
       if (isPrebuffering) {
         if (pending.length < prebufferBytes) continue;
         isPrebuffering = false;
-        nextTime = ctx.currentTime + 0.05;   // + the pre-buffered block itself = about TARGET_MIN ahead
+        // The pre-buffered block itself (PREBUFFER_SEC) plus this = about the target ahead
+        nextTime = ctx.currentTime + Math.max(0.05, target - PREBUFFER_SEC);
       }
 
       if (pending.length < minBytes) continue;
@@ -3327,6 +3353,18 @@ const FT8_SAMPLE_RATE = 6400; // 6400 Hz downsampled audio (1024-point FFT = exa
 const FT8_PERIOD_SEC = 15;
 const FT8_SLOT_SAMPLES = FT8_SAMPLE_RATE * FT8_PERIOD_SEC; // 96,000 samples @ 6.4kHz
 
+// DT correction: the audio's delay on its way here, subtracted from the DT shown (not from decoding)
+const FT8_DTCORR_KEY = 'ftx1.ft8DtCorr';
+const ft8DtCorrInput = document.getElementById('ft8DtCorr');
+try { const v = localStorage.getItem(FT8_DTCORR_KEY); if (v !== null && v !== '' && isFinite(+v)) ft8DtCorrInput.value = v; } catch (e) {}
+ft8DtCorrInput.addEventListener('change', () => {
+  try { localStorage.setItem(FT8_DTCORR_KEY, ft8DtCorrInput.value); } catch (e) {}
+});
+function ft8DtCorrection() {
+  const v = parseFloat(ft8DtCorrInput.value);
+  return isFinite(v) ? Math.max(-1, Math.min(2, v)) : 0;
+}
+
 // One independent decoder state per receiver channel (left = MAIN, right = SUB)
 const ft8Chans = ['Main', 'Sub'].map((name, idx) => {
   const f = {
@@ -3451,6 +3489,7 @@ function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
   const dialStr = dial > 0 ? (dial / 1e6).toFixed(3) : '--';
   const rfTitle = dial > 0 ? `RF: ${((dial + freq) / 1e6).toFixed(6)} MHz (${(dial / 1e6).toFixed(3)} MHz + ${freq} Hz)` : `Audio: ${freq} Hz`;
 
+  dt = dt - ft8DtCorrection();
   tr.innerHTML = `
     <td>${escapeHtml(utc)}</td>
     <td>${db >= 0 ? '+' : ''}${escapeHtml(db)}</td>

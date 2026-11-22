@@ -256,6 +256,12 @@ idf.py -p PORT flash monitor
 - If no port appears, you may need the driver for the board's USB-UART chip (CP210x).
 - To leave `idf.py monitor`, press `Ctrl` + `]`.
 
+#### Flashing on Windows with a double click
+
+[`tools/scrie_firmware.bat`](tools/scrie_firmware.bat) (Romanian prompts) installs esptool if needed, lists the COM ports, and either updates the app while **keeping** the Wi-Fi and passwords (`ota_data_initial.bin` at 0xf000 and the app at 0x20000) or writes the whole merged image (which **erases** the settings, for a new board). Put it in the folder with the `.bin` files from `build/`, with the merged image renamed to `ftx1_companion-merged.bin` and the app to `ftx1_companion_ota.bin`.
+
+> Writing the merged image at 0x0 also overwrites the NVS partition (0x9000), so the settings are lost. To update a configured board, write only the app, or use OTA.
+
 #### Flashing from outside the container
 
 If the USB serial port is not visible from inside the Dev Container, build inside the container and flash only from the PC side.
