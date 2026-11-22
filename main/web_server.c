@@ -43,6 +43,7 @@
 #define STREAM_BUF_MS        1500    // the browser plays at most about 1.2 s + 0.35 s behind anyway
 #define STREAM_BUF_MS_SMALL  250
 #define USB_READ_BYTES       2048    // one read from the USB audio driver
+#define OVERFLOW_DROP_MS     300     // audio dropped at once when the stream buffer is full
 // Optional lower stream rate (?rate=24000 or ?rate=16000): a third of the data at 16 kHz, for a Wi-Fi
 // link that cannot carry 48 kHz stereo (1.5 Mbit/s) steadily. Low-pass FIR, then keep every Nth frame.
 #define DECIM_TAPS           64
@@ -193,8 +194,13 @@ static void fifo_write(audio_fifo_t *f, const uint8_t *src, size_t n)
     xSemaphoreTake(f->lock, portMAX_DELAY);
     const size_t space = f->size - f->fill;
     if (n > space) {
-        // Full: drop the oldest audio, in whole frames, to keep the latency bounded
+        // Full: drop the oldest audio, in whole frames, to keep the latency bounded. Drop a good piece at
+        // once (OVERFLOW_DROP_MS): one short gap is heard as a gap, many tiny ones as crackles.
         size_t drop = ((n - space + f->frame_bytes - 1) / f->frame_bytes) * f->frame_bytes;
+        const size_t chunk = ((f->bytes_per_ms * OVERFLOW_DROP_MS) / f->frame_bytes) * f->frame_bytes;
+        if (drop < chunk) {
+            drop = chunk;
+        }
         if (drop > f->fill) {
             drop = f->fill;
         }

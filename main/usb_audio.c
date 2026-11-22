@@ -33,6 +33,7 @@
 #define USB_HOST_TASK_PRIORITY  20
 #define UAC_TASK_PRIORITY       20
 #define MANAGER_TASK_PRIORITY   4
+#define USB_CORE                1        // away from the Wi-Fi driver and LwIP on core 0
 #define PREFERRED_BITS          16
 #define MAX_LOCK_WAIT_MS        500
 
@@ -235,8 +236,11 @@ esp_err_t usb_audio_init(void)
     s_evt_queue = xQueueCreate(8, sizeof(evt_t));
     ESP_RETURN_ON_FALSE(s_lock && s_evt_queue, ESP_ERR_NO_MEM, TAG, "no memory");
 
+    // Everything USB on core 1: usb_host_install() runs in usb_lib_task, so the USB interrupt is allocated
+    // on core 1 too. On core 0 the Wi-Fi driver (priority 23) starved the USB tasks and interrupt while the
+    // link was retrying, and up to 8.5 % of the radio's audio packets were lost exactly during Wi-Fi stalls.
     BaseType_t ok = xTaskCreatePinnedToCore(usb_lib_task, "usb_lib", 4096, xTaskGetCurrentTaskHandle(),
-                                            USB_HOST_TASK_PRIORITY, NULL, 0);
+                                            USB_HOST_TASK_PRIORITY, NULL, USB_CORE);
     ESP_RETURN_ON_FALSE(ok == pdTRUE, ESP_ERR_NO_MEM, TAG, "usb_lib task");
     // Wait until usb_host_install() has completed
     ESP_RETURN_ON_FALSE(ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000)) == 1, ESP_ERR_TIMEOUT, TAG, "usb host install");
@@ -245,7 +249,7 @@ esp_err_t usb_audio_init(void)
         .create_background_task = true,
         .task_priority = UAC_TASK_PRIORITY,
         .stack_size = 4096,
-        .core_id = 0,
+        .core_id = USB_CORE,
         .callback = uac_driver_cb,
         .callback_arg = NULL,
     };
