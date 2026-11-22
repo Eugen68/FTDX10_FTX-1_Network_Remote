@@ -1,43 +1,61 @@
 /*
  * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
  *
- * CAT control for the Yaesu FTX-1 (the only radio this file has been written for and tested on).
- * Finds the radio's CAT serial port over USB, keeps a copy of the radio's state (frequency, mode, S meter, ...)
- * up to date, and sends the control commands requested from the browser.
+ * CAT control for the Yaesu FTX-1 and the Yaesu FTDX10.
+ * Finds the radio's CAT serial port over USB, recognises the radio from its answer to "ID;", keeps a copy of
+ * the radio's state (frequency, mode, S meter, ...) up to date, and sends the control commands requested
+ * from the browser.
+ *
+ * Everything that depends on the radio model is in one rig_profile_t (see s_profiles[] below): the ID,
+ * the frequency range, whether there is a SUB receiver, the squelch range, the menu (EX) item that is
+ * written, and the commands that are polled. A radio that answers "ID;" with an unknown model gets a
+ * read-only profile (frequency and mode are read, nothing is ever set).
  *
  * CAT commands used by this file, for comparing with a radio's CAT manual.
  * Every command is "<2 letters><parameters>;".  R = receiver: 0 = MAIN, 1 = SUB.  n = a digit.
  * Everything that is sent passes cat_cmd_allowed(); a command that is not accepted there is never sent.
+ * Unless marked otherwise, a line applies to both radios.
  *
  *   Command         Dir    Meaning (as used here)
  *   --------------  -----  ------------------------------------------------------------------
  *   ID;             read   identify; the port that answers is used as the CAT port
  *   AI1;            set    auto information ON (the radio pushes changes by itself)
- *   FA; FB;         read   frequency of MAIN (FA) / SUB (FB). Answer: FA/FB + up to 10 digits, in Hz
- *   FAnnnnnnnnn;    set    frequency in Hz, 9 digits, 30000 - 470000000 (FB for SUB)
- *   MDR;            read   mode of receiver R. Answer: MDR + one mode code (see s_modes[])
- *   MDRc;           set    mode; c is one of the codes in s_modes[]
- *   AGR;            read   AF gain of receiver R. Answer: AGR + 3 digits (000 - 255)
+ *   FA; FB;         read   frequency of MAIN / VFO-A (FA) and SUB / VFO-B (FB). Answer: FA/FB + digits, Hz
+ *   FAnnnnnnnnn;    set    frequency in Hz, 9 digits (FB for SUB). FTX-1 30000 - 470000000,
+ *                          FTDX10 30000 - 75000000
+ *   MDR;            read   mode of R (FTDX10: 1 = VFO-B). Answer: MDR + one mode code (see s_modes[])
+ *   MDRc;           set    mode; c is one of the codes in s_modes[] (H and I, C4FM, on the FTX-1 only)
+ *   AGR;            read   AF gain of receiver R. Answer: AGR + 3 digits (000 - 255). FTDX10: R = 0 only
  *   AGRnnn;         set    AF gain, 000 - 255
- *   SQR;            read   squelch level of receiver R. Answer: SQR + 3 digits (000 - 255)
- *   SQRnnn;         set    squelch level, 000 - 255
- *   RI0;            read   radio information. Answer: "RI" + parameters P1 - P8 + ";" (11 characters);
- *                          P4 = transmitting (1 = yes), P8 (the last) = squelch open (1 = BUSY)
- *   RM0;            read   S meter. Answer: RM0 + 3 digits MAIN + 3 digits SUB (000 - 255)
- *   BPR0;  BPR1;    read   manual notch of receiver R: kind 0 = ON/OFF, kind 1 = frequency.
+ *   SQR;            read   squelch level of receiver R. Answer: SQR + 3 digits. FTDX10: R = 0 only
+ *   SQRnnn;         set    squelch level, FTX-1 000 - 255, FTDX10 000 - 100
+ *   BPR0;  BPR1;    read   manual notch of receiver R: kind 0 = ON/OFF, kind 1 = frequency. FTDX10: R = 0 only
  *                          Answer: BPR0nnn (000 = off, 001 = on) / BPR1nnn (001 - 320, 10 Hz steps)
  *   BPR0nnn; BPR1nnn;  set the same two values
- *   SV;             set    swap MAIN and SUB
+ *   SV;             set    swap MAIN and SUB (FTDX10: VFO-A and VFO-B)
  *   AB;             set    copy MAIN to SUB
  *   BA;             set    copy SUB to MAIN
  *   PSn;            set    power, 0 = OFF, 1 = ON (the browser's POWER button)
- *   EX010411nnn;    set    menu item RADIO SETTING / MODE DATA / USB OUT LEVEL, 000 - 100
- *                          (set to 100 whenever a receiver is in DATA-USB; this item is never read)
  *
- * Radio-specific values in this file: the allow-list in cat_cmd_allowed(), FREQ_MIN_HZ / FREQ_MAX_HZ,
- * the mode table s_modes[], the answer parsers (parse_freq, parse_mode, parse_gain, parse_notch,
- * parse_ri, parse_rm), the EX menu item, the MAIN / SUB (two receiver) assumption, and how the CAT port is
- * found (Silicon Labs CP210x, VID 0x10C4, the one that answers "ID;").
+ *   FTX-1 only (ID 0840):
+ *   RI0;            read   radio information. Answer: "RI" + parameters P1 - P8 + ";" (11 characters);
+ *                          P4 = transmitting (1 = yes), P8 (the last) = squelch open (1 = BUSY)
+ *   RM0;            read   S meter. Answer: RM0 + 3 digits MAIN + 3 digits SUB (000 - 255)
+ *   EX010411nnn;    set    menu RADIO SETTING / MODE DATA / USB OUT LEVEL, 000 - 100
+ *
+ *   FTDX10 only (ID 0761):
+ *   BY;             read   busy. Answer: BY + P1 (1 = squelch open) + P2 (fixed 0) + ";"
+ *   TX;             read   TX state. Answer: TX + P1 + ";" (0 = receive, 2 = the radio transmits).
+ *                          Only the read form (no parameter) is allowed; "TX1;" is never sent.
+ *   RM1;            read   S meter. Answer: RM1 + 3 digits (000 - 255) + "000;"
+ *   EX010413nnn;    set    menu RADIO SETTING / MODE PSK/DATA / DATA OUT LEVEL, 000 - 100
+ *                          (on the FTDX10, 010411 is HCUT FREQ: the menu numbers differ between the radios)
+ *
+ *   The EX item is set to 100 whenever a receiver is in DATA-USB; it is never read.
+ *
+ * Radio-specific values in this file: the profiles in s_profiles[], the mode table s_modes[], the answer
+ * parsers (parse_freq, parse_mode, parse_gain, parse_notch, parse_ri, parse_rm, parse_by, parse_tx) and how
+ * the CAT port is found (Silicon Labs CP210x, VID 0x10C4, the one that answers "ID;").
  */
 
 #include <ctype.h>
@@ -111,9 +129,85 @@ static const struct {
     {'D', "AM-N"},
     {'E', "PSK"},
     {'F', "DATA-FM-N"},
-    {'H', "C4FM-DN"},
-    {'I', "C4FM-VW"},
+    {'H', "C4FM-DN"},   // FTX-1 only
+    {'I', "C4FM-VW"},   // FTX-1 only
 };
+
+// ---- Radio profiles ---------------------------------------------------------------------------------
+// The polled command strings must pass cat_cmds_allowed() for the same profile (at most CAT_TX_MAX_CMDS
+// commands and CAT_TX_MAX_BYTES bytes).
+typedef struct {
+    cat_rig_t rig;
+    const char *name;
+    const char *id;           // the 4 characters after "ID" in the answer; NULL for the generic profiles
+    uint32_t freq_min;        // FA / FB range, Hz
+    uint32_t freq_max;
+    bool dual_rx;             // AG / SQ / BP / S meter exist for a SUB receiver (R = 1)
+    bool can_control;         // set commands are allowed at all
+    bool c4fm;                // mode codes H and I exist
+    bool has_ri;              // RI0; (FTX-1 radio information: BUSY and TX)
+    bool has_by_tx;           // BY; and the read form of TX; (FTDX10)
+    char meter_side;          // the P1 of "RM" that reads the S meter, 0 if none
+    unsigned sq_max;          // highest SQ value
+    const char *ex_data_out;  // menu item P1 P2 P3 set to DATA_USB_OUT_LEVEL in DATA-USB; NULL = none
+    const char *poll_fast;    // every POLL_PERIOD_MS (S meter); NULL = none
+    const char *poll_status;  // every 5 polls (BUSY / TX); NULL = none
+    const char *sync_all;     // when the port is opened, then every 50 polls
+    const char *resync_vfo;   // after SV / AB / BA
+} rig_profile_t;
+
+// No port open yet: only the identification query may be sent
+static const rig_profile_t s_profile_none = {
+    .rig = CAT_RIG_NONE, .name = "",
+};
+
+static const rig_profile_t s_profiles[] = {
+    {
+        .rig = CAT_RIG_FTX1, .name = "FTX-1", .id = "0840",
+        .freq_min = 30000U, .freq_max = 470000000U,
+        .dual_rx = true, .can_control = true, .c4fm = true, .has_ri = true, .has_by_tx = false,
+        .meter_side = '0', .sq_max = 255,
+        .ex_data_out = "010411",      // RADIO SETTING / MODE DATA / USB OUT LEVEL
+        .poll_fast = "RM0;",
+        .poll_status = "RI0;",
+        .sync_all = "AI1;FA;FB;MD0;MD1;AG0;AG1;SQ0;SQ1;BP00;BP01;BP10;BP11;",
+        .resync_vfo = "FA;FB;MD0;MD1;",
+    },
+    {
+        .rig = CAT_RIG_FTDX10, .name = "FTDX10", .id = "0761",
+        .freq_min = 30000U, .freq_max = 75000000U,
+        .dual_rx = false, .can_control = true, .c4fm = false, .has_ri = false, .has_by_tx = true,
+        .meter_side = '1', .sq_max = 100,
+        .ex_data_out = "010413",      // RADIO SETTING / MODE PSK/DATA / DATA OUT LEVEL
+        .poll_fast = "RM1;",
+        .poll_status = "BY;TX;",
+        .sync_all = "AI1;FA;FB;MD0;MD1;AG0;SQ0;BP00;BP01;",
+        .resync_vfo = "FA;FB;MD0;MD1;",
+    },
+};
+
+// A radio that answered "ID;" with a model not listed above: frequency and mode are read, nothing is set
+static const rig_profile_t s_profile_unknown = {
+    .rig = CAT_RIG_UNKNOWN, .name = "UNKNOWN",
+    .freq_min = 30000U, .freq_max = 470000000U,
+    .poll_status = "FA;FB;MD0;",
+    .sync_all = "FA;FB;MD0;MD1;",
+    .resync_vfo = "FA;FB;MD0;MD1;",
+};
+
+// Written only by cat_task (before the port is polled), read by every task that builds or sends a command
+static const rig_profile_t *volatile s_rig = &s_profile_none;
+static char s_rig_id[5];
+
+static const rig_profile_t *profile_for_id(const char *id)
+{
+    for (size_t i = 0; i < sizeof(s_profiles) / sizeof(s_profiles[0]); i++) {
+        if (strncmp(s_profiles[i].id, id, 4) == 0) {
+            return &s_profiles[i];
+        }
+    }
+    return &s_profile_unknown;
+}
 
 static void diag(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void diag_counts(uint8_t devices, uint8_t cp210x, uint8_t answered);
@@ -184,19 +278,17 @@ static void event_cb(const cdc_acm_host_dev_event_data_t *event, void *arg)
 }
 
 // ---- Transmit allow-list ----------------------------------------------------------------------------
-// Every byte sent to the radio goes through cat_tx(), and cat_tx() only lets the commands below pass.
-// Anything else (TX, MX, KY, PB, VX, PC, FT, GP, ...) is dropped, so this firmware has no way to make
-// the radio transmit. EX (menu) is allowed for exactly one item, 01-04-11 (RADIO SETTING / MODE DATA /
-// USB OUT LEVEL), and nothing else in the radio's menu.
+// Every byte sent to the radio goes through cat_tx(), and cat_tx() only lets the commands below pass,
+// checked against the profile of the radio that is connected. Anything else (TX with a parameter, MX, KY,
+// PB, VX, PC, FT, GP, ...) is dropped, so this firmware has no way to make the radio transmit. EX (menu) is
+// allowed for exactly one item per radio (the audio level sent to the PC in DATA mode), and nothing else
+// in the radio's menu.
 #define CAT_TX_MAX_BYTES    64      // matches out_buffer_size of the CDC port
 #define CAT_CMD_MAX_BYTES   12      // longest allowed command: "FA" + 9 digits + ";"
 #define CAT_TX_MAX_CMDS     16      // commands in one internal batch
-#define FREQ_MIN_HZ         30000U  // FA / FB range of the FTX-1: 000030000 - 470000000 Hz
-#define FREQ_MAX_HZ         470000000U
-#define EX_USB_OUT_DATA     "010411"  // menu P1 P2 P3: RADIO SETTING / MODE DATA / USB OUT LEVEL
-#define USB_OUT_LEVEL_MAX   100U      // P4 = 000 - 100
-// USB OUT LEVEL (audio level sent to the PC) applied whenever a receiver is in DATA-USB. 100 gives the
-// FT8 decoder the full-scale audio the radio can deliver (the decoder normalises the level itself).
+#define USB_OUT_LEVEL_MAX   100U    // P4 of the EX item = 000 - 100
+// Audio level sent to the PC, applied whenever a receiver is in DATA-USB. 100 gives the FT8 decoder the
+// full-scale audio the radio can deliver (the decoder normalises the level itself).
 #define DATA_USB_OUT_LEVEL  100U
 #define DATA_USB_MODE_CODE  'C'
 
@@ -227,8 +319,17 @@ static bool is_side(char c)
     return c == '0' || c == '1';
 }
 
-static bool is_mode_code(char c)
+/** A receiver the radio has: MAIN always, SUB only on a radio with two receivers */
+static bool is_rx_side(const rig_profile_t *rig, char c)
 {
+    return c == '0' || (c == '1' && rig->dual_rx);
+}
+
+static bool is_mode_code(const rig_profile_t *rig, char c)
+{
+    if ((c == 'H' || c == 'I') && !rig->c4fm) {
+        return false;
+    }
     for (size_t i = 0; i < sizeof(s_modes) / sizeof(s_modes[0]); i++) {
         if (s_modes[i].code == c) {
             return true;
@@ -245,56 +346,71 @@ static bool cat_cmd_allowed(const char *c, size_t len)
     }
     const char *p = c + 2;          // parameters, without the ';'
     const size_t pl = len - 3;
+    const rig_profile_t *rig = s_rig;
+    const bool ctl = rig->can_control;
+    const bool known = rig->rig != CAT_RIG_NONE;     // a radio answered ID;
 
     switch (CAT_TWO(c[0], c[1])) {
     case CAT_TWO('I', 'D'):         // identify (used to find the CAT port)
+        return pl == 0;
     case CAT_TWO('S', 'V'):         // swap VFOs
     case CAT_TWO('A', 'B'):         // copy MAIN to SUB
     case CAT_TWO('B', 'A'):         // copy SUB to MAIN
-        return pl == 0;
+        return ctl && pl == 0;
     case CAT_TWO('A', 'I'):         // auto information ON
-        return pl == 1 && p[0] == '1';
-    case CAT_TWO('R', 'I'):         // radio information (read)
-        return pl == 1 && p[0] == '0';
-    case CAT_TWO('R', 'M'):         // meter (read): 0 = S meter
-        return pl == 1 && p[0] == '0';
+        return ctl && pl == 1 && p[0] == '1';
+    case CAT_TWO('R', 'I'):         // radio information (read), FTX-1
+        return rig->has_ri && pl == 1 && p[0] == '0';
+    case CAT_TWO('B', 'Y'):         // busy (read), FTDX10
+        return rig->has_by_tx && pl == 0;
+    case CAT_TWO('T', 'X'):         // TX state, READ ONLY (FTDX10). "TX" with a parameter is never allowed.
+        return rig->has_by_tx && pl == 0;
+    case CAT_TWO('R', 'M'):         // meter (read): the S meter item of this radio only
+        return rig->meter_side != 0 && pl == 1 && p[0] == rig->meter_side;
     case CAT_TWO('P', 'S'):         // power
-        return pl == 1 && is_side(p[0]);
+        return ctl && pl == 1 && is_side(p[0]);
     case CAT_TWO('F', 'A'):         // frequency, read or set within the radio's range
     case CAT_TWO('F', 'B'): {
         if (pl == 0) {
-            return true;
+            return known;
         }
-        if (pl != 9 || !all_digits(p, 9)) {
+        if (!ctl || pl != 9 || !all_digits(p, 9)) {
             return false;
         }
         const unsigned hz = digits_value(p, 9);
-        return hz >= FREQ_MIN_HZ && hz <= FREQ_MAX_HZ;
+        return hz >= rig->freq_min && hz <= rig->freq_max;
     }
-    case CAT_TWO('M', 'D'):         // mode, read or set to a known mode code
+    case CAT_TWO('M', 'D'):         // mode, read or set to a mode code this radio has
         if (pl == 1) {
-            return is_side(p[0]);
+            return known && is_side(p[0]);
         }
-        return pl == 2 && is_side(p[0]) && is_mode_code(p[1]);
+        return ctl && pl == 2 && is_side(p[0]) && is_mode_code(rig, p[1]);
     case CAT_TWO('A', 'G'):         // AF gain
     case CAT_TWO('S', 'Q'): {       // squelch
+        if (!ctl) {
+            return false;
+        }
         if (pl == 1) {
-            return is_side(p[0]);
+            return is_rx_side(rig, p[0]);
         }
-        return pl == 4 && is_side(p[0]) && all_digits(p + 1, 3) && digits_value(p + 1, 3) <= 255;
+        const unsigned max = (c[0] == 'S') ? rig->sq_max : 255u;
+        return pl == 4 && is_rx_side(rig, p[0]) && all_digits(p + 1, 3) && digits_value(p + 1, 3) <= max;
     }
-    case CAT_TWO('E', 'X'): {       // menu: only DATA-mode USB OUT LEVEL, read or set 000 - 100
-        if (pl == 6) {
-            return memcmp(p, EX_USB_OUT_DATA, 6) == 0;
+    case CAT_TWO('E', 'X'): {       // menu: only this radio's DATA-mode audio output level, set 000 - 100
+        if (rig->ex_data_out == NULL) {
+            return false;
         }
-        return pl == 9 && memcmp(p, EX_USB_OUT_DATA, 6) == 0 && all_digits(p + 6, 3) &&
+        return pl == 9 && memcmp(p, rig->ex_data_out, 6) == 0 && all_digits(p + 6, 3) &&
                digits_value(p + 6, 3) <= USB_OUT_LEVEL_MAX;
     }
     case CAT_TWO('B', 'P'): {       // manual notch: kind 0 = ON/OFF, kind 1 = frequency in 10 Hz steps
-        if (pl == 2) {
-            return is_side(p[0]) && is_side(p[1]);
+        if (!ctl) {
+            return false;
         }
-        if (pl != 5 || !is_side(p[0]) || !is_side(p[1]) || !all_digits(p + 2, 3)) {
+        if (pl == 2) {
+            return is_rx_side(rig, p[0]) && is_side(p[1]);
+        }
+        if (pl != 5 || !is_rx_side(rig, p[0]) || !is_side(p[1]) || !all_digits(p + 2, 3)) {
             return false;
         }
         const unsigned v = digits_value(p + 2, 3);
@@ -431,10 +547,12 @@ static bool parse_ri(const char *a, bool *busy, bool *tx)
     return true;
 }
 
-/** "RM0" + 3-digit MAIN + 3-digit SUB + ";" (S meter 0-255) */
+/** S meter, 10 characters either way (0-255):
+ *  FTX-1  "RM0" + 3-digit MAIN + 3-digit SUB + ";"
+ *  FTDX10 "RM1" + 3-digit MAIN + "000;"  (sub_s is set to -1: there is no SUB receiver) */
 static bool parse_rm(const char *a, int *main_s, int *sub_s)
 {
-    if (strlen(a) != 10 || strncmp(a, "RM0", 3) != 0) {
+    if (strlen(a) != 10 || strncmp(a, "RM", 2) != 0 || (a[2] != '0' && a[2] != '1') || a[9] != ';') {
         return false;
     }
     for (int i = 3; i < 9; i++) {
@@ -443,8 +561,28 @@ static bool parse_rm(const char *a, int *main_s, int *sub_s)
         }
     }
     *main_s = (a[3] - '0') * 100 + (a[4] - '0') * 10 + (a[5] - '0');
-    *sub_s = (a[6] - '0') * 100 + (a[7] - '0') * 10 + (a[8] - '0');
+    *sub_s = (a[2] == '0') ? (a[6] - '0') * 100 + (a[7] - '0') * 10 + (a[8] - '0') : -1;
     return *main_s <= 255 && *sub_s <= 255;
+}
+
+/** FTDX10 "BY" + P1 (1 = squelch open) + P2 + ";" */
+static bool parse_by(const char *a, bool *busy)
+{
+    if (strlen(a) != 5 || strncmp(a, "BY", 2) != 0 || !isdigit((unsigned char)a[2]) || a[4] != ';') {
+        return false;
+    }
+    *busy = a[2] == '1';
+    return true;
+}
+
+/** FTDX10 "TX" + P1 + ";": 0 = receive, 1 = CAT TX, 2 = the radio transmits */
+static bool parse_tx(const char *a, bool *tx)
+{
+    if (strlen(a) != 4 || strncmp(a, "TX", 2) != 0 || a[2] < '0' || a[2] > '2' || a[3] != ';') {
+        return false;
+    }
+    *tx = a[2] != '0';
+    return true;
 }
 
 /** "FA" or "FB" + up to 10 digits in Hz + ";" */
@@ -657,11 +795,33 @@ static void handle_cat_packet(const char *pkt)
         return;
     }
 
+    bool by_busy = false;
+    if (parse_by(pkt, &by_busy)) {
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+            s_state.busy = by_busy;
+            s_state.connected = true;
+            s_last_answer_us = esp_timer_get_time();
+            xSemaphoreGive(s_lock);
+        }
+        return;
+    }
+
+    bool tx_on = false;
+    if (parse_tx(pkt, &tx_on)) {
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+            s_state.tx = tx_on;
+            s_state.connected = true;
+            s_last_answer_us = esp_timer_get_time();
+            xSemaphoreGive(s_lock);
+        }
+        return;
+    }
+
     int sm_main = 0, sm_sub = 0;
     if (parse_rm(pkt, &sm_main, &sm_sub)) {
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
             s_state.s_main = (uint8_t)sm_main;
-            s_state.s_sub = (uint8_t)sm_sub;
+            s_state.s_sub = sm_sub >= 0 ? (uint8_t)sm_sub : 0;
             s_state.connected = true;
             s_last_answer_us = esp_timer_get_time();
             xSemaphoreGive(s_lock);
@@ -670,29 +830,57 @@ static void handle_cat_packet(const char *pkt)
     }
 }
 
-/** True when MAIN or SUB is currently in DATA-USB */
+/** Copy the detected radio profile into the published state (read by the web UI through /cat) */
+static void publish_profile(void)
+{
+    const rig_profile_t *rig = s_rig;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_state.rig = rig->rig;
+    strlcpy(s_state.rig_name, rig->name, sizeof(s_state.rig_name));
+    strlcpy(s_state.rig_id, s_rig_id, sizeof(s_state.rig_id));
+    s_state.dual_rx = rig->dual_rx;
+    s_state.sq_max = (uint16_t)rig->sq_max;
+    s_state.freq_min = rig->freq_min;
+    s_state.freq_max = rig->freq_max;
+    s_state.can_control = rig->can_control;
+    s_state.c4fm = rig->c4fm;
+    xSemaphoreGive(s_lock);
+}
+
+/** True when a receiver is currently in DATA-USB (MAIN or SUB; on a one-receiver radio MAIN only) */
 static bool data_usb_active(void)
 {
     bool active = false;
+    const bool dual = s_rig->dual_rx;
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
-        active = s_state.mode_main_raw == DATA_USB_MODE_CODE || s_state.mode_sub_raw == DATA_USB_MODE_CODE;
+        active = s_state.mode_main_raw == DATA_USB_MODE_CODE ||
+                 (dual && s_state.mode_sub_raw == DATA_USB_MODE_CODE);
         xSemaphoreGive(s_lock);
     }
     return active;
 }
 
+/** Send one of the profile's polled command strings, if it has one */
+static void send_poll(cdc_acm_dev_hdl_t dev, const char *cmds)
+{
+    if (cmds != NULL) {
+        cat_tx(dev, cmds);
+    }
+}
+
 static void poll_loop(cdc_acm_dev_hdl_t dev)
 {
+    const rig_profile_t *rig = s_rig;
     uint32_t poll_count = 0;
-    bool usb_level_applied = false;   // DATA USB OUT LEVEL already set for the current DATA-USB session
+    bool usb_level_applied = false;   // DATA audio output level already set for the current DATA-USB session
 
-    // Enable Auto Information (AI1;) so FTX-1 pushes state changes automatically
-    ESP_LOGI(TAG, "Enabling CAT Auto Information (AI1;)");
-    cat_tx(dev, "AI1;");
+    // Request the initial state asynchronously (rx_cb parses answers as they arrive). The sync string
+    // starts with AI1; (auto information ON, the radio then pushes changes by itself) on the known radios.
+    ESP_LOGI(TAG, "Polling %s", rig->name);
+    send_poll(dev, rig->sync_all);
     vTaskDelay(pdMS_TO_TICKS(50));
-
-    // Request initial states asynchronously (rx_cb parses answers as they arrive)
-    cat_tx(dev, "FA;FB;MD0;MD1;AG0;AG1;SQ0;SQ1;RI0;RM0;BP00;BP01;BP10;BP11;");
+    send_poll(dev, rig->poll_status);
+    send_poll(dev, rig->poll_fast);
 
     while (!s_disconnected) {
         // 1. Process any pending commands in the queue (already checked against the allow-list when queued)
@@ -705,34 +893,36 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             // show stale values until the next periodic sync
             if (strcmp(item.cmd, "SV;") == 0 || strcmp(item.cmd, "AB;") == 0 || strcmp(item.cmd, "BA;") == 0) {
                 vTaskDelay(pdMS_TO_TICKS(100));
-                cat_tx(dev, "FA;FB;MD0;MD1;");
+                send_poll(dev, rig->resync_vfo);
             }
         }
 
-        // 1b. Entering DATA-USB (from the web UI or the radio itself): set the USB OUT LEVEL once.
-        //     Leaving DATA-USB re-arms it, so a level changed by hand stays until the next entry.
-        if (data_usb_active()) {
+        // 1b. Entering DATA-USB (from the web UI or the radio itself): set the DATA audio output level
+        //     (the profile's menu item) once. Leaving DATA-USB re-arms it, so a level changed by hand
+        //     stays until the next entry.
+        if (rig->ex_data_out != NULL && data_usb_active()) {
             if (!usb_level_applied) {
                 char cmd[16];
-                snprintf(cmd, sizeof(cmd), "EX" EX_USB_OUT_DATA "%03u;", (unsigned)DATA_USB_OUT_LEVEL);
-                ESP_LOGI(TAG, "DATA-USB: setting USB OUT LEVEL to %u", (unsigned)DATA_USB_OUT_LEVEL);
+                snprintf(cmd, sizeof(cmd), "EX%s%03u;", rig->ex_data_out, (unsigned)DATA_USB_OUT_LEVEL);
+                ESP_LOGI(TAG, "DATA-USB: setting menu %s (DATA audio output level) to %u", rig->ex_data_out,
+                         (unsigned)DATA_USB_OUT_LEVEL);
                 usb_level_applied = cat_tx(dev, cmd) == ESP_OK;
             }
         } else {
             usb_level_applied = false;
         }
 
-        // 2. Poll S-meter every 100ms
-        cat_tx(dev, "RM0;");
+        // 2. Poll the S meter every 100 ms
+        send_poll(dev, rig->poll_fast);
 
-        // 3. Poll RI0; every 500ms (every 5 iterations)
+        // 3. Poll BUSY / TX every 500 ms (every 5 iterations)
         if ((poll_count % 5) == 0) {
-            cat_tx(dev, "RI0;");
+            send_poll(dev, rig->poll_status);
         }
 
         // 4. Periodic slow refresh / sync every 5 seconds (50 iterations)
         if ((poll_count % 50) == 0) {
-            cat_tx(dev, "AI1;FA;FB;MD0;MD1;AG0;AG1;SQ0;SQ1;BP00;BP01;BP10;BP11;");
+            send_poll(dev, rig->sync_all);
         }
         poll_count++;
 
@@ -797,8 +987,17 @@ static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened)
         s_rx_tail[sizeof(s_rx_tail) - 1] = '\0';
         for (int i = 0; i < 2; i++) {
             if (query(*dev, "ID;", a, sizeof(a))) {
-                ESP_LOGI(TAG, "CAT port at USB address %u, interface %u, %lu bps: %s", addr, intf,
-                         (unsigned long)bauds[b], a);
+                // "ID" + 4 characters + ";". Anything else still marks the CAT port, with the read-only profile.
+                const bool well_formed = strlen(a) == 7 && a[6] == ';';
+                memset(s_rig_id, 0, sizeof(s_rig_id));
+                if (well_formed) {
+                    for (int k = 0; k < 4; k++) {
+                        s_rig_id[k] = isalnum((unsigned char)a[2 + k]) ? a[2 + k] : '?';
+                    }
+                }
+                s_rig = well_formed ? profile_for_id(s_rig_id) : &s_profile_unknown;
+                ESP_LOGI(TAG, "CAT port at USB address %u, interface %u, %lu bps: %s -> %s", addr, intf,
+                         (unsigned long)bauds[b], a, s_rig->name);
                 return true;
             }
         }
@@ -840,13 +1039,19 @@ static void cat_task(void *arg)
     s_task = xTaskGetCurrentTaskHandle();
     for (;;) {
         s_disconnected = false;
+        s_rig = &s_profile_none;          // only ID; may be sent until a radio has answered
+        memset(s_rig_id, 0, sizeof(s_rig_id));
         cdc_acm_dev_hdl_t dev = find_cat_port();
         if (dev) {
+            publish_profile();
             publish(true, -1, -1, -1, -1, -1, 0, NULL, 0, NULL);
             poll_loop(dev);
             ESP_LOGW(TAG, "CAT port lost");
             cdc_acm_host_close(dev);
             publish(false, 0, 0, 0, 0, 0, 0, "", 0, "");
+            s_rig = &s_profile_none;
+            memset(s_rig_id, 0, sizeof(s_rig_id));
+            publish_profile();
         }
         vTaskDelay(pdMS_TO_TICKS(SCAN_PERIOD_MS));
     }
@@ -919,7 +1124,11 @@ esp_err_t cat_copy_sub_to_main(void)
 
 esp_err_t cat_set_freq(bool sub, uint32_t freq_hz)
 {
-    if (freq_hz < FREQ_MIN_HZ || freq_hz > FREQ_MAX_HZ) {
+    const rig_profile_t *rig = s_rig;
+    if (!rig->can_control) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (freq_hz < rig->freq_min || freq_hz > rig->freq_max) {
         return ESP_ERR_INVALID_ARG;
     }
     char cmd[32];
@@ -984,6 +1193,9 @@ esp_err_t cat_set_mode(bool sub, const char *mode_name)
 
 esp_err_t cat_set_volume(bool sub, uint8_t volume)
 {
+    if (sub && !s_rig->dual_rx) {
+        return ESP_ERR_NOT_SUPPORTED;     // no SUB receiver
+    }
     char cmd[16];
     snprintf(cmd, sizeof(cmd), "AG%c%03u;", sub ? '1' : '0', volume);
     esp_err_t err = cat_enqueue(cmd);
@@ -1003,6 +1215,9 @@ esp_err_t cat_set_volume(bool sub, uint8_t volume)
 
 esp_err_t cat_set_notch(bool sub, bool on)
 {
+    if (sub && !s_rig->dual_rx) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
     char cmd[16];
     snprintf(cmd, sizeof(cmd), "BP%c0%03u;", sub ? '1' : '0', on ? 1u : 0u);
     esp_err_t err = cat_enqueue(cmd);
@@ -1019,6 +1234,9 @@ esp_err_t cat_set_notch_freq(bool sub, uint16_t hz)
 {
     if (hz < 10 || hz > 3200) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (sub && !s_rig->dual_rx) {
+        return ESP_ERR_NOT_SUPPORTED;
     }
     unsigned steps = (hz + 5u) / 10u;       // the radio works in 10 Hz steps
     char cmd[16];
@@ -1042,6 +1260,13 @@ esp_err_t cat_set_power(bool on)
 
 esp_err_t cat_set_squelch(bool sub, uint8_t squelch)
 {
+    const rig_profile_t *rig = s_rig;
+    if (sub && !rig->dual_rx) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    if (squelch > rig->sq_max) {
+        return ESP_ERR_INVALID_ARG;
+    }
     char cmd[16];
     snprintf(cmd, sizeof(cmd), "SQ%c%03u;", sub ? '1' : '0', squelch);
     esp_err_t err = cat_enqueue(cmd);

@@ -1,0 +1,103 @@
+/*
+ * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+ */
+
+/*
+ * Host test for main/cat.c: the CAT allow-list, the radio profiles, the setters and the answer parsers,
+ * built with gcc on a PC (no board, no radio). The ESP-IDF / FreeRTOS / USB headers are replaced by the
+ * minimal stubs in stub/. Run: test/host_cat/run.sh
+ */
+
+#include <stdio.h>
+#include <assert.h>
+char g_sent[1024];
+#include "cat.c"   // the real file, built against the stubs in stub/
+
+static int fails = 0;
+#define CHECK(cond, ...) do { if (!(cond)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
+static bool ok(const char *c) { return cat_cmds_allowed(c, 1); }
+
+static void use(const char *id) {
+    memset(s_rig_id, 0, sizeof s_rig_id);
+    if (id) { memcpy(s_rig_id, id, 4); s_rig = profile_for_id(id); } else s_rig = &s_profile_none;
+}
+
+int main(void) {
+    s_lock = (void*)1; s_cmd_queue = (void*)1;
+    // profile tables: every polled string must pass its own allow-list
+    for (size_t i = 0; i < sizeof s_profiles / sizeof s_profiles[0]; i++) {
+        s_rig = &s_profiles[i];
+        const char *polls[] = {s_rig->sync_all, s_rig->poll_fast, s_rig->poll_status, s_rig->resync_vfo};
+        for (int k = 0; k < 4; k++) if (polls[k]) CHECK(cat_cmds_allowed(polls[k], CAT_TX_MAX_CMDS), "%s poll %s", s_rig->name, polls[k]);
+        char ex[16]; snprintf(ex, sizeof ex, "EX%s100;", s_rig->ex_data_out); CHECK(ok(ex), "%s %s", s_rig->name, ex);
+    }
+    s_rig = &s_profile_unknown;
+    CHECK(cat_cmds_allowed(s_rig->sync_all, 16) && cat_cmds_allowed(s_rig->poll_status, 16), "unknown polls");
+
+    // nothing before identification except ID;
+    use(NULL);
+    CHECK(ok("ID;"), "ID before ident");
+    CHECK(!ok("FA;") && !ok("AI1;") && !ok("FA014074000;"), "none profile blocks");
+
+    // never: transmit commands on any profile
+    const char *never[] = {"TX1;", "TX2;", "TX0;", "MX1;", "KY0;", "VX1;", "PC100;", "FT2;", "EX010411100;x", "AI0;", NULL};
+    const char *ids[] = {"0840", "0761", "9999", NULL};
+    for (int r = 0; ids[r]; r++) { use(ids[r]); for (int k = 0; never[k]; k++) CHECK(!ok(never[k]), "%s allowed %s", ids[r], never[k]); }
+
+    // FTX-1
+    use("0840");
+    CHECK(s_rig->rig == CAT_RIG_FTX1, "ftx1 detect");
+    CHECK(ok("FA470000000;") && !ok("FA470000001;") && !ok("FA000029999;"), "ftx1 freq");
+    CHECK(ok("AG1255;") && ok("SQ1255;") && ok("BP11320;") && ok("MD1H;"), "ftx1 sub + c4fm");
+    CHECK(ok("EX010411100;") && !ok("EX010413100;") && !ok("EX010411101;") && !ok("EX010411;"), "ftx1 EX");
+    CHECK(ok("RI0;") && ok("RM0;") && !ok("RM1;") && !ok("BY;") && !ok("TX;"), "ftx1 status");
+
+    // FTDX10
+    use("0761");
+    CHECK(s_rig->rig == CAT_RIG_FTDX10, "ftdx10 detect");
+    CHECK(ok("FA075000000;") && !ok("FA075000001;") && !ok("FB145000000;"), "ftdx10 freq");
+    CHECK(ok("AG0255;") && !ok("AG1100;") && !ok("AG1;") && !ok("SQ1;") && !ok("BP10;") && !ok("BP11100;"), "ftdx10 no sub rx");
+    CHECK(ok("SQ0100;") && !ok("SQ0101;"), "ftdx10 sq max");
+    CHECK(ok("MD1C;") && ok("MD0C;") && !ok("MD0H;") && !ok("MD0I;"), "ftdx10 modes");
+    CHECK(ok("EX010413100;") && !ok("EX010411100;"), "ftdx10 EX: 010411 is HCUT FREQ there");
+    CHECK(ok("BY;") && ok("TX;") && ok("RM1;") && !ok("RM0;") && !ok("RI0;"), "ftdx10 status");
+
+    // unknown radio: read only
+    use("9999");
+    CHECK(s_rig->rig == CAT_RIG_UNKNOWN, "unknown");
+    CHECK(ok("FA;") && ok("MD0;") && !ok("FA014074000;") && !ok("MD02;") && !ok("AG0;") && !ok("AI1;") && !ok("PS0;") && !ok("SV;") && !ok("EX010411100;"), "unknown read-only");
+
+    // setters
+    use("0761");
+    CHECK(cat_set_squelch(true, 10) == ESP_ERR_NOT_SUPPORTED, "sq sub ftdx10");
+    CHECK(cat_set_squelch(false, 101) == ESP_ERR_INVALID_ARG, "sq 101 ftdx10");
+    CHECK(cat_set_squelch(false, 100) == ESP_OK, "sq 100 ftdx10");
+    CHECK(cat_set_volume(true, 10) == ESP_ERR_NOT_SUPPORTED, "vol sub ftdx10");
+    CHECK(cat_set_freq(false, 144000000) == ESP_ERR_INVALID_ARG && cat_set_freq(true, 50313000) == ESP_OK, "freq ftdx10");
+    CHECK(cat_set_mode(false, "C4FM-DN") != ESP_OK && cat_set_mode(true, "DATA-USB") == ESP_OK, "mode ftdx10");
+    use("9999");
+    CHECK(cat_set_freq(false, 14074000) == ESP_ERR_INVALID_STATE, "unknown set");
+    use("0840");
+    CHECK(cat_set_squelch(true, 255) == ESP_OK && cat_set_freq(true, 433000000) == ESP_OK, "ftx1 setters");
+
+    // parsers
+    int m, sb; bool b;
+    CHECK(parse_rm("RM0120060;", &m, &sb) && m == 120 && sb == 60, "rm0");
+    CHECK(parse_rm("RM1123000;", &m, &sb) && m == 123 && sb == -1, "rm1");
+    CHECK(!parse_rm("RM2123000;", &m, &sb) && !parse_rm("RM0256000;", &m, &sb), "rm bad");
+    CHECK(parse_by("BY10;", &b) && b && parse_by("BY00;", &b) && !b && !parse_by("BY1;", &b), "by");
+    CHECK(parse_tx("TX2;", &b) && b && parse_tx("TX0;", &b) && !b && !parse_tx("TX3;", &b), "tx");
+    // packet handling: FTDX10 meter/busy/tx land in the state
+    use("0761");
+    handle_cat_packet("RM1200000;"); handle_cat_packet("BY10;"); handle_cat_packet("TX2;");
+    CHECK(s_state.s_main == 200 && s_state.s_sub == 0 && s_state.busy && s_state.tx, "ftdx10 state");
+    handle_cat_packet("TX0;"); handle_cat_packet("BY00;");
+    CHECK(!s_state.busy && !s_state.tx, "ftdx10 state clear");
+    use("0840");
+    handle_cat_packet("RI00000000 1;"); // malformed: ignored
+    handle_cat_packet("RM0010020;");
+    CHECK(s_state.s_main == 10 && s_state.s_sub == 20, "ftx1 meter");
+
+    printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
+    return fails != 0;
+}

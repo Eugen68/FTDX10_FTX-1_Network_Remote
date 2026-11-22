@@ -30,7 +30,7 @@
 
 #define STREAM_CHUNK_BYTES   4096
 #define CAT_POST_MAX_BYTES   192     // largest accepted POST /cat body, including the NUL
-#define CAT_JSON_BYTES       896     // GET /cat response
+#define CAT_JSON_BYTES       1152    // GET /cat response
 #define STREAM_READ_TIMEOUT  pdMS_TO_TICKS(200)
 #define KEEPALIVE_IDLE_READS 5       // idle reads (about 1 s) before a keep-alive silence block is sent
 #define KEEPALIVE_FRAMES     64      // length of that block in audio frames
@@ -349,8 +349,14 @@ static esp_err_t cat_handler(httpd_req_t *req)
     char json[CAT_JSON_BYTES];
     cat_get_state(&st);
     json_escape(st.last_error, note, sizeof(note));   // contains bytes echoed by the radio
+    char rig_name[2 * sizeof(st.rig_name) + 1];
+    char rig_id[2 * sizeof(st.rig_id) + 1];
+    json_escape(st.rig_name, rig_name, sizeof(rig_name));
+    json_escape(st.rig_id, rig_id, sizeof(rig_id));      // only alphanumerics or '?', escaped anyway
     int n = snprintf(json, sizeof(json),
-             "{\"connected\":%s,\"busy\":%s,\"tx\":%s,\"s_main\":%u,\"s_sub\":%u,"
+             "{\"connected\":%s,\"rig\":\"%s\",\"rig_id\":\"%s\",\"dual_rx\":%s,\"can_control\":%s,"
+             "\"c4fm\":%s,\"sq_max\":%u,\"freq_min\":%lu,\"freq_max\":%lu,"
+             "\"busy\":%s,\"tx\":%s,\"s_main\":%u,\"s_sub\":%u,"
              "\"freq_main\":%lu,\"freq_sub\":%lu,"
              "\"mode_main\":\"%s\",\"mode_sub\":\"%s\","
              "\"mode_main_raw\":\"%c\",\"mode_sub_raw\":\"%c\","
@@ -358,7 +364,10 @@ static esp_err_t cat_handler(httpd_req_t *req)
              "\"sq_main\":%u,\"sq_sub\":%u,"
              "\"notch_main\":%s,\"notch_sub\":%s,\"notch_hz_main\":%u,\"notch_hz_sub\":%u,"
              "\"age_ms\":%lu,\"devices\":%u,\"cp210x\":%u,\"answered\":%u,\"note\":\"%s\"}",
-             st.connected ? "true" : "false", st.busy ? "true" : "false",
+             st.connected ? "true" : "false", rig_name, rig_id,
+             st.dual_rx ? "true" : "false", st.can_control ? "true" : "false", st.c4fm ? "true" : "false",
+             st.sq_max, (unsigned long)st.freq_min, (unsigned long)st.freq_max,
+             st.busy ? "true" : "false",
              st.tx ? "true" : "false",
              st.s_main, st.s_sub,
              (unsigned long)st.freq_main, (unsigned long)st.freq_sub,

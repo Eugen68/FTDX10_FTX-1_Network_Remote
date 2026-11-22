@@ -38,13 +38,34 @@ FTX-1
 
 > "OTA" in the diagram stands for Over-The-Air: updating the firmware over the network, without a cable (see "OTA update").
 
+## Supported radios (this fork)
+
+The firmware recognises the radio from its answer to the CAT command `ID;` and loads a profile for it.
+
+| | Yaesu FTX-1 | Yaesu FTDX10 |
+| --- | --- | --- |
+| `ID;` answer | `ID0840;` | `ID0761;` |
+| CAT rates tried | 115200, 38400, 4800, 9600, 19200 bps (whatever **CAT-1 RATE** is set to) | the same list; the FTDX10 offers up to 38400 (**CAT RATE**) |
+| Receivers | MAIN + SUB (two S-meters, AF gain, squelch, notch and FT8 decoders for each) | one receiver; "SUB" is only VFO-B (frequency and mode) |
+| Frequency range accepted | 30 kHz – 470 MHz | 30 kHz – 75 MHz |
+| Squelch range | 0 – 255 | 0 – 100 |
+| BUSY / TX state | `RI0;` | `BY;` and the read form `TX;` |
+| S-meter | `RM0;` (MAIN and SUB) | `RM1;` |
+| Menu item written in DATA-USB | `EX010411` USB OUT LEVEL = 100 | `EX010413` DATA OUT LEVEL = 100 |
+
+Both radios connect the same way: one USB cable carries the two CP210x serial ports (the CAT one is found automatically) and the USB audio codec. The browser page adapts to the radio it reports: on the FTDX10 the SUB receiver controls, the SUB scope and the SUB FT8 decoder are hidden, and the 2 m / 70 cm band buttons and the C4FM modes are not shown.
+
+A radio that answers `ID;` with a model the firmware does not know gets a read-only profile: its frequency and mode are shown, but nothing is ever sent to it except read commands.
+
+> The menu numbers differ between the two radios. For example `EX010411` is USB OUT LEVEL on the FTX-1 but HCUT FREQ on the FTDX10, which is why every menu write belongs to a radio profile.
+
 ## Hardware requirements
 
 | Item | Requirement |
 | --- | --- |
 | Board | ESP32-S3 (tested with the **ESP32-S3-DevKitC-1**; see "Recommended board" below) |
 | Flash | **4 MB or more** (two OTA slots use 3.4 MB; the default configuration assumes **16 MB**) |
-| PSRAM | Not required |
+| PSRAM | Not required. Used when present (for example an **ESP32-S3-N16R8** board with 8 MB octal PSRAM): large buffers (TLS, Wi-Fi) then go to PSRAM and leave internal RAM free |
 | Network | A LAN with Wi-Fi (2.4 GHz) |
 
 > If your module has a flash size other than 16 MB, see [Changing the flash size](#changing-the-flash-size) after setting up the development environment.
@@ -524,11 +545,13 @@ So that the radio cannot be put into transmit over the network, the CAT commands
 
 - The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `action`.
   Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main`.
-- Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `EX`).
-  For `EX` only the write that sets the DATA-USB `USB OUT LEVEL` to 100 (`EX010411`) is allowed.
-  Commands that lead to transmission, such as `TX` `MX` `KY` `PB` `VX` and `PC`, have no call path in the code and are also blocked by the allow list.
+- Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `EX`), checked against the profile of the connected radio.
+  For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
+  `TX` is allowed only in its read form (`TX;`, FTDX10); `TX` with a parameter is always blocked.
+  Commands that lead to transmission, such as `TX1` `MX` `KY` `PB` `VX` and `PC`, have no call path in the code and are also blocked by the allow list.
   As a result, this firmware has no operation that puts the radio into transmit.
-- Frequency settings are range-checked. Only values from 30 kHz to 470 MHz (30000 to 470000000 Hz, the range the FTX-1 accepts) are passed to the radio; anything outside it is rejected.
+- Frequency settings are range-checked against the radio's profile (FTX-1 30 kHz – 470 MHz, FTDX10 30 kHz – 75 MHz); anything outside it is rejected.
+- The allow list and the answer parsers are covered by a host test that runs without the board: `test/host_cat/run.sh`.
 - As a second safeguard, consider also setting `RPTT SELECT` / `TX INHIBIT` on the radio itself.
 - Transmission that does not go through the ESP32 (microphone PTT, front-panel operation) cannot be prevented.
 
@@ -591,13 +614,13 @@ So that the radio cannot be put into transmit over the network, the CAT commands
 | [`main/wifi_sta.c`](main/wifi_sta.c) | Wi-Fi station connection (DHCP host name `ftx-1c` by default) |
 | [`main/web_server.c`](main/web_server.c) | HTTPS server (player page, status, PCM / WAV streams). The server and the stream task run on core 1, away from Wi-Fi and USB on core 0 |
 | [`main/ota.c`](main/ota.c) | OTA update (`POST /ota`, Basic authentication, rollback) |
-| [`main/cat.c`](main/cat.c) | CAT control (over the CP210x USB serial port: reads and sets BUSY / S-meter / frequency / mode / volume / squelch) |
+| [`main/cat.c`](main/cat.c) | CAT control (over the CP210x USB serial port: detects the radio from `ID;`, then reads and sets BUSY / S-meter / frequency / mode / volume / squelch with that radio's profile) |
 | [`main/index.html`](main/index.html) | Browser player (Web Audio API) with a pseudo squelch |
 | [`main/map.html`](main/map.html) | FT8 world map window (`/map`). The coastline data is embedded, so it works offline |
 
 ### Using it with another radio (a hint)
 
-This project is written for the FTX-1 only and has been tested only on it. It is not meant to grow into a multi-radio library. If you want to try another radio in your own fork, start from the comment at the top of [`main/cat.c`](main/cat.c): it lists every CAT command the firmware sends, with its parameters and the answers it reads, so you can compare it with that radio's CAT manual. The same comment names the radio-specific places (the allow-list, the frequency range, the mode table, the answer parsers, the `EX` menu item, the MAIN / SUB assumption and how the CAT port is found). Whatever you change, re-check that no command that could make the radio transmit can pass the allow-list.
+This fork supports the FTX-1 and the FTDX10. To add another radio, start from the comment at the top of [`main/cat.c`](main/cat.c): it lists every CAT command the firmware sends, with its parameters and the answers it reads, so you can compare it with that radio's CAT manual. Then add an entry to `s_profiles[]` (ID, frequency range, receivers, squelch range, the `EX` menu item, the polled commands) and, if the radio answers in another format, a parser. Whatever you change, extend `test/host_cat/test_cat.c` and re-check that no command that could make the radio transmit can pass the allow-list.
 
 ## Glossary
 

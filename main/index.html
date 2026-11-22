@@ -573,6 +573,9 @@
   .sub-tag { color: var(--accent-green); }
 
   /* FT8 Live Decoder Panel */
+  /* One-receiver radios (FTDX10): the SUB receiver controls are hidden, "SUB" is only VFO-B */
+  body.single-rx .dual-rx-only { display: none !important; }
+  body.single-rx .scope-pair, body.single-rx .screen-meters { grid-template-columns: 1fr; }
   .ft8-panel {
     background: #0b1120;
     border: 1px solid #1e293b;
@@ -955,7 +958,7 @@
   <!-- Header -->
   <div class="rig-header">
     <div class="brand-logo">
-      <div class="brand-title">FTX-1 Companion</div>
+      <div class="brand-title" id="brandTitle">FTX-1 Companion</div>
       <div class="brand-build" id="buildInfo" title="Firmware build time"></div>
     </div>
     <div class="header-controls">
@@ -965,7 +968,7 @@
         <div class="led-item"><div class="led" id="ledRx"></div>RX</div>
       </div>
       <button class="reboot-btn" id="btnReboot" title="Reboot the ESP32-S3 companion device">REBOOT</button>
-      <button class="rig-off-btn" id="btnRigOff" title="Turn the FTX-1 power OFF (CAT: PS0;)">RIG OFF</button>
+      <button class="rig-off-btn" id="btnRigOff" title="Turn the radio power OFF (CAT: PS0;)">RIG OFF</button>
       <button class="pwr-btn" id="btnPlay">POWER / PLAY</button>
     </div>
   </div>
@@ -1110,7 +1113,7 @@
 
         <div class="vfo-box sub-box">
           <div class="vfo-box-top">
-            <span>SUB (VFO-B)</span>
+            <span id="vfoLabelSub">SUB (VFO-B)</span>
           </div>
           <div class="vfd-bezel" id="vfdBezelSub">
             <span class="vfd-mode-tag" id="modeBadgeSub">LSB</span>
@@ -1164,7 +1167,7 @@
             <span class="scope-base-val" id="wfBaseValMain">0</span>
           </div>
         </div>
-        <div class="scope-container">
+        <div class="scope-container dual-rx-only">
           <div class="scope-header">
             <span class="scope-title sub-tag">SUB SCOPE</span>
             <div class="scope-spans" data-scope="Sub">
@@ -1219,7 +1222,7 @@
         </div>
       </div>
 
-      <div class="ft8-panel">
+      <div class="ft8-panel dual-rx-only">
         <div class="ft8-header">
           <div class="ft8-title">
             <span class="ft8-icon">📻</span>
@@ -1255,7 +1258,7 @@
     <!-- RIGHT: SUB Controls Card -->
     <div class="control-card sub-card">
       <div class="card-title">
-        <span>SUB VFO-B</span>
+        <span id="cardTitleSub">SUB VFO-B</span>
         <select id="modeSelectSub" title="SUB mode">
           <option value="LSB">LSB</option>
           <option value="USB">USB</option>
@@ -1341,8 +1344,8 @@
       </form>
 
       <!-- AF GAIN & SQUELCH (CAT) -->
-      <div class="button-group-label">AF GAIN / SQL (CAT):</div>
-      <div class="analog-knobs-row">
+      <div class="button-group-label dual-rx-only">AF GAIN / SQL (CAT):</div>
+      <div class="analog-knobs-row dual-rx-only">
         <div class="mini-knob-box">
           <div class="mini-knob-label">AF GAIN</div>
           <svg class="mini-knob-svg" id="knobVolSub" viewBox="0 0 60 60" role="slider" aria-label="SUB AF GAIN"></svg>
@@ -1356,8 +1359,8 @@
       </div>
 
       <!-- MANUAL NOTCH (CAT BP) -->
-      <div class="button-group-label">MANUAL NOTCH (CAT):</div>
-      <div class="analog-knobs-row">
+      <div class="button-group-label dual-rx-only">MANUAL NOTCH (CAT):</div>
+      <div class="analog-knobs-row dual-rx-only">
         <div class="mini-knob-box">
           <div class="mini-knob-label">NOTCH</div>
           <button type="button" class="rig-btn notch-btn" id="notchBtnSub" aria-pressed="false">OFF</button>
@@ -1407,7 +1410,7 @@
       </div>
 
       <!-- SUB Squelch -->
-      <div class="sq-box" id="sqCardSub">
+      <div class="sq-box dual-rx-only" id="sqCardSub">
         <label><input type="checkbox" id="sqOnSub"> <strong>SUB (R) SQUELCH</strong></label>
         <div class="sq-row">
           <span>Type:</span>
@@ -2070,7 +2073,8 @@ if (btnReboot) {
 const btnRigOff = document.getElementById('btnRigOff');
 if (btnRigOff) {
   btnRigOff.addEventListener('click', async () => {
-    if (confirm("Turn the FTX-1 power OFF?\n(It cannot be turned back on via CAT. Use the power button on the rig.)")) {
+    const rigName = rigProfileKey ? rigProfileKey.split('|')[0] : 'radio';
+    if (confirm("Turn the " + rigName + " power OFF?\n(It cannot be turned back on via CAT. Use the power button on the rig.)")) {
       try {
         await fetch('/cat', {
           method: 'POST',
@@ -2726,13 +2730,14 @@ function makeMiniKnob(svgId, valElId, sub, type, onChange) {
   svgEl('line', { x1: cx, y1: cy - 7, x2: cx, y2: cy - (r - 9), stroke: color, 'stroke-width': 2, 'stroke-linecap': 'round' }, pointerGroup);
 
   let currentVal = 0;
+  let maxVal = 255;          // squelch: 100 on the FTDX10 (see applyRigProfile)
   let lastY = null;
   let lastChangeTime = 0;
   let pointerId = null;
 
   function updateVisual(val) {
-    currentVal = Math.max(0, Math.min(255, Math.round(val)));
-    const frac = currentVal / 255.0;
+    currentVal = Math.max(0, Math.min(maxVal, Math.round(val)));
+    const frac = currentVal / maxVal;
     const deg = START_DEG + frac * SWEEP_DEG;
     pointerGroup.setAttribute('transform', 'rotate(' + deg.toFixed(1) + ' ' + cx + ' ' + cy + ')');
 
@@ -2796,7 +2801,10 @@ function makeMiniKnob(svgId, valElId, sub, type, onChange) {
       if (isExternal && Date.now() - lastChangeTime < USER_CHANGE_HOLD_MS) return;
       updateVisual(val);
     },
-    getValue: () => currentVal
+    getValue: () => currentVal,
+    setMax: (max) => {
+      if (max > 0 && max !== maxVal) { maxVal = max; updateVisual(currentVal); }
+    }
   };
 }
 
@@ -3099,6 +3107,48 @@ freqMainInput.addEventListener('blur', () => { isUserEditingMain = false; });
 freqSubInput.addEventListener('focus', () => { isUserEditingSub = true; });
 freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
 
+// ---- Radio profile (from GET /cat): FTX-1 (two receivers) or FTDX10 (one receiver, VFO-A / VFO-B) ----
+// Applied once per change of the reported radio. Nothing here is a safety check: the firmware enforces
+// the frequency range, the squelch range and which receiver exists on its own.
+let rigProfileKey = '';
+function applyRigProfile(d) {
+  if (!d.rig) return;                         // no radio identified yet: keep the current layout
+  const key = [d.rig, d.dual_rx, d.c4fm, d.sq_max, d.freq_max].join('|');
+  if (key === rigProfileKey) return;
+  rigProfileKey = key;
+
+  const name = d.rig === 'UNKNOWN' ? 'Radio' : d.rig;
+  document.getElementById('brandTitle').textContent = name + ' Companion';
+  document.title = name + ' Companion';
+
+  const single = d.dual_rx === false;
+  document.body.classList.toggle('single-rx', single);
+  document.getElementById('vfoLabelSub').textContent = single ? 'VFO-B' : 'SUB (VFO-B)';
+  document.getElementById('cardTitleSub').textContent = single ? 'VFO-B' : 'SUB VFO-B';
+  const subMeter = smHost.children[1];
+  if (subMeter) subMeter.style.display = single ? 'none' : '';
+  if (single) {
+    // No SUB receiver: its decoder would only decode the MAIN audio again under the VFO-B frequency
+    const f = ft8Chans[1];
+    if (f.enabled) f.enableBtn.click();
+  }
+
+  // Modes and bands the radio does not have
+  document.querySelectorAll('[data-mode^="C4FM"], option[value^="C4FM"]').forEach((el) => {
+    el.style.display = d.c4fm === false ? 'none' : '';
+    if (el.tagName === 'OPTION') el.disabled = d.c4fm === false;
+  });
+  document.querySelectorAll('.band-grid button').forEach((btn) => {
+    const m = /setBand\((?:true|false),\s*(\d+)/.exec(btn.getAttribute('onclick') || '');
+    btn.style.display = (m && d.freq_max && Number(m[1]) > d.freq_max) ? 'none' : '';
+  });
+
+  if (d.sq_max) {
+    knobSqMain.setMax(d.sq_max);
+    knobSqSub.setMax(d.sq_max);
+  }
+}
+
 const SM_POLL_MS = 400;
 
 async function smPoll() {
@@ -3106,6 +3156,7 @@ async function smPoll() {
     const res = await fetch('/cat', { cache: 'no-store' });
     const d = await res.json();
     const now = Date.now();
+    applyRigProfile(d);
     if (d.connected) {
       ledCat.classList.add('on-green');
       radioBusy = !!d.busy;
