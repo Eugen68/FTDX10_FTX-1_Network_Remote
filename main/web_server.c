@@ -396,8 +396,10 @@ static void stream_task(void *arg)
         f->device_gone = false;
         s_st_buf_ms = (uint32_t)buf_ms;
         ulTaskNotifyTake(pdTRUE, 0);
-        // Core 0 with the USB host; above the httpd task so a slow network never starves it
-        if (xTaskCreatePinnedToCore(usb_reader_task, "usb_rd", 3072, f, 6, NULL, 0) != pdPASS) {
+        // Core 1, away from the Wi-Fi driver and LwIP on core 0, at 19: above LwIP (18), the web server and
+        // the stream sender, below the USB host tasks (20). At 6 on core 0 it fell behind while the network
+        // was busy, the UAC driver's buffer filled, and about 1.3 % of the radio's audio was dropped there.
+        if (xTaskCreatePinnedToCore(usb_reader_task, "usb_rd", 3072, f, 19, NULL, 1) != pdPASS) {
             ESP_LOGE(TAG, "Could not start the USB reader");
             f->reader_done = true;
             err = ESP_ERR_NO_MEM;

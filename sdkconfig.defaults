@@ -52,3 +52,6 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 # the radio's 48,000, heard as crackles, and the browser's playout delay drained into gaps.
 CONFIG_UAC_NUM_ISOC_URBS=6
 CONFIG_UAC_NUM_PACKETS_PER_URB=8
+# UAC driver buffer between the USB host and the stream's reader: 32 KB = about 170 ms of 48 kHz stereo
+# (it is allocated in internal RAM by the driver, so not larger)
+CONFIG_AUDIO_RING_BUFFER_SIZE=32768
