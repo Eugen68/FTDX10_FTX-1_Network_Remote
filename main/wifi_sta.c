@@ -73,6 +73,13 @@ esp_err_t wifi_sta_connect(void)
 
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set mode");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg), TAG, "set config");
+    // 20 MHz channel instead of 40 MHz: the audio stream needs about 1.5 Mbit/s, far below what 20 MHz
+    // carries, and on a busy 2.4 GHz band a 40 MHz channel meets more interference and retries, which
+    // showed as send stalls of several seconds. Not fatal if the driver refuses it.
+    esp_err_t bw_err = esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW20);
+    if (bw_err != ESP_OK) {
+        ESP_LOGW(TAG, "Could not set the 20 MHz bandwidth: %s", esp_err_to_name(bw_err));
+    }
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start");
     // Real-time audio: disable modem sleep, otherwise latency jitters by up to a few hundred ms
     ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG, "disable power save");

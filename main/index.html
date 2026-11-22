@@ -1456,7 +1456,14 @@ const ledRx = document.getElementById('ledRx');
 
 const BUFFER_SEC = 0.08;
 const PREBUFFER_SEC = 0.25;
-const MAX_LATENCY = 0.8;
+// Adaptive playout delay: how far ahead of "now" the audio is scheduled. It starts small, grows after
+// each underrun (a Wi-Fi stall), and shrinks back slowly while the network is steady. Audio that
+// arrives in a burst after a stall is played a little faster (CATCHUP_RATE) to get back to the target,
+// and whatever is far beyond it is dropped instead of being played late.
+const TARGET_MIN = 0.25, TARGET_MAX = 1.2, TARGET_STEP = 0.15;
+const TARGET_DECAY_MS = 30000, TARGET_DECAY = 0.05;
+const CATCHUP_RATE = 1.04;
+const DROP_ABOVE = 0.35;   // seconds beyond the target: later than this, a block is skipped
 
 let abort = null;
 let ctx = null;
@@ -1954,7 +1961,9 @@ async function start() {
     const reader = res.body.getReader();
 
     // Diagnostics (console: audioDiag): tells a server/network stall (maxReadMs) from a browser stall (maxProcMs)
-    const diag = window.audioDiag = { underruns: 0, maxReadMs: 0, maxProcMs: 0, slowReads: 0, chunks: 0 };
+    const diag = window.audioDiag = { underruns: 0, maxReadMs: 0, maxProcMs: 0, slowReads: 0, chunks: 0, dropped: 0, target: TARGET_MIN };
+    let target = TARGET_MIN;
+    let lastUnderrun = performance.now();
     let diagLog = performance.now();
 
     for (;;) {
@@ -1972,7 +1981,7 @@ async function start() {
       if (isPrebuffering) {
         if (pending.length < prebufferBytes) continue;
         isPrebuffering = false;
-        nextTime = ctx.currentTime + 0.15;
+        nextTime = ctx.currentTime + 0.05;   // + the pre-buffered block itself = about TARGET_MIN ahead
       }
 
       if (pending.length < minBytes) continue;
@@ -1991,26 +2000,41 @@ async function start() {
 
       const now = ctx.currentTime;
       if (nextTime < now) {
+        // Underrun: the network stalled longer than the cushion. Grow the cushion and restart from it.
         diag.underruns++;
-        nextTime = now + 0.12;
-      } else if (nextTime - now > MAX_LATENCY) {
-        nextTime = now + 0.20;
+        target = Math.min(TARGET_MAX, target + TARGET_STEP);
+        lastUnderrun = tGot;
+        nextTime = now + target;
+      } else if (tGot - lastUnderrun > TARGET_DECAY_MS && target > TARGET_MIN) {
+        target = Math.max(TARGET_MIN, target - TARGET_DECAY);   // steady network: shorten the delay again
+        lastUnderrun = tGot;
       }
+      diag.target = target;
+
+      const ahead = nextTime - now;
+      if (ahead > target + DROP_ABOVE) {
+        // A burst after a long stall: far too late to play. Skip this block (the decoders above have it).
+        diag.dropped++;
+        continue;
+      }
+      // Slightly behind the target after a burst: play this block a little faster to catch up
+      const playRate = ahead > target + 0.05 ? CATCHUP_RATE : 1;
 
       const buf = ctx.createBuffer(ch, d.frames, rate);
       for (let c = 0; c < ch; c++) buf.copyToChannel(d.channels[c], c);
       const src = ctx.createBufferSource();
       src.buffer = buf;
+      src.playbackRate.value = playRate;
       src.connect(mix);
       src.start(nextTime);
-      nextTime += d.frames / rate;
+      nextTime += d.frames / rate / playRate;
 
       const procMs = performance.now() - tGot;
       if (procMs > diag.maxProcMs) diag.maxProcMs = procMs;
       if (tGot - diagLog > 10000) {
         diagLog = tGot;
         if (diag.underruns || diag.slowReads) {
-          console.warn('audioDiag', JSON.stringify({ ...diag, maxReadMs: Math.round(diag.maxReadMs), maxProcMs: Math.round(diag.maxProcMs) }));
+          console.warn('audioDiag', JSON.stringify({ ...diag, maxReadMs: Math.round(diag.maxReadMs), maxProcMs: Math.round(diag.maxProcMs), target: diag.target.toFixed(2) }));
         }
       }
     }

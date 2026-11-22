@@ -10,6 +10,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include "freertos/FreeRTOS.h"
@@ -22,6 +23,7 @@
 #include "cat.h"
 #include "ota.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "usb_audio.h"
@@ -32,8 +34,14 @@
 #define CAT_POST_MAX_BYTES   192     // largest accepted POST /cat body, including the NUL
 #define CAT_JSON_BYTES       1152    // GET /cat response
 #define STREAM_READ_TIMEOUT  pdMS_TO_TICKS(200)
-#define KEEPALIVE_IDLE_READS 5       // idle reads (about 1 s) before a keep-alive silence block is sent
+#define KEEPALIVE_IDLE_READS 5       // idle waits (about 1 s) before a keep-alive silence block is sent
 #define KEEPALIVE_FRAMES     64      // length of that block in audio frames
+// Audio buffer between the USB reader and the network sender. A Wi-Fi / TCP stall then delays the audio
+// instead of losing it: while the sender is blocked, the reader keeps draining the radio into this buffer.
+// It lives in PSRAM when the board has it; without PSRAM a short internal buffer is used.
+#define STREAM_BUF_MS        2000
+#define STREAM_BUF_MS_SMALL  250
+#define USB_READ_BYTES       2048    // one read from the USB audio driver
 #define WAV_HEADER_SIZE      44
 
 extern const char index_html_start[] asm("_binary_index_html_start");
@@ -61,6 +69,101 @@ static uint8_t s_chunk[STREAM_CHUNK_BYTES];
 #define SLOW_SEND_US 100000   // a chunk send that blocks this long means TCP/Wi-Fi back-pressure
 static volatile uint32_t s_st_chunks;       // chunks sent
 static volatile uint32_t s_st_usb_timeouts; // 200 ms without USB audio data
+static volatile uint32_t s_st_buf_ms;       // capacity of the stream buffer
+static volatile uint32_t s_st_buf_max_ms;   // most audio held in it (how long the longest stall was, roughly)
+static volatile uint32_t s_st_overflows;    // times it filled up and the oldest audio was dropped
+
+// Single reader (USB, core 0) / single sender (network, core 1) byte FIFO, protected by a mutex.
+// The stream is a byte stream of whole frames; dropping is done in whole frames, so the alignment the
+// client expects is kept.
+typedef struct {
+    uint8_t *data;
+    size_t size;                 // multiple of frame_bytes
+    size_t head;                 // next write
+    size_t tail;                 // next read
+    size_t fill;
+    uint32_t frame_bytes;
+    uint32_t bytes_per_ms;
+    SemaphoreHandle_t lock;
+    TaskHandle_t sender;
+    volatile bool stop;          // set by the sender: the reader must finish
+    volatile bool reader_done;   // set by the reader as its last action
+    volatile bool device_gone;   // the USB audio device went away
+} audio_fifo_t;
+
+static audio_fifo_t s_fifo;
+static uint8_t s_usb_read_buf[USB_READ_BYTES];
+
+static void fifo_write(audio_fifo_t *f, const uint8_t *src, size_t n)
+{
+    if (n > f->size) {                          // cannot happen with USB_READ_BYTES, but stay safe
+        src += n - f->size;
+        n = f->size;
+    }
+    xSemaphoreTake(f->lock, portMAX_DELAY);
+    const size_t space = f->size - f->fill;
+    if (n > space) {
+        // Full: drop the oldest audio, in whole frames, to keep the latency bounded
+        size_t drop = ((n - space + f->frame_bytes - 1) / f->frame_bytes) * f->frame_bytes;
+        if (drop > f->fill) {
+            drop = f->fill;
+        }
+        f->tail = (f->tail + drop) % f->size;
+        f->fill -= drop;
+        s_st_overflows++;
+    }
+    const size_t first = (n < f->size - f->head) ? n : f->size - f->head;
+    memcpy(f->data + f->head, src, first);
+    memcpy(f->data, src + first, n - first);
+    f->head = (f->head + n) % f->size;
+    f->fill += n;
+    const uint32_t ms = (uint32_t)(f->fill / f->bytes_per_ms);
+    if (ms > s_st_buf_max_ms) {
+        s_st_buf_max_ms = ms;
+    }
+    xSemaphoreGive(f->lock);
+}
+
+static size_t fifo_read(audio_fifo_t *f, uint8_t *dst, size_t max)
+{
+    xSemaphoreTake(f->lock, portMAX_DELAY);
+    const size_t n = (f->fill < max) ? f->fill : max;
+    const size_t first = (n < f->size - f->tail) ? n : f->size - f->tail;
+    memcpy(dst, f->data + f->tail, first);
+    memcpy(dst + first, f->data, n - first);
+    f->tail = (f->tail + n) % f->size;
+    f->fill -= n;
+    xSemaphoreGive(f->lock);
+    return n;
+}
+
+/** Drains the radio's USB audio into the FIFO, whatever the network is doing */
+static void usb_reader_task(void *arg)
+{
+    audio_fifo_t *f = (audio_fifo_t *)arg;
+    while (!f->stop) {
+        uint32_t n = 0;
+        const esp_err_t r = usb_audio_read(s_usb_read_buf, sizeof(s_usb_read_buf), &n, STREAM_READ_TIMEOUT);
+        if (r == ESP_ERR_TIMEOUT) {
+            s_st_usb_timeouts++;
+            continue;
+        }
+        if (r != ESP_OK) {
+            f->device_gone = true;
+            break;
+        }
+        if (n > sizeof(s_usb_read_buf)) {
+            n = sizeof(s_usb_read_buf);
+        }
+        if (n > 0) {
+            fifo_write(f, s_usb_read_buf, n);
+            xTaskNotifyGive(f->sender);
+        }
+    }
+    f->reader_done = true;
+    xTaskNotifyGive(f->sender);
+    vTaskDelete(NULL);
+}
 static volatile uint32_t s_st_slow_sends;   // sends slower than SLOW_SEND_US
 static volatile uint32_t s_st_max_send_ms;  // slowest send
 static volatile uint32_t s_st_starts;       // streams started since boot
@@ -148,33 +251,70 @@ static void stream_task(void *arg)
 
     usb_audio_flush();   // start from live audio, not stale buffered data
     s_st_chunks = s_st_usb_timeouts = s_st_slow_sends = s_st_max_send_ms = 0;
+    s_st_buf_max_ms = s_st_overflows = 0;
     s_st_starts++;
-    ESP_LOGI(TAG, "Stream started (%s)", ctx->wav ? "wav" : "pcm");
-    uint32_t idle_reads = 0;
+
+    // The FIFO between the USB reader and this task
+    audio_fifo_t *f = &s_fifo;
+    const uint32_t bytes_per_ms = (ctx->fmt.sample_rate * frame_bytes + 999) / 1000;
+    size_t buf_ms = STREAM_BUF_MS;
+    size_t size = ((bytes_per_ms * buf_ms) / frame_bytes) * frame_bytes;
+    uint8_t *data = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (data == NULL) {
+        buf_ms = STREAM_BUF_MS_SMALL;
+        size = ((bytes_per_ms * buf_ms) / frame_bytes) * frame_bytes;
+        data = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (f->lock == NULL) {
+        f->lock = xSemaphoreCreateMutex();
+    }
+    if (data == NULL || f->lock == NULL) {
+        ESP_LOGE(TAG, "No memory for the stream buffer");
+        err = ESP_ERR_NO_MEM;
+    } else {
+        f->data = data;
+        f->size = size;
+        f->head = f->tail = f->fill = 0;
+        f->frame_bytes = frame_bytes;
+        f->bytes_per_ms = bytes_per_ms;
+        f->sender = xTaskGetCurrentTaskHandle();
+        f->stop = false;
+        f->reader_done = false;
+        f->device_gone = false;
+        s_st_buf_ms = (uint32_t)buf_ms;
+        ulTaskNotifyTake(pdTRUE, 0);
+        // Core 0 with the USB host; above the httpd task so a slow network never starves it
+        if (xTaskCreatePinnedToCore(usb_reader_task, "usb_rd", 3072, f, 6, NULL, 0) != pdPASS) {
+            ESP_LOGE(TAG, "Could not start the USB reader");
+            f->reader_done = true;
+            err = ESP_ERR_NO_MEM;
+        }
+    }
+    ESP_LOGI(TAG, "Stream started (%s), buffer %u ms in %s", ctx->wav ? "wav" : "pcm", (unsigned)buf_ms,
+             (data != NULL && esp_ptr_external_ram(data)) ? "PSRAM" : "internal RAM");
+
+    uint32_t idle_waits = 0;
     while (err == ESP_OK) {
-        uint32_t n = 0;
-        esp_err_t r = usb_audio_read(s_chunk, chunk_bytes, &n, STREAM_READ_TIMEOUT);
-        if (r == ESP_ERR_TIMEOUT) {
-            s_st_usb_timeouts++;
-            // Without USB audio nothing is sent, so a vanished client would never be noticed and
-            // s_stream_active would stay set, rejecting every later stream until reboot. Send a short
-            // block of silence about once a second: the failed send ends the task.
-            if (++idle_reads >= KEEPALIVE_IDLE_READS) {
-                idle_reads = 0;
-                const uint32_t silence = (KEEPALIVE_FRAMES * frame_bytes < chunk_bytes) ? KEEPALIVE_FRAMES * frame_bytes
-                                                                                         : chunk_bytes;
-                memset(s_chunk, 0, silence);
-                err = httpd_resp_send_chunk(req, (const char *)s_chunk, silence);
+        const size_t n = fifo_read(f, s_chunk, chunk_bytes);
+        if (n == 0) {
+            if (f->reader_done) {
+                break;   // device gone (the FIFO is empty)
+            }
+            if (ulTaskNotifyTake(pdTRUE, STREAM_READ_TIMEOUT) == 0) {
+                // Without audio nothing is sent, so a vanished client would never be noticed and
+                // s_stream_active would stay set, rejecting every later stream until reboot. Send a short
+                // block of silence about once a second: the failed send ends the task.
+                if (++idle_waits >= KEEPALIVE_IDLE_READS) {
+                    idle_waits = 0;
+                    const uint32_t silence = (KEEPALIVE_FRAMES * frame_bytes < chunk_bytes) ? KEEPALIVE_FRAMES * frame_bytes
+                                                                                             : chunk_bytes;
+                    memset(s_chunk, 0, silence);
+                    err = httpd_resp_send_chunk(req, (const char *)s_chunk, silence);
+                }
             }
             continue;
         }
-        idle_reads = 0;
-        if (r != ESP_OK) {
-            break;   // device gone
-        }
-        if (n > chunk_bytes) {
-            n = chunk_bytes;   // never send more than the buffer holds
-        }
+        idle_waits = 0;
         const int64_t t0 = esp_timer_get_time();
         err = httpd_resp_send_chunk(req, (const char *)s_chunk, n);
         const int64_t dt = esp_timer_get_time() - t0;
@@ -186,6 +326,18 @@ static void stream_task(void *arg)
             s_st_max_send_ms = (uint32_t)(dt / 1000);
         }
     }
+
+    // Stop the reader and wait for it before the buffer is freed (it notices within one read timeout)
+    f->stop = true;
+    for (int i = 0; i < 20 && !f->reader_done; i++) {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));
+    }
+    if (f->reader_done) {
+        free(f->data);
+    } else {
+        ESP_LOGE(TAG, "USB reader did not stop: keeping its buffer");   // never freed under a running task
+    }
+    f->data = NULL;
     ESP_LOGI(TAG, "Stream ended");
 
     httpd_resp_send_chunk(req, NULL, 0);
@@ -303,7 +455,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[640];
+    char json[768];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -321,7 +473,8 @@ static esp_err_t status_handler(httpd_req_t *req)
                       ",\"uptime_s\":%lu,\"heap_free\":%lu,\"heap_min\":%lu,\"heap_block\":%lu,"
                       "\"int_free\":%lu,\"int_min\":%lu,\"int_block\":%lu,\"rssi\":%d,"
                       "\"conn_opened\":%lu,\"conn_closed\":%lu,"
-                      "\"stream\":{\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu}}",
+                      "\"stream\":{\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
+                      "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu}}",
                       (unsigned long)(esp_timer_get_time() / 1000000),
                       (unsigned long)esp_get_free_heap_size(),
                       (unsigned long)esp_get_minimum_free_heap_size(),
@@ -333,7 +486,8 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)s_st_conn_opened, (unsigned long)s_st_conn_closed,
                       (unsigned long)s_st_starts, (unsigned long)s_st_chunks,
                       (unsigned long)s_st_usb_timeouts, (unsigned long)s_st_slow_sends,
-                      (unsigned long)s_st_max_send_ms);
+                      (unsigned long)s_st_max_send_ms,
+                      (unsigned long)s_st_buf_ms, (unsigned long)s_st_buf_max_ms, (unsigned long)s_st_overflows);
     }
     return send_json(req, json, n, sizeof(json));
 }
