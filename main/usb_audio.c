@@ -27,8 +27,11 @@
 #include "usb/uac_host.h"
 #include "usb_audio.h"
 
-#define USB_HOST_TASK_PRIORITY  5
-#define UAC_TASK_PRIORITY       5
+// Above the stream's USB reader (6), the web server and LwIP (18), below the Wi-Fi driver (23): the
+// isochronous transfers must be handed back to the controller on time or audio packets are lost.
+// Both tasks only move small buffers, so they cost little CPU.
+#define USB_HOST_TASK_PRIORITY  20
+#define UAC_TASK_PRIORITY       20
 #define MANAGER_TASK_PRIORITY   4
 #define PREFERRED_BITS          16
 #define MAX_LOCK_WAIT_MS        500
