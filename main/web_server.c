@@ -39,7 +39,7 @@
 // Audio buffer between the USB reader and the network sender. A Wi-Fi / TCP stall then delays the audio
 // instead of losing it: while the sender is blocked, the reader keeps draining the radio into this buffer.
 // It lives in PSRAM when the board has it; without PSRAM a short internal buffer is used.
-#define STREAM_BUF_MS        2000
+#define STREAM_BUF_MS        1500    // the browser plays at most about 1.2 s + 0.35 s behind anyway
 #define STREAM_BUF_MS_SMALL  250
 #define USB_READ_BYTES       2048    // one read from the USB audio driver
 #define WAV_HEADER_SIZE      44
