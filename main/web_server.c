@@ -19,6 +19,7 @@
 #include "esp_check.h"
 #include "esp_https_server.h"
 #include "esp_system.h"
+#include "esp_random.h"
 #include "build_info.h"
 #include "acc_scope.h"
 #include "cat.h"
@@ -34,7 +35,9 @@
 #include "usb_audio.h"
 #include "web_auth.h"
 #include "web_server.h"
+#include "web_session_diag.h"
 
+#define WEB_CORE             0
 #define STREAM_CHUNK_BYTES   4096
 #define CAT_POST_MAX_BYTES   192     // largest accepted POST /cat body, including the NUL
 #define CAT_JSON_BYTES       1344    // GET /cat response
@@ -303,27 +306,7 @@ static volatile uint32_t s_st_slow_sends;   // sends slower than SLOW_SEND_US
 static volatile uint32_t s_st_max_send_ms;  // slowest send
 static volatile uint32_t s_st_starts;       // streams started since boot
 
-// Connection diagnostics: every new TLS session costs tens of KB of internal RAM while it is set up,
-// so /status reports how many sessions were opened and closed since boot
-static volatile uint32_t s_st_conn_opened;
-static volatile uint32_t s_st_conn_closed;
-
-static void session_closed(void *ctx)
-{
-    (void)ctx;
-    s_st_conn_closed++;
-}
-
-/** Call at the start of a handler: counts the session the first time it sends a request */
-static void note_session(httpd_req_t *req)
-{
-    static const char marker = 1;
-    const int fd = httpd_req_to_sockfd(req);
-    if (httpd_sess_get_ctx(req->handle, fd) == NULL) {
-        httpd_sess_set_ctx(req->handle, fd, (void *)&marker, session_closed);
-        s_st_conn_opened++;
-    }
-}
+static uint32_t s_boot_id;
 
 static void put_le32(uint8_t *p, uint32_t v)
 {
@@ -490,8 +473,8 @@ static void stream_task(void *arg)
     }
     f->data = NULL;
     const uint64_t usb_in_dhz = usb_input_rate_dhz();
-    ESP_LOGI(TAG, "Stream ended (%s), chunks=%lu, usb_in_hz=%lu.%lu, usb_bus_resets=%lu",
-             f->device_gone ? "USB input read failed" : esp_err_to_name(err),
+    ESP_LOGI(TAG, "Stream ended (%s), fd=%d, chunks=%lu, usb_in_hz=%lu.%lu, usb_bus_resets=%lu",
+             f->device_gone ? "USB input read failed" : esp_err_to_name(err), httpd_req_to_sockfd(req),
              (unsigned long)s_st_chunks, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10),
              (unsigned long)usb_audio_bus_resets());
 
@@ -503,7 +486,6 @@ static void stream_task(void *arg)
 
 static esp_err_t start_stream(httpd_req_t *req, bool wav)
 {
-    note_session(req);
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
         return ESP_OK;
     }
@@ -548,7 +530,7 @@ static esp_err_t start_stream(httpd_req_t *req, bool wav)
     s_ctx = (stream_ctx_t) {.req = async_req, .wav = wav, .fmt = fmt, .out_rate = out_rate, .decim = decim};
     // TLS record encryption runs in this task, so it needs more stack than plain HTTP
     // Core 1: keep TLS encryption and sending away from Wi-Fi / USB, which run on core 0
-    if (xTaskCreatePinnedToCore(stream_task, "stream", 8192, &s_ctx, 5, NULL, 1) != pdPASS) {
+    if (xTaskCreatePinnedToCore(stream_task, "stream", 8192, &s_ctx, 5, NULL, WEB_CORE) != pdPASS) {
         httpd_req_async_handler_complete(async_req);
         atomic_store(&s_stream_active, false);
         return ESP_FAIL;
@@ -630,7 +612,6 @@ static const char *tx_reason(const tx_state_t *tx, char formatted[32])
 
 static esp_err_t status_handler(httpd_req_t *req)
 {
-    note_session(req);
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
         return ESP_OK;
     }
@@ -651,13 +632,14 @@ static esp_err_t status_handler(httpd_req_t *req)
         char acc_reason[2 * sizeof(acc.reason) + 1];
         json_escape(acc.reason, acc_reason, sizeof(acc_reason));
         const uint64_t usb_in_dhz = usb_input_rate_dhz();
+        const web_session_stats_t sessions = web_session_stats();
         wifi_ap_record_t ap;
         const int rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
         // heap_* include PSRAM when it is enabled; int_* are the internal RAM only
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"uptime_s\":%lu,\"heap_free\":%lu,\"heap_min\":%lu,\"heap_block\":%lu,"
+                      ",\"boot_id\":%lu,\"uptime_s\":%lu,\"heap_free\":%lu,\"heap_min\":%lu,\"heap_block\":%lu,"
                       "\"int_free\":%lu,\"int_min\":%lu,\"int_block\":%lu,\"rssi\":%d,"
-                      "\"conn_opened\":%lu,\"conn_closed\":%lu,"
+                      "\"conn_opened\":%u,\"conn_closed\":%u,\"conn_lru_purges\":%u,\"tls_handshake_errors\":%u,"
                       "\"stream\":{\"active\":%s,\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
                       "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu,"
                       "\"usb_bus_resets\":%lu},"
@@ -665,7 +647,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       "\"age_ms\":%ld,\"last_len\":%lu,\"last_reject\":\"%s\","
                       "\"rej\":{\"length\":%lu,\"not_ftdx10\":%lu,\"vfo_copies\":%lu,\"vfo_range\":%lu,"
                       "\"span\":%lu,\"cat\":%lu},\"clients\":%lu}",
-                      (unsigned long)(esp_timer_get_time() / 1000000),
+                      (unsigned long)s_boot_id, (unsigned long)(esp_timer_get_time() / 1000000),
                       (unsigned long)esp_get_free_heap_size(),
                       (unsigned long)esp_get_minimum_free_heap_size(),
                       (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
@@ -673,7 +655,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                       (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       rssi,
-                      (unsigned long)s_st_conn_opened, (unsigned long)s_st_conn_closed,
+                      sessions.opened, sessions.closed, sessions.lru_purges, sessions.handshake_errors,
                       atomic_load(&s_stream_active) ? "true" : "false",
                       (unsigned long)s_st_starts, (unsigned long)s_st_chunks,
                       (unsigned long)s_st_usb_timeouts, (unsigned long)s_st_slow_sends,
@@ -753,7 +735,6 @@ static esp_err_t status_handler(httpd_req_t *req)
 
 static esp_err_t cat_handler(httpd_req_t *req)
 {
-    note_session(req);
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
         return ESP_OK;
     }
@@ -1251,19 +1232,23 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
         return ESP_OK;
     }
     web_auth_set_common_headers(req);
-    // The body may stay unread on an early error, so do not reuse the connection
-    httpd_resp_set_hdr(req, "Connection", "close");
-
+    // Close on a rejected or incomplete body. A fully consumed POST can reuse the session.
     if (!content_type_is_json(req)) {
+        httpd_resp_set_hdr(req, "Connection", "close");
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Content-Type must be application/json");
     }
     if (req->content_len >= CAT_POST_MAX_BYTES) {
+        httpd_resp_set_hdr(req, "Connection", "close");
         return httpd_resp_send_err(req, HTTPD_413_CONTENT_TOO_LARGE, "Request body is too large");
     }
 
     char buf[CAT_POST_MAX_BYTES];
     cat_req_t r;
-    if (!read_body(req, buf, sizeof(buf)) || !parse_cat_request(buf, &r)) {
+    if (!read_body(req, buf, sizeof(buf))) {
+        httpd_resp_set_hdr(req, "Connection", "close");
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request body");
+    }
+    if (!parse_cat_request(buf, &r)) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request");
     }
 
@@ -1298,7 +1283,6 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
 #define CATLOG_MAX 64
 static esp_err_t catlog_handler(httpd_req_t *req)
 {
-    note_session(req);
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
         return ESP_OK;
     }
@@ -1349,6 +1333,7 @@ static esp_err_t reboot_handler(httpd_req_t *req)
     web_auth_set_common_headers(req);
     httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_set_type(req, "application/json");
+    web_session_close_reason(req, "reboot");
     ESP_LOGI(TAG, "Reboot requested via web API");
     httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"Rebooting...\"}", HTTPD_RESP_USE_STRLEN);
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -1420,6 +1405,7 @@ static void scope_task(void *arg)
     }
     free(row);
     free(rec);
+    ESP_LOGI(TAG, "Scope ended (%s), fd=%d", esp_err_to_name(err), httpd_req_to_sockfd(req));
     httpd_resp_send_chunk(req, NULL, 0);
     httpd_req_async_handler_complete(req);
     free(sc);
@@ -1429,7 +1415,6 @@ static void scope_task(void *arg)
 
 static esp_err_t scope_handler(httpd_req_t *req)
 {
-    note_session(req);
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
         return ESP_OK;
     }
@@ -1458,7 +1443,7 @@ static esp_err_t scope_handler(httpd_req_t *req)
     sc->req = async_req;
     sc->min_interval_ms = 1000 / fps - 5;      // a little slack, so 25 fps really gets every frame
     // Core 1 with the web server; TLS record encryption runs in this task, hence the stack
-    if (xTaskCreatePinnedToCore(scope_task, "scope", 6144, sc, 5, NULL, 1) != pdPASS) {
+    if (xTaskCreatePinnedToCore(scope_task, "scope", 6144, sc, 5, NULL, WEB_CORE) != pdPASS) {
         httpd_req_async_handler_complete(async_req);
         free(sc);
         atomic_fetch_sub(&s_scope_clients, 1);
@@ -1557,16 +1542,17 @@ static void redirect_server_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
-    cfg.ctrl_port = 32769;                      // the HTTPS server uses the default 32768
+    cfg.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT;    // HTTPS reserves ESP_HTTPD_DEF_CTRL_PORT + 1
     cfg.max_open_sockets = 2;
     cfg.max_uri_handlers = 2;
     cfg.lru_purge_enable = true;
-    cfg.core_id = 1;
+    cfg.core_id = WEB_CORE;
     cfg.stack_size = 3072;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     httpd_handle_t h = NULL;
-    if (httpd_start(&h, &cfg) != ESP_OK) {
-        ESP_LOGW(TAG, "HTTP redirect server on port 80 did not start (HTTPS still works)");
+    const esp_err_t err = httpd_start(&h, &cfg);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "HTTP redirect port %u (control %u): %s", cfg.server_port, cfg.ctrl_port, esp_err_to_name(err));
         return;
     }
     static const httpd_uri_t any_get = {.uri = "/*", .method = HTTP_GET, .handler = redirect_handler};
@@ -1578,7 +1564,9 @@ static void redirect_server_start(void)
 
 esp_err_t web_server_start(void)
 {
+    s_boot_id = esp_random();
     httpd_ssl_config_t config = HTTPD_SSL_CONFIG_DEFAULT();
+    config.user_cb = web_session_tls_event;
     config.servercert = servercert_pem_start;
     config.servercert_len = servercert_pem_end - servercert_pem_start;
     config.prvtkey_pem = prvtkey_pem_start;
@@ -1589,8 +1577,8 @@ esp_err_t web_server_start(void)
     // sockets until complete. The default of 4 fills up immediately, causing "Too many retries".
     // 8 is enough for a single browser client (page + /status poll + /cat poll + stream).
     config.httpd.max_open_sockets = 10;   // + the ACC scope stream (two browsers at most)
-    // Run the httpd task (including TLS handshakes) on core 1, away from Wi-Fi / USB on core 0
-    config.httpd.core_id = 1;
+    // Keep HTTPS and lwIP off the core that services USB audio and ACC.
+    config.httpd.core_id = WEB_CORE;
     // The TLS handshake runs synchronously inside the single httpd task. Chrome (especially on Android)
     // opens speculative connections that never send a ClientHello; with the 10 s default each of them
     // freezes the whole server and the real request ends in ERR_TOO_MANY_RETRIES. A normal handshake
@@ -1623,6 +1611,8 @@ esp_err_t web_server_start(void)
         ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &uris[i]), TAG, "register handler");
     }
     ESP_RETURN_ON_ERROR(ota_register(server), TAG, "register ota");
+    ESP_RETURN_ON_ERROR(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, web_session_unknown_route), TAG, "trace 404");
+    ESP_RETURN_ON_ERROR(httpd_register_err_handler(server, HTTPD_405_METHOD_NOT_ALLOWED, web_session_unknown_route), TAG, "trace 405");
     ESP_LOGI(TAG, "HTTPS server started on port %d", config.port_secure);
     redirect_server_start();
     web_auth_log_startup();

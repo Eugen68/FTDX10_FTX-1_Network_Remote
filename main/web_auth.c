@@ -18,6 +18,7 @@
 #include "mbedtls/constant_time.h"
 #include "app_config.h"
 #include "web_auth.h"
+#include "web_session_diag.h"
 
 #define AUTH_FIELD_BYTES    128                       // decoded "user:password", zero padded for a fixed-size compare
 #define AUTH_HEADER_BYTES   (AUTH_FIELD_BYTES * 4 / 3 + 16)
@@ -309,6 +310,7 @@ static bool csrf_ok(httpd_req_t *req)
 
 bool web_auth_check(httpd_req_t *req, web_auth_realm_t realm, bool state_changing)
 {
+    web_session_request(req);
     app_config_t cfg;
     app_config_get(&cfg);
 
@@ -364,13 +366,19 @@ bool web_auth_ws_check(httpd_req_t *req)
 {
     char query[16];
     if (!app_config_tx_enabled()) {
+        web_session_request(req);
+        web_session_close_reason(req, "ws-disabled");
         return reject(req, "403 Forbidden", "Remote TX is disabled");
     }
     if (!request_origin_ok(req, true)) {
+        web_session_request(req);
+        web_session_close_reason(req, "ws-origin");
         ESP_LOGW(TAG, "TX WebSocket rejected: origin check");
         return reject(req, "403 Forbidden", "TX WebSocket origin refused");
     }
     if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK || strcmp(query, "csrf=ftx1") != 0) {
+        web_session_request(req);
+        web_session_close_reason(req, "ws-csrf");
         ESP_LOGW(TAG, "TX WebSocket rejected: missing or invalid CSRF marker");
         return reject(req, "403 Forbidden", "TX WebSocket CSRF marker refused");
     }

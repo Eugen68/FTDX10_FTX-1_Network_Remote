@@ -1570,6 +1570,18 @@
 </div>
 
 <script>
+let rebooting = false;
+let devicePoll = Promise.resolve();
+
+function pollDeviceJson(uri) {
+  const request = devicePoll.then(async () => {
+    const res = await fetch(uri, { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  });
+  devicePoll = request.catch(() => {});
+  return request;
+}
 // Headers for every state changing request. The firmware refuses POST /cat without the marker header:
 // a browser adds a custom header to a cross-site request only after a CORS preflight, which the
 // firmware never allows, so other web sites cannot drive the radio through this page's login.
@@ -1856,7 +1868,7 @@ wfSourceSel.addEventListener('change', () => {
 });
 
 function accAvailable() { return document.body.classList.contains('has-acc'); }
-function accWanted() { return accAvailable() && wfSourceSel.value !== 'audio' && document.visibilityState === 'visible'; }
+function accWanted() { return !rebooting && accAvailable() && wfSourceSel.value !== 'audio' && document.visibilityState === 'visible'; }
 function accFresh() { return accState.row && performance.now() - accState.lastMs < 2000; }
 function accShouldDraw() {
   if (!accAvailable()) return false;
@@ -2621,24 +2633,56 @@ function stop() {
 
 btnPlay.addEventListener('click', () => { if (abort) stop(); else start(); });
 
+async function rebootStatus() {
+  const res = await fetch('/status', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+  if (!res.ok) throw new Error('Status HTTP ' + res.status);
+  const status = await res.json();
+  if (!Number.isInteger(status.boot_id)) throw new Error('Boot ID unavailable');
+  return status.boot_id;
+}
+
+async function waitForReboot(previousBoot) {
+  const deadline = performance.now() + 45000;
+  while (performance.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      if (await rebootStatus() !== previousBoot) return;
+    } catch (e) {
+      // The interface can be unreachable until Wi-Fi and HTTPS are ready.
+    }
+  }
+  throw new Error('Device did not report a new boot within 45 seconds');
+}
+
 const btnReboot = document.getElementById('btnReboot');
 if (btnReboot) {
   btnReboot.addEventListener('click', async () => {
-    if (confirm("Reboot the ESP32-S3 device?\n(Audio streaming and connection will restart in a few seconds)")) {
-      try {
-        if (abort) stop();
-        btnReboot.disabled = true;
-        btnReboot.textContent = 'REBOOTING...';
-        await fetch('/reboot', {
-          method: 'POST',
-          headers: CAT_POST_HEADERS
-        });
-      } catch (e) {
-        // Network error is expected as device reboots immediately
+    if (rebooting || !confirm('Reboot the ESP32-S3 device?')) return;
+    rebooting = true;
+    btnReboot.disabled = true;
+    btnReboot.textContent = 'REBOOTING...';
+    btnReboot.title = 'Waiting for the device to restart';
+    try {
+      if (abort) stop();
+      accManage();
+      const previousBoot = await rebootStatus();
+      const response = await fetch('/reboot', {
+        method: 'POST',
+        headers: CAT_POST_HEADERS,
+        signal: AbortSignal.timeout(7500)
+      }).catch(() => null);     // The restart can interrupt the response.
+      if (response && !response.ok) {
+        throw new Error(await response.text() || 'Reboot HTTP ' + response.status);
       }
-      setTimeout(() => {
-        location.reload();
-      }, 3500);
+      await waitForReboot(previousBoot);
+      location.reload();
+    } catch (e) {
+      rebooting = false;
+      btnReboot.disabled = false;
+      btnReboot.textContent = 'RETRY REBOOT';
+      btnReboot.title = e.message;
+      alert(e.message);
+      accManage();
     }
   });
 }
@@ -3727,14 +3771,13 @@ freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
     list.appendChild(row);
   }
   async function poll() {
-    if (busy || !section.open || pause.checked) return;
+    if (rebooting || busy || !section.open || pause.checked) return;
     busy = true;
     try {
       const nearBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 20;
       for (let i = 0; i < 4; i++) {   // catch up after a pause, 64 entries per answer
-        const res = await fetch('/catlog?since=' + seq, { cache: 'no-store' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const d = await res.json();
+        if (rebooting) return;
+        const d = await pollDeviceJson('/catlog?since=' + seq);
         if (d.seq < seq) { list.textContent = ''; }          // the device rebooted: start over
         d.e.forEach(add);
         seq = d.seq;
@@ -3935,9 +3978,12 @@ const SM_POLL_MS = 400;
 let lastCatWriteError = 0;
 
 async function smPoll() {
+  if (rebooting) {
+    setTimeout(smPoll, SM_POLL_MS);
+    return;
+  }
   try {
-    const res = await fetch('/cat', { cache: 'no-store' });
-    const d = await res.json();
+    const d = await pollDeviceJson('/cat');
     const now = Date.now();
     applyRigProfile(d);
     if (Number.isInteger(d.write_error_seq) && d.write_error_seq !== lastCatWriteError) {
@@ -4226,8 +4272,7 @@ function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
 }
 
 // ---- Firmware build time (shown in the rig header) ----
-fetch('/status', { cache: 'no-store' })
-  .then((r) => r.json())
+pollDeviceJson('/status')
   .then((s) => {
     if (typeof s.build === 'string' && /^[A-Za-z0-9 :]{1,32}$/.test(s.build)) {
       const ver = typeof s.version === 'string' && /^[0-9.]{1,12}$/.test(s.version) ? 'V' + s.version + '  ' : '';
