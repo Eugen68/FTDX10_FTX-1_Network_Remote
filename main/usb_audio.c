@@ -25,6 +25,7 @@
 #include "esp_check.h"
 #include "usb/usb_host.h"
 #include "usb/uac_host.h"
+#include "esp_timer.h"
 #include "usb_audio.h"
 
 // Above the stream's USB reader (6), the web server and LwIP (18), below the Wi-Fi driver (23): the
@@ -192,11 +193,81 @@ static void handle_disconnected(uac_host_device_handle_t handle)
     uac_host_device_close(handle);
 }
 
+// ---- Recovery when the radio's audio does not come up ----------------------------------------------------
+// Seen on the bench: after a reset of this board at an unlucky moment (right after flashing) CAT came back
+// but the radio's USB audio did not, until a second reset. Here: when devices are on the bus but no audio
+// input streams for RECOVER_AFTER_MS, the root port is powered off and on again. The radio's hub and
+// everything behind it then get a bus reset and enumerate afresh, as after a manual reset.
+#define RECOVER_AFTER_MS     10000
+#define RECOVER_GAP_FAST_MS  15000    // between the first RECOVER_FAST attempts
+#define RECOVER_GAP_SLOW_MS  120000   // after that
+#define RECOVER_FAST         3
+
+static int64_t s_dev_seen_ms;        // when devices were first seen without audio, 0 = not now
+static int64_t s_last_recover_ms;
+static int s_recover_attempts;
+static volatile uint32_t s_bus_resets;
+
+static void bus_power_cycle(uint32_t off_ms)
+{
+    usb_host_lib_set_root_port_power(false);
+    vTaskDelay(pdMS_TO_TICKS(off_ms));
+    usb_host_lib_set_root_port_power(true);
+}
+
+static void recover_tick(void)
+{
+    const int64_t now = esp_timer_get_time() / 1000;
+    bool streaming;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    streaming = s_streaming;
+    xSemaphoreGive(s_lock);
+    if (streaming) {
+        s_dev_seen_ms = 0;
+        s_recover_attempts = 0;
+        return;
+    }
+    uint8_t addrs[8];
+    int count = 0;
+    if (usb_host_device_addr_list_fill(sizeof(addrs), addrs, &count) != ESP_OK || count == 0) {
+        s_dev_seen_ms = 0;                 // nothing plugged in: nothing to recover
+        return;
+    }
+    if (s_dev_seen_ms == 0) {
+        s_dev_seen_ms = now;
+        return;
+    }
+    const int64_t gap = s_recover_attempts < RECOVER_FAST ? RECOVER_GAP_FAST_MS : RECOVER_GAP_SLOW_MS;
+    if (now - s_dev_seen_ms < RECOVER_AFTER_MS || (s_last_recover_ms && now - s_last_recover_ms < gap)) {
+        return;
+    }
+    s_recover_attempts++;
+    s_bus_resets++;
+    s_last_recover_ms = now;
+    s_dev_seen_ms = 0;
+    ESP_LOGW(TAG, "%d USB device(s) but no audio input for %d s: resetting the USB bus (attempt %d)", count,
+             RECOVER_AFTER_MS / 1000, s_recover_attempts);
+    bus_power_cycle(500);
+}
+
+void usb_audio_prepare_restart(void)
+{
+    ESP_LOGI(TAG, "Disconnecting the USB bus before the restart");
+    usb_host_lib_set_root_port_power(false);   // the radio sees its devices unplugged, then a clean start
+    vTaskDelay(pdMS_TO_TICKS(300));
+}
+
+uint32_t usb_audio_bus_resets(void)
+{
+    return s_bus_resets;
+}
+
 static void manager_task(void *arg)
 {
     evt_t evt;
     while (1) {
-        if (xQueueReceive(s_evt_queue, &evt, portMAX_DELAY) != pdTRUE) {
+        if (xQueueReceive(s_evt_queue, &evt, pdMS_TO_TICKS(1000)) != pdTRUE) {
+            recover_tick();
             continue;
         }
         switch (evt.type) {

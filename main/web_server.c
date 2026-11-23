@@ -625,7 +625,8 @@ static esp_err_t status_handler(httpd_req_t *req)
                       "\"int_free\":%lu,\"int_min\":%lu,\"int_block\":%lu,\"rssi\":%d,"
                       "\"conn_opened\":%lu,\"conn_closed\":%lu,"
                       "\"stream\":{\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
-                      "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu},"
+                      "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu,"
+                      "\"usb_bus_resets\":%lu},"
                       "\"acc\":{\"enabled\":%s,\"fps\":%lu,\"frames\":%lu,\"accepted\":%lu,\"rejected\":%lu,"
                       "\"age_ms\":%ld,\"last_len\":%lu,\"last_reject\":\"%s\","
                       "\"rej\":{\"length\":%lu,\"not_ftdx10\":%lu,\"vfo_copies\":%lu,\"vfo_range\":%lu,"
@@ -644,6 +645,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)s_st_max_send_ms,
                       (unsigned long)s_st_buf_ms, (unsigned long)s_st_buf_max_ms, (unsigned long)s_st_overflows,
                       (unsigned long)s_st_rate, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10),
+                      (unsigned long)usb_audio_bus_resets(),
                       acc.enabled ? "true" : "false", (unsigned long)acc.fps, (unsigned long)acc.frames,
                       (unsigned long)acc.accepted, (unsigned long)acc.rejected,
                       acc.age_ms == UINT32_MAX ? -1L : (long)acc.age_ms, (unsigned long)acc.last_len, acc_reason,
@@ -1027,6 +1029,7 @@ static esp_err_t reboot_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "Reboot requested via web API");
     httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"Rebooting...\"}", HTTPD_RESP_USE_STRLEN);
     vTaskDelay(pdMS_TO_TICKS(500));
+    usb_audio_prepare_restart();
     esp_restart();
     return ESP_OK;
 }

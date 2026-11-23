@@ -59,6 +59,15 @@ esp_err_t usb_audio_read(uint8_t *buf, uint32_t size, uint32_t *bytes_read, Tick
  */
 void usb_audio_flush(void);
 
+/**
+ * @brief Power the USB root port off before a software restart, so the radio sees its devices unplugged
+ *        and enumerates afresh after the restart (a restart alone left the radio's audio stuck at times)
+ */
+void usb_audio_prepare_restart(void);
+
+/** @brief How often the USB bus was reset because the radio's audio did not come up */
+uint32_t usb_audio_bus_resets(void);
+
 #ifdef __cplusplus
 }
 #endif
