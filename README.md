@@ -52,6 +52,8 @@ The firmware recognises the radio from its answer to the CAT command `ID;` and l
 | BUSY / TX state | `RI0;` | `BY;` and the read form `TX;` |
 | S-meter | `RM0;` (MAIN and SUB) | `RM1;` |
 | Menu item written in DATA-USB | `EX010411` USB OUT LEVEL = 100 | `EX010413` DATA OUT LEVEL = 100 |
+| USB audio (measured) | UAC 1.0, 48 kHz / 44.1 kHz, 2 ch, 16 bit; L = MAIN, R = SUB | UAC 1.0, 18 formats from 8 to 48 kHz, 1 or 2 ch, 8 or 16 bit; 48 kHz 2 ch 16 bit is used |
+| USB descriptor | fits the default 256-byte control buffer | larger: needs `CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048` (set in `sdkconfig.defaults`) |
 
 Both radios connect the same way: one USB cable carries the two CP210x serial ports (the CAT one is found automatically) and the USB audio codec. The browser page adapts to the radio it reports: on the FTDX10 the SUB receiver controls, the SUB scope and the SUB FT8 decoder are hidden, and the 2 m / 70 cm band buttons and the C4FM modes are not shown.
 
