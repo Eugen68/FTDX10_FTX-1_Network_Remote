@@ -113,6 +113,17 @@ not merge yourself.
    build or a mock.
 9. **Update the README** security section in the same PR that adds the capability: what can transmit, how
    it is enabled, every automatic stop. Keep "Do not expose it to the Internet".
+10. **SWR protection (owner's requirement), from phase 2 on in every phase that puts out RF.** While
+    KEYED, the device reads the SWR meter (`RM6;`) and the power meter (`RM5;`) every 100-200 ms (read
+    forms only, per profile, in the allow-list) and unkeys with the reason `SWR x.x:1` when:
+    - **absolute limit**: the SWR is at or above `swr_max` (NVS, serial menu, default **3.0**, range
+      1.5-3.0); or
+    - **rise during the transmission**: after 1 s of steady transmission a reference SWR is taken (the
+      mean of three readings); if the SWR then rises by **0.5 or more** above it (again the mean of three
+      readings), the transmission is stopped even below `swr_max` (antenna, connector or tuner failing).
+    The checks apply only while PO is above a minimum (an SWR reading without power means nothing); a
+    missing or stale SWR or PO reading while KEYED and above the minimum power also unkeys. The radio's
+    own Hi-SWR flag (`RI0;`, phase 1) stays as the second protection. Section 2 has the meter scales.
 
 Owner's hardware test rule for every TX phase: **dummy load, minimum power, the owner at the radio**.
 
@@ -128,6 +139,7 @@ Owner's hardware test rule for every TX phase: **dummy load, minimum power, the 
 | SSB mode (voice) | `EX010113` MOD SOURCE, `EX010114` USB MOD GAIN | `EX010113` SSB MOD SOURCE (1 REAR), `EX010114` REAR SELECT (1 USB), `EX010115` RPORT GAIN |
 | AM / FM | AM `EX010213/14`; FM `EX010312` MOD SOURCE, `EX010313` USB MOD GAIN | AM `EX010213`, `EX010215`, `EX010216`; FM `EX010312`, `EX010314`, `EX010315` |
 | Meters while transmitting | `RM` items 4 ALC, 5 PO, 6 SWR (`RM4;` etc.; check the answer format) | same item numbers |
+| SWR meter scale (`RM6;`, 0-255) | to be measured (phase 2) | starting values as Hamlib uses for the FTDX10 / FTdx101, to be checked: 0 → 1.0, 26 → 1.2, 52 → 1.5, 89 → 2.0, 126 → 3.0, 173 → 4.0, 236 → 5.0 |
 | RX audio (measured) | UAC 1.0, 48 kHz, 2 ch (L = MAIN, R = SUB), 16 bit | not measured yet |
 | TX audio | **unknown: measure in phase 0** | unknown |
 
@@ -196,10 +208,22 @@ Goal: know whether the radio exposes a UAC **output** (speaker) interface and it
 - Make sure RX streaming keeps working while TX audio runs (the radio may mute its RX audio while
   transmitting; that is fine). Watch `stream.usb_in_hz` in `/status`.
 - `/status`: `tx.audio_rate`, `tx.underruns`, `tx.written_bytes`.
+- **SWR protection (section 1.10)** active from this phase: `swr_max` in NVS and the serial menu; RM5 / RM6
+  polled while KEYED; a per-profile calibration table (0-255 → SWR, linear interpolation between points);
+  absolute and rise checks gated on PO; `/status` and the TX panel show the SWR, the raw RM6 value and PO.
+  Host tests with a fake clock: limit, rise, PO below the minimum, missing or stale readings.
 - Owner test: in DATA-USB with MOD SOURCE = USB, the tone gives ALC/PO on the radio's meter; adjust USB MOD
   GAIN; two-tone looks clean on a receiver if he has one. Report the levels.
+- **Owner SWR calibration and test** (dummy load, low power, the tone): with the 50 ohm dummy load the SWR
+  should read about 1:1; with a 100 ohm load about 2:1, with 150 ohm about 3:1. Note the radio's own SWR
+  reading and the raw RM6 value for each, on the FTX-1 and the FTDX10, and correct the calibration tables.
+  Then check that the 150 ohm load (or `swr_max` set below the reading) stops the transmission with the
+  `SWR x.x:1` reason, and that changing the load during a transmission (rise) stops it too.
 
 ### Phase 3: voice from the browser microphone
+
+The SWR protection of phase 2 (section 1.10) stays active for voice; at the pauses between words PO drops
+below the minimum, so the checks hold their last state instead of stopping on missing readings.
 
 - Page: port `MicCapture` from ftx1-pult `web/worklets.js` (AudioWorklet, 16 kHz, 20 ms frames, Float32 →
   int16). Send binary frames over `/ws` only while KEYED and owner: `[0x03][rate/8000][int16 LE …]`,
@@ -215,6 +239,9 @@ Goal: know whether the radio exposes a UAC **output** (speaker) interface and it
   over to check the time limit.
 
 ### Phase 4: FT8 transmit generated on the device
+
+The SWR protection (section 1.10) applies to every FT8 transmission; a stop for SWR also disarms the
+automatic transmission for the next slots until the operator enables it again.
 
 - Time: SNTP (`esp_netif_sntp`, server configurable, default `pool.ntp.org`); `/status` shows sync state and
   offset. No FT8 TX while not synced.
