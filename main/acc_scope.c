@@ -140,22 +140,24 @@ static void acc_task(void *arg)
             cat_state_t st;
             cat_get_state(&st);
             const uint32_t cat_hz = (st.connected && st.rig == CAT_RIG_FTDX10) ? st.freq_main : 0;
-            const char *why = acc_parse_frame(s_bufs[i], len, cat_hz, now_ms, &s_last_cat_match_ms, &row);
+            const acc_reject_t why = acc_parse_frame(s_bufs[i], len, cat_hz, now_ms, &s_last_cat_match_ms, &row);
             queue_buf(i);                    // hand the buffer back before the slower bookkeeping
             xSemaphoreTake(s_lock, portMAX_DELAY);
             s_stats.frames++;
             s_stats.last_len = (uint32_t)len;
-            if (why == NULL) {
+            if (why == ACC_OK) {
                 row.seq = s_row.seq + 1;
                 row.ms = (uint32_t)now_ms;
                 s_row = row;
                 s_stats.accepted++;
-                s_stats.reason[0] = '\0';
                 s_last_accept_ms = now_ms;
                 window_accepted++;
             } else {
                 s_stats.rejected++;
-                strlcpy(s_stats.reason, why, sizeof(s_stats.reason));
+                if ((int)why < 7) {
+                    s_stats.rej[why]++;
+                }
+                strlcpy(s_stats.reason, acc_reject_text(why), sizeof(s_stats.reason));
             }
             xSemaphoreGive(s_lock);
         }
@@ -193,6 +195,11 @@ bool acc_scope_get_row(acc_scope_row_t *out)
     }
     xSemaphoreGive(s_lock);
     return have;
+}
+
+uint32_t acc_scope_seq(void)
+{
+    return s_row.seq;                  // a 32-bit read: atomic on this CPU
 }
 
 void acc_scope_get_stats(acc_scope_stats_t *out)

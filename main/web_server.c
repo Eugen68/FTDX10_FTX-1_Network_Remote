@@ -74,6 +74,7 @@ typedef struct {
 
 static const char *TAG = "web_server";
 static atomic_bool s_stream_active;
+static atomic_uint s_scope_clients;   // open /scope.bin streams (ACC scope)
 static stream_ctx_t s_ctx;
 static uint8_t s_chunk[STREAM_CHUNK_BYTES];
 
@@ -594,7 +595,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1024];
+    char json[1280];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -626,7 +627,9 @@ static esp_err_t status_handler(httpd_req_t *req)
                       "\"stream\":{\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
                       "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu},"
                       "\"acc\":{\"enabled\":%s,\"fps\":%lu,\"frames\":%lu,\"accepted\":%lu,\"rejected\":%lu,"
-                      "\"age_ms\":%ld,\"last_len\":%lu,\"reason\":\"%s\"}}",
+                      "\"age_ms\":%ld,\"last_len\":%lu,\"last_reject\":\"%s\","
+                      "\"rej\":{\"length\":%lu,\"not_ftdx10\":%lu,\"vfo_copies\":%lu,\"vfo_range\":%lu,"
+                      "\"span\":%lu,\"cat\":%lu},\"clients\":%lu}}",
                       (unsigned long)(esp_timer_get_time() / 1000000),
                       (unsigned long)esp_get_free_heap_size(),
                       (unsigned long)esp_get_minimum_free_heap_size(),
@@ -643,7 +646,10 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)s_st_rate, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10),
                       acc.enabled ? "true" : "false", (unsigned long)acc.fps, (unsigned long)acc.frames,
                       (unsigned long)acc.accepted, (unsigned long)acc.rejected,
-                      acc.age_ms == UINT32_MAX ? -1L : (long)acc.age_ms, (unsigned long)acc.last_len, acc_reason);
+                      acc.age_ms == UINT32_MAX ? -1L : (long)acc.age_ms, (unsigned long)acc.last_len, acc_reason,
+                      (unsigned long)acc.rej[1], (unsigned long)acc.rej[2], (unsigned long)acc.rej[3],
+                      (unsigned long)acc.rej[4], (unsigned long)acc.rej[5], (unsigned long)acc.rej[6],
+                      (unsigned long)atomic_load(&s_scope_clients));
     }
     return send_json(req, json, n, sizeof(json));
 }
@@ -1025,6 +1031,116 @@ static esp_err_t reboot_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// ---- GET /scope.bin: the FTDX10's ACC scope rows as a binary stream ------------------------------------
+// One record per accepted frame (up to 25 a second, ?fps=N for fewer), all little-endian:
+//   u8 0xAC, u8 version 1, u8 placement (0 Center 1 Cursor 2 Fix), u8 scope mode byte,
+//   u32 seq, u32 vfo_hz, u32 center_hz, u32 span_hz, u32 marker_hz, u16 points, u16 0,
+//   then `points` levels (0-255, higher is stronger). points = 0 is a keep-alive sent about once a second
+//   while no frame arrives, so a vanished client is noticed.
+#define SCOPE_REC_HDR      28
+#define SCOPE_MAX_CLIENTS  2
+
+typedef struct {
+    httpd_req_t *req;
+    uint32_t min_interval_ms;
+} scope_ctx_t;
+
+static void put_scope_header(uint8_t *h, const acc_scope_row_t *r, uint16_t points)
+{
+    h[0] = 0xAC;
+    h[1] = 1;
+    h[2] = r ? r->placement : 3;
+    h[3] = r ? r->scope_mode : 0;
+    put_le32(h + 4, r ? r->seq : 0);
+    put_le32(h + 8, r ? r->vfo_hz : 0);
+    put_le32(h + 12, r ? r->center_hz : 0);
+    put_le32(h + 16, r ? r->span_hz : 0);
+    put_le32(h + 20, r ? r->marker_hz : 0);
+    put_le16(h + 24, points);
+    put_le16(h + 26, 0);
+}
+
+static void scope_task(void *arg)
+{
+    scope_ctx_t *sc = (scope_ctx_t *)arg;
+    httpd_req_t *req = sc->req;
+    acc_scope_row_t *row = heap_caps_malloc(sizeof(*row), MALLOC_CAP_8BIT);
+    uint8_t *rec = heap_caps_malloc(SCOPE_REC_HDR + ACC_SCOPE_POINTS, MALLOC_CAP_8BIT);
+    esp_err_t err = (row && rec) ? ESP_OK : ESP_ERR_NO_MEM;
+    if (err == ESP_OK) {
+        httpd_resp_set_type(req, "application/octet-stream");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        web_auth_set_common_headers(req);
+    }
+    uint32_t last_seq = 0;
+    int64_t last_sent_ms = 0;
+    int64_t last_any_ms = esp_timer_get_time() / 1000;
+    while (err == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        const int64_t now = esp_timer_get_time() / 1000;
+        const uint32_t seq = acc_scope_seq();
+        if (seq != last_seq && seq != 0 && now - last_sent_ms >= sc->min_interval_ms && acc_scope_get_row(row)) {
+            last_seq = row->seq;
+            last_sent_ms = now;
+            last_any_ms = now;
+            put_scope_header(rec, row, ACC_SCOPE_POINTS);
+            memcpy(rec + SCOPE_REC_HDR, row->level, ACC_SCOPE_POINTS);
+            err = httpd_resp_send_chunk(req, (const char *)rec, SCOPE_REC_HDR + ACC_SCOPE_POINTS);
+        } else if (now - last_any_ms >= 1000) {
+            last_any_ms = now;
+            put_scope_header(rec, NULL, 0);
+            err = httpd_resp_send_chunk(req, (const char *)rec, SCOPE_REC_HDR);
+        }
+    }
+    free(row);
+    free(rec);
+    httpd_resp_send_chunk(req, NULL, 0);
+    httpd_req_async_handler_complete(req);
+    free(sc);
+    atomic_fetch_sub(&s_scope_clients, 1);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t scope_handler(httpd_req_t *req)
+{
+    note_session(req);
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
+        return ESP_OK;
+    }
+    uint32_t fps = 25;
+    char query[32], value[8];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "fps", value, sizeof(value)) == ESP_OK) {
+        const unsigned long v = strtoul(value, NULL, 10);
+        if (v >= 1 && v <= 25) {
+            fps = (uint32_t)v;
+        }
+    }
+    if (atomic_fetch_add(&s_scope_clients, 1) >= SCOPE_MAX_CLIENTS) {
+        atomic_fetch_sub(&s_scope_clients, 1);
+        web_auth_set_common_headers(req);
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_send(req, "Too many scope clients", HTTPD_RESP_USE_STRLEN);
+    }
+    scope_ctx_t *sc = calloc(1, sizeof(*sc));
+    httpd_req_t *async_req = NULL;
+    if (sc == NULL || httpd_req_async_handler_begin(req, &async_req) != ESP_OK) {
+        free(sc);
+        atomic_fetch_sub(&s_scope_clients, 1);
+        return httpd_resp_send_500(req);
+    }
+    sc->req = async_req;
+    sc->min_interval_ms = 1000 / fps - 5;      // a little slack, so 25 fps really gets every frame
+    // Core 1 with the web server; TLS record encryption runs in this task, hence the stack
+    if (xTaskCreatePinnedToCore(scope_task, "scope", 6144, sc, 5, NULL, 1) != pdPASS) {
+        httpd_req_async_handler_complete(async_req);
+        free(sc);
+        atomic_fetch_sub(&s_scope_clients, 1);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
 static esp_err_t pcm_handler(httpd_req_t *req)
 {
     return start_stream(req, false);
@@ -1146,7 +1262,7 @@ esp_err_t web_server_start(void)
     // Chrome (mobile/desktop) opens several parallel connections and TLS handshakes occupy
     // sockets until complete. The default of 4 fills up immediately, causing "Too many retries".
     // 8 is enough for a single browser client (page + /status poll + /cat poll + stream).
-    config.httpd.max_open_sockets = 8;
+    config.httpd.max_open_sockets = 10;   // + the ACC scope stream (two browsers at most)
     // Run the httpd task (including TLS handshakes) on core 1, away from Wi-Fi / USB on core 0
     config.httpd.core_id = 1;
     // The TLS handshake runs synchronously inside the single httpd task. Chrome (especially on Android)
@@ -1171,6 +1287,7 @@ esp_err_t web_server_start(void)
         {.uri = "/cat",        .method = HTTP_POST, .handler = cat_post_handler},
         {.uri = "/reboot",     .method = HTTP_POST, .handler = reboot_handler},
         {.uri = "/catlog",     .method = HTTP_GET,  .handler = catlog_handler},
+        {.uri = "/scope.bin",  .method = HTTP_GET,  .handler = scope_handler},
         {.uri = "/stream.pcm", .method = HTTP_GET,  .handler = pcm_handler},
         {.uri = "/stream.wav", .method = HTTP_GET,  .handler = wav_handler},
     };

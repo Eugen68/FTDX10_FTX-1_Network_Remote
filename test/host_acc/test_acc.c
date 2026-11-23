@@ -37,9 +37,9 @@ static int run_capture(const char *dir, const cap_t *c, uint8_t *first_frame)
         if (buf[i + 2] == 'F') {
             const uint8_t *f = buf + i + 8;
             if (frames == 0 && first_frame) memcpy(first_frame, f, len < 4096 ? len : 4096);
-            const char *why = acc_parse_frame(f, len, c->cat_hz, frames * 40, &last, &row);
+            const acc_reject_t why = acc_parse_frame(f, len, c->cat_hz, frames * 40, &last, &row);
             frames++;
-            if (why == NULL) {
+            if (why == ACC_OK) {
                 accepted++;
                 CHECK(row.span_hz == c->span && row.placement == c->placement, "%s: span %u placement %u",
                       c->file, row.span_hz, row.placement);
@@ -47,7 +47,7 @@ static int run_capture(const char *dir, const cap_t *c, uint8_t *first_frame)
                 const uint32_t lo = row.center_hz - row.span_hz / 2, hi = row.center_hz + row.span_hz / 2;
                 CHECK(row.vfo_hz >= lo && row.vfo_hz <= hi, "%s: VFO %u outside the span %u-%u", c->file, row.vfo_hz, lo, hi);
             } else {
-                printf("  %s frame %d rejected: %s\n", c->file, frames, why);
+                printf("  %s frame %d rejected: %s\n", c->file, frames, acc_reject_text(why));
             }
         }
         i += 8 + len;
@@ -72,21 +72,21 @@ int main(int argc, char **argv)
     // Rejections, starting from a real frame
     acc_scope_row_t row;
     int64_t last = -1;
-    CHECK(acc_parse_frame(f, 4095, 14074000, 0, &last, &row) != NULL, "short frame accepted");
+    CHECK(acc_parse_frame(f, 4095, 14074000, 0, &last, &row) != ACC_OK, "short frame accepted");
     uint8_t g[4096];
     memcpy(g, f, sizeof g); g[3060] = 1;
     last = -1;
-    CHECK(acc_parse_frame(g, 4096, 14074000, 0, &last, &row) != NULL, "data after 3049 accepted");
+    CHECK(acc_parse_frame(g, 4096, 14074000, 0, &last, &row) != ACC_OK, "data after 3049 accepted");
     memcpy(g, f, sizeof g); g[3041] ^= 1;
     last = -1;
-    CHECK(acc_parse_frame(g, 4096, 14074000, 0, &last, &row) != NULL, "differing VFO copies accepted");
+    CHECK(acc_parse_frame(g, 4096, 14074000, 0, &last, &row) != ACC_OK, "differing VFO copies accepted");
     // CAT disagreement: accepted during the grace period, rejected after 2 s
     last = -1;
-    CHECK(acc_parse_frame(f, 4096, 7074000, 0, &last, &row) == NULL, "grace period");
-    CHECK(acc_parse_frame(f, 4096, 7074000, 1500, &last, &row) == NULL, "still in grace");
-    CHECK(acc_parse_frame(f, 4096, 7074000, 2500, &last, &row) != NULL, "lasting CAT mismatch accepted");
-    CHECK(acc_parse_frame(f, 4096, 14074500, 2600, &last, &row) == NULL, "match again (within 2 kHz) rejected");
-    CHECK(acc_parse_frame(f, 4096, 0, 9000, &last, &row) == NULL, "CAT unknown should not reject");
+    CHECK(acc_parse_frame(f, 4096, 7074000, 0, &last, &row) == ACC_OK, "grace period");
+    CHECK(acc_parse_frame(f, 4096, 7074000, 1500, &last, &row) == ACC_OK, "still in grace");
+    CHECK(acc_parse_frame(f, 4096, 7074000, 2500, &last, &row) != ACC_OK, "lasting CAT mismatch accepted");
+    CHECK(acc_parse_frame(f, 4096, 14074500, 2600, &last, &row) == ACC_OK, "match again (within 2 kHz) rejected");
+    CHECK(acc_parse_frame(f, 4096, 0, 9000, &last, &row) == ACC_OK, "CAT unknown should not reject");
     // Levels are inverted
     CHECK(row.level[0] == 255 - f[0] && row.level[849] == 255 - f[849], "inversion");
 

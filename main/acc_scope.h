@@ -50,7 +50,9 @@ typedef struct {
     uint32_t fps;                      /*!< Accepted frames in the last second */
     uint32_t age_ms;                   /*!< Since the last accepted frame (UINT32_MAX = never) */
     uint32_t last_len;                 /*!< Length of the last transfer, bytes */
-    char reason[48];                   /*!< Why the last frame was rejected, "" if it was accepted */
+    char reason[48];                   /*!< Why the most recent rejected frame was rejected, "" if none yet */
+    uint32_t rej[7];                   /*!< Rejections per reason: [1] length, [2] not FTDX10, [3] VFO copies,
+                                            [4] VFO range, [5] span / placement, [6] VFO differs from CAT */
 } acc_scope_stats_t;
 
 /**
@@ -61,6 +63,9 @@ esp_err_t acc_scope_init(void);
 
 /** @brief Copy the latest accepted row; false if there is none yet */
 bool acc_scope_get_row(acc_scope_row_t *out);
+
+/** @brief Sequence number of the latest accepted row (0 = none yet); cheap, for polling */
+uint32_t acc_scope_seq(void);
 
 /** @brief Copy the statistics */
 void acc_scope_get_stats(acc_scope_stats_t *out);

@@ -406,6 +406,37 @@ Example with an external player (48 kHz / 16 bit / mono):
 ffplay -nodisp -tls_verify 0 https://ftx-1c.local/stream.wav
 ```
 
+## The FTDX10's own scope from the ACC socket
+
+With an FTDX10, the page can show the radio's own spectrum and waterfall (up to a 1 MHz span) instead of the audio
+scope. The radio clocks its scope out of the ACC socket as SPI, 25 frames a second; this board reads it directly.
+The frame layout is the one measured on an FTDX10 for the [Yaesu ACC Spectrum](https://github.com/mm5agm/Yaesu_ACC_Spectrum)
+project (`docs/protocol.md`); the code here is written from that description.
+
+**Wiring** (the same as that project's board): each signal through **470 ohm**, ground direct.
+
+| ACC pin | Signal | GPIO |
+|---|---|---|
+| 2 | GND | GND |
+| 3 | DATA1 | 14 (unused) |
+| 4 | DATA2 | 11 |
+| 5 | CLOCK | 10 |
+| 6 | CS | 13 |
+| 11 | CNT RX | 39 |
+| 12 | CNT TX | 38 |
+
+Link GPIO38 and GPIO39 (the free ends of the pin 11 and 12 resistors) with a wire: the radio's once-a-second
+`alive` then comes back and the radio streams. **Never connect ACC pins 1, 7, 8 (13.8 V), 9 (PTT), 10 and 13.**
+Plug and unplug only with the radio's power supply off. Read that project's `docs/fuse-risk.md` first.
+
+- The pins are set up only after CAT has identified an **FTDX10**; with any other radio nothing is done with them.
+- Each frame is checked (length, FTDX10 layout, both VFO copies, span and placement, and the VFO against CAT's
+  frequency); `/status` → `acc` shows frames per second, accepted / rejected per reason.
+- `GET /scope.bin` streams the rows (`?fps=1-25`). In the page, the MAIN scope has a **waterfall source** selector:
+  **Auto** (the ACC scope when its data arrives, otherwise the audio scope), **Audio**, **ACC**. Click or tap on the
+  ACC waterfall to tune MAIN there. The display scale follows the noise floor and the strongest signals.
+- Span, placement (Center / Cursor / Fix) and LEVEL are set on the radio; keep LEVEL at about +20.
+
 ## Pseudo squelch (in the browser)
 
 The USB audio of the Yaesu FTX-1 may ignore the radio's own squelch (noise comes out even with no signal).

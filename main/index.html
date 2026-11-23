@@ -616,6 +616,13 @@
     align-items: center;
     gap: .25rem;
   }
+  .acc-only { display: none; }
+  body.has-acc .acc-only { display: inline-flex; }
+  .acc-src-wrap { align-items: center; gap: .35rem; margin: 0 .4rem; }
+  .wf-source { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .6rem; padding: 0 .2rem; }
+  .acc-info { font-size: .58rem; color: #fbbf24; font-weight: bold; white-space: nowrap; }
+  .scope-container.acc-on .scope-spans [data-span], .scope-container.acc-on .scope-span-label { display: none; }
+  .scope-container.acc-on .scope-canvas { cursor: crosshair; height: 210px; }
   #streamRateSel { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .58rem; padding: 0 .2rem; margin-right: .4rem; }
   .catlog-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; padding: .4rem .6rem; font-size: .7rem; color: #94a3b8; }
   .catlog-legend span { margin-right: .5rem; }
@@ -1197,6 +1204,14 @@
         <div class="scope-container">
           <div class="scope-header">
             <span class="scope-title main-tag">MAIN SCOPE</span>
+            <span class="acc-only acc-src-wrap" title="Waterfall source. Auto: the radio's own scope from the ACC socket when its data arrives (FTDX10), otherwise the audio scope. Audio: always the audio scope. ACC: always the radio's scope">
+              <select id="wfSource" class="wf-source">
+                <option value="auto">Auto</option>
+                <option value="audio">Audio</option>
+                <option value="acc">ACC</option>
+              </select>
+              <span id="accInfo" class="acc-info"></span>
+            </span>
             <div class="scope-spans" data-scope="Main">
               <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecMain" title="Save the last 30 s of MAIN as WAV">REC</button>
               <button type="button" class="scope-span-btn scope-mute-btn" id="btnMuteMain" aria-pressed="false" title="Mute MAIN audio (scope and FT8 keep running)">MUTE</button>
@@ -1778,6 +1793,122 @@ let currentAudioRate = 48000;
 // Manual notch position per receiver, drawn over the scope: { on, hz } (hz = audio frequency, 0 = unknown)
 const notchMarks = [{ on: false, hz: 0 }, { on: false, hz: 0 }];
 
+// ---- ACC scope (FTDX10): the radio's own spectrum from its ACC socket, through GET /scope.bin ----
+const ACC_POINTS = 850, ACC_CANVAS_H = 220;
+// Display scale: from about the noise floor (median of the refined row) to a little over the
+// strongest signals (99th percentile), both followed slowly. Measured on an FTDX10 at LEVEL +20 the noise
+// sits around 47-74 and FT8 signals reach about 92 (one step is about 0.42 dB), so a fixed scale would
+// squash everything; at least ACC_MIN_RANGE steps are always shown.
+const ACC_MIN_RANGE = 24;
+const ACC_REFINE = 0.25;               // share of each new frame in the average (smaller = smoother, slower)
+const accState = { row: null, lastMs: 0, refined: new Float32Array(ACC_POINTS), floor: 0, range: 60, pending: [],
+                    note: '', hoverX: null, ctrl: null, frames: 0 };
+const wfSourceSel = document.getElementById('wfSource');
+try { const v = localStorage.getItem('ftx1.wfSource'); if (v) wfSourceSel.value = v; } catch (e) {}
+wfSourceSel.addEventListener('change', () => {
+  try { localStorage.setItem('ftx1.wfSource', wfSourceSel.value); } catch (e) {}
+  accManage();
+});
+
+function accAvailable() { return document.body.classList.contains('has-acc'); }
+function accWanted() { return accAvailable() && wfSourceSel.value !== 'audio' && document.visibilityState === 'visible'; }
+function accFresh() { return accState.row && performance.now() - accState.lastMs < 2000; }
+function accShouldDraw() {
+  if (!accAvailable()) return false;
+  if (wfSourceSel.value === 'acc') return true;
+  return wfSourceSel.value === 'auto' && accFresh();
+}
+function accTickStep(span) {
+  return ({1000: 200, 2000: 500, 5000: 1000, 10000: 2000, 20000: 5000, 50000: 10000, 100000: 20000,
+           200000: 50000, 500000: 100000, 1000000: 200000})[span] || span / 5;
+}
+function wfColour(val) {
+  let r = 0, g = 0, b = 0;
+  if (val < 60) b = val * 4;
+  else if (val < 120) { b = 255; g = (val - 60) * 4; }
+  else if (val < 180) { g = 255; r = (val - 120) * 4; b = 255 - r; }
+  else { r = 255; g = 255 - (val - 180) * 2; b = (val - 180) * 4; }
+  return [r, g, b];
+}
+
+function accOnRecord(dv, off, points) {
+  const rec = {
+    placement: dv.getUint8(off + 2), seq: dv.getUint32(off + 4, true), vfo: dv.getUint32(off + 8, true),
+    center: dv.getUint32(off + 12, true), span: dv.getUint32(off + 16, true), marker: dv.getUint32(off + 20, true),
+  };
+  const lv = new Uint8Array(dv.buffer, dv.byteOffset + off + 28, points).slice();
+  // Refine: a short average per point over the last few frames (25 a second), so the noise, which jumps
+  // by about +-13 steps from frame to frame, settles and weak signals stand out. Trace and waterfall use it.
+  const a = accState.row ? ACC_REFINE : 1;
+  for (let i = 0; i < ACC_POINTS; i++) accState.refined[i] += (lv[i] - accState.refined[i]) * a;
+  // Scale: floor under the 10th percentile, top over the 99th, both followed slowly (see ACC_MIN_RANGE)
+  const sorted = Float32Array.from(accState.refined).sort();
+  const p50 = sorted[Math.floor(ACC_POINTS * 0.5)], p99 = sorted[Math.floor(ACC_POINTS * 0.99)];
+  const floor = p50 - 3, range = Math.max(ACC_MIN_RANGE, (p99 + 6) - floor);
+  if (!accState.row) { accState.floor = floor; accState.range = range; }
+  accState.floor += (floor - accState.floor) * 0.05;
+  accState.range += (range - accState.range) * 0.05;
+  if (accState.pending.length < 50) accState.pending.push(Uint8Array.from(accState.refined, (v) => v + 0.5));
+  if (!accState.row || accState.row.center !== rec.center || accState.row.span !== rec.span) {
+    accState.pending.length = 0;                  // a new place: start the waterfall over
+    scopes[0] && scopes[0].clearWaterfall();
+  }
+  accState.row = rec;
+  accState.lastMs = performance.now();
+  accState.frames++;
+  const place = ['CENTER', 'CURSOR', 'FIX'][rec.placement] || '';
+  const spanTxt = rec.span >= 1000000 ? '1M' : (rec.span / 1000) + 'k';
+  document.getElementById('accInfo').textContent = 'ACC ' + spanTxt + ' ' + place;
+}
+
+async function accStreamLoop() {
+  const ctrl = accState.ctrl;
+  while (accState.ctrl === ctrl && !ctrl.signal.aborted) {
+    try {
+      const fps = BG_AUDIO ? 12 : 25;
+      const res = await fetch('/scope.bin?fps=' + fps, { signal: ctrl.signal, cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      accState.note = 'waiting for ACC data from the radio...';
+      const reader = res.body.getReader();
+      let buf = new Uint8Array(0);
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const nb = new Uint8Array(buf.length + value.length);
+        nb.set(buf); nb.set(value, buf.length);
+        buf = nb;
+        let off = 0;
+        const dv = new DataView(buf.buffer);
+        while (buf.length - off >= 28) {
+          if (buf[off] !== 0xAC) { off++; continue; }          // resync
+          const points = dv.getUint16(off + 24, true);
+          if (buf.length - off < 28 + points) break;
+          if (points === ACC_POINTS) accOnRecord(dv, off, points);
+          off += 28 + points;
+        }
+        buf = buf.slice(off);
+      }
+    } catch (e) {
+      if (ctrl.signal.aborted) return;
+      accState.note = 'ACC stream: ' + (e.message || e) + ', retrying';
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+
+function accManage() {
+  if (accWanted() && !accState.ctrl) {
+    accState.ctrl = new AbortController();
+    accStreamLoop();
+  } else if (!accWanted() && accState.ctrl) {
+    accState.ctrl.abort();
+    accState.ctrl = null;
+  }
+  if (!accAvailable()) document.getElementById('accInfo').textContent = '';
+}
+setInterval(accManage, 1000);
+document.addEventListener('visibilitychange', accManage);
+
 function makeScope(name, idx) {
   const canvas = document.getElementById('scopeCanvas' + name);
   const sctx = canvas.getContext('2d');
@@ -1818,7 +1949,125 @@ function makeScope(name, idx) {
     wfCtx.clearRect(0, 0, wfCanvas.width, wfCanvas.height);
   };
 
+  // ---- ACC (the radio's own scope) on the MAIN canvas ----
+  // While the ACC source is shown the canvas gets the scope's resolution (850 points) and more height;
+  // it goes back to the audio scope's size when the source changes back.
+  sc.source = 'audio';
+  const AUDIO_W = canvas.width, AUDIO_H = canvas.height;
+  sc.setSource = function (src) {
+    if (src === sc.source) return;
+    sc.source = src;
+    const acc = src === 'acc';
+    canvas.width = acc ? ACC_POINTS : AUDIO_W;
+    canvas.height = acc ? ACC_CANVAS_H : AUDIO_H;
+    wfCanvas.width = canvas.width;
+    wfCanvas.height = acc ? ACC_CANVAS_H : canvas.height / 2;
+    wfCtx.clearRect(0, 0, wfCanvas.width, wfCanvas.height);
+    canvas.closest('.scope-container').classList.toggle('acc-on', acc);
+  };
+  sc.renderAcc = function () {
+    const w = canvas.width, h = canvas.height;
+    const BAR_H = 16, specH = Math.round(h * 0.42), wfH = h - specH - BAR_H;
+    const r = accState.row;
+    sctx.fillStyle = '#020617';
+    sctx.fillRect(0, 0, w, h);
+    if (!r) {
+      sctx.fillStyle = '#94a3b8';
+      sctx.font = '12px monospace';
+      sctx.textAlign = 'center';
+      sctx.fillText(accState.note || 'waiting for ACC data from the radio...', w / 2, h / 2);
+      return;
+    }
+    const lo = accState.floor, range = accState.range;
+    const f0 = r.center - 425 * r.span / 791, f1 = r.center + 424 * r.span / 791;
+    const xOf = (hz) => (hz - f0) / (f1 - f0) * w;
+    const step = accTickStep(r.span);
+
+    // grid
+    sctx.strokeStyle = 'rgba(71, 85, 105, 0.8)';
+    sctx.lineWidth = 1;
+    for (let f = Math.ceil(f0 / step) * step; f <= f1; f += step) {
+      const x = Math.round(xOf(f)) + 0.5;
+      sctx.beginPath(); sctx.moveTo(x, 0); sctx.lineTo(x, specH); sctx.stroke();
+    }
+    // trace (refined levels)
+    const lv = accState.refined;
+    sctx.beginPath();
+    sctx.moveTo(0, specH);
+    for (let i = 0; i < ACC_POINTS; i++) {
+      const v = Math.max(0, Math.min(1, (lv[i] - lo) / range));
+      sctx.lineTo(i * w / (ACC_POINTS - 1), specH - v * (specH - 4));
+    }
+    sctx.lineTo(w, specH);
+    sctx.closePath();
+    const grad = sctx.createLinearGradient(0, 0, 0, specH);
+    grad.addColorStop(0, 'rgba(251, 191, 36, 0.85)');
+    grad.addColorStop(0.5, 'rgba(251, 191, 36, 0.3)');
+    grad.addColorStop(1, 'rgba(2, 6, 23, 0.05)');
+    sctx.fillStyle = grad;
+    sctx.fill();
+    sctx.strokeStyle = '#fbbf24';
+    sctx.lineWidth = 1.2;
+    sctx.stroke();
+
+    // waterfall: one line per new row from the radio
+    while (accState.pending.length) {
+      const row = accState.pending.shift();
+      wfCtx.drawImage(wfCanvas, 0, 1);
+      const img = wfCtx.createImageData(w, 1);
+      for (let i = 0; i < w; i++) {
+        let val = Math.max(0, Math.min(255, (row[i] - lo) * 255 / range));
+        if (wfBase > 0) val = Math.max(0, (val - wfBase) * 255 / (255 - wfBase));
+        const c = wfColour(val), o = i * 4;
+        img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 255;
+      }
+      wfCtx.putImageData(img, 0, 0);
+    }
+    sctx.drawImage(wfCanvas, 0, 0, w, wfH, 0, specH, w, wfH);
+
+    // VFO line and the passband marker
+    const xv = xOf(r.vfo);
+    sctx.strokeStyle = '#f43f5e';
+    sctx.lineWidth = 1.5;
+    sctx.beginPath(); sctx.moveTo(xv, 0); sctx.lineTo(xv, specH + wfH); sctx.stroke();
+    if (r.marker && r.marker !== r.vfo) {
+      const xm = xOf(r.marker);
+      sctx.setLineDash([3, 3]);
+      sctx.strokeStyle = 'rgba(244, 63, 94, 0.6)';
+      sctx.lineWidth = 1;
+      sctx.beginPath(); sctx.moveTo(xm, 0); sctx.lineTo(xm, specH); sctx.stroke();
+      sctx.setLineDash([]);
+    }
+    if (accState.hoverX !== null) {
+      const hz = f0 + accState.hoverX / w * (f1 - f0);
+      sctx.strokeStyle = 'rgba(226, 232, 240, 0.6)';
+      sctx.beginPath(); sctx.moveTo(accState.hoverX, 0); sctx.lineTo(accState.hoverX, specH + wfH); sctx.stroke();
+      sctx.font = 'bold 11px monospace';
+      sctx.fillStyle = '#e2e8f0';
+      sctx.textAlign = accState.hoverX > w - 90 ? 'right' : 'left';
+      sctx.fillText((hz / 1e6).toFixed(r.span <= 20000 ? 4 : 3), accState.hoverX + (accState.hoverX > w - 90 ? -4 : 4), 12);
+    }
+
+    // ruler in MHz
+    const barY = specH + wfH;
+    sctx.fillStyle = '#0a0f1d';
+    sctx.fillRect(0, barY, w, BAR_H);
+    sctx.font = '10px monospace';
+    sctx.fillStyle = '#94a3b8';
+    sctx.textAlign = 'center';
+    const dec = step < 1000 ? 4 : (step < 10000 ? 3 : (step < 100000 ? 2 : 1));
+    for (let f = Math.ceil(f0 / step) * step; f <= f1; f += step) {
+      const x = xOf(f);
+      if (x < 20 || x > w - 20) continue;
+      sctx.fillText((f / 1e6).toFixed(dec), x, h - 3);
+    }
+  };
+
   sc.render = function () {
+    if (idx === 0) {
+      sc.setSource(accShouldDraw() ? 'acc' : 'audio');
+      if (sc.source === 'acc') { sc.renderAcc(); return; }
+    }
     const w = canvas.width;
     const h = canvas.height;
     const BAR_H = 16; // frequency ruler under the waterfall
@@ -1988,6 +2237,24 @@ function makeScope(name, idx) {
 }
 
 const scopes = [makeScope('Main', 0), makeScope('Sub', 1)];
+
+// ACC: click (or tap) on the MAIN scope tunes MAIN to that frequency; the mouse shows where
+(function accPointer() {
+  const cv = document.getElementById('scopeCanvasMain');
+  const xOn = (e) => {
+    const b = cv.getBoundingClientRect();
+    return (e.clientX - b.left) / b.width * cv.width;
+  };
+  cv.addEventListener('pointermove', (e) => { accState.hoverX = scopes[0].source === 'acc' ? xOn(e) : null; });
+  cv.addEventListener('pointerleave', () => { accState.hoverX = null; });
+  cv.addEventListener('click', (e) => {
+    const r = accState.row;
+    if (scopes[0].source !== 'acc' || !r) return;
+    const f0 = r.center - 425 * r.span / 791, f1 = r.center + 424 * r.span / 791;
+    const hz = Math.round((f0 + xOn(e) / cv.width * (f1 - f0)) / 10) * 10;
+    if (hz > 30000 && hz < 75000000) setFreq(false, hz);
+  });
+})();
 
 function renderScope() {
   followModeSpan();
@@ -3440,6 +3707,7 @@ function applyRigProfile(d) {
 
   const single = d.dual_rx === false;
   document.body.classList.toggle('single-rx', single);
+  document.body.classList.toggle('has-acc', d.rig === 'FTDX10');   // the radio's own scope on its ACC socket
   document.getElementById('vfoLabelSub').textContent = single ? 'VFO-B' : 'SUB (VFO-B)';
   document.getElementById('cardTitleSub').textContent = single ? 'VFO-B' : 'SUB VFO-B';
   const subMeter = smHost.children[1];
