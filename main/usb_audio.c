@@ -25,7 +25,7 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_check.h"
-#include "soc/usb_reg.h"
+#include "soc/usb_dwc_struct.h"
 #include "usb/usb_host.h"
 #include "usb/usb_helpers.h"
 #include "usb/uac_host.h"
@@ -510,7 +510,7 @@ static void usb_lib_task(void *arg)
         },
     };
     ESP_ERROR_CHECK(usb_host_install(&host_config));
-    const unsigned fifo_depth = REG_GET_FIELD(USB_GHWCFG3_REG, USB_DFIFODEPTH);
+    const unsigned fifo_depth = USB_DWC.ghwcfg3_reg.dfifodepth;
     ESP_LOGI(TAG, "USB Host installed, FIFO lines: RX %u, NPTX %u, PTX %u, hardware depth %u",
              USB_RX_FIFO_LINES, USB_NPTX_FIFO_LINES, USB_PTX_FIFO_LINES, fifo_depth);
     ESP_LOGI(TAG, "FIFO MPS limits: IN %u B, bulk/control OUT %u B, periodic OUT %u B",
