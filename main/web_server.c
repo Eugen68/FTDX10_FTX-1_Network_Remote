@@ -595,7 +595,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1280];
+    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 128];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -630,7 +630,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       "\"acc\":{\"enabled\":%s,\"fps\":%lu,\"frames\":%lu,\"accepted\":%lu,\"rejected\":%lu,"
                       "\"age_ms\":%ld,\"last_len\":%lu,\"last_reject\":\"%s\","
                       "\"rej\":{\"length\":%lu,\"not_ftdx10\":%lu,\"vfo_copies\":%lu,\"vfo_range\":%lu,"
-                      "\"span\":%lu,\"cat\":%lu},\"clients\":%lu}}",
+                      "\"span\":%lu,\"cat\":%lu},\"clients\":%lu}",
                       (unsigned long)(esp_timer_get_time() / 1000000),
                       (unsigned long)esp_get_free_heap_size(),
                       (unsigned long)esp_get_minimum_free_heap_size(),
@@ -652,6 +652,24 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)acc.rej[1], (unsigned long)acc.rej[2], (unsigned long)acc.rej[3],
                       (unsigned long)acc.rej[4], (unsigned long)acc.rej[5], (unsigned long)acc.rej[6],
                       (unsigned long)atomic_load(&s_scope_clients));
+    }
+    if (n > 0 && (size_t)n < sizeof(json)) {
+        usb_audio_output_format_t output;
+        const bool present = usb_audio_get_output_format(&output);
+        char rates[11 * CONFIG_UAC_FREQ_NUM_MAX + 1] = {0};
+        size_t used = 0;
+        for (unsigned i = 0; i < output.rate_count; i++) {
+            used += snprintf(rates + used, sizeof(rates) - used, "%s%lu",
+                             i ? "," : "", (unsigned long)output.rates[i]);
+        }
+        char range[48] = {0};
+        if (output.rate_max > 0) {
+            snprintf(range, sizeof(range), ",\"rate_min\":%lu,\"rate_max\":%lu",
+                     (unsigned long)output.rate_min, (unsigned long)output.rate_max);
+        }
+        n += snprintf(json + n, sizeof(json) - n,
+                      ",\"tx_audio\":{\"present\":%s,\"rates\":[%s],\"channels\":%u,\"bits\":%u%s}}",
+                      present ? "true" : "false", rates, output.channels, output.bits, range);
     }
     return send_json(req, json, n, sizeof(json));
 }

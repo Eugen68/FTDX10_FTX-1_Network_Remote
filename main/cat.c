@@ -79,6 +79,7 @@
 #define CAT_BAUD            115200   // CAT-1 RATE of this radio
 #define CAT_TASK_PRIORITY   4
 #define POLL_PERIOD_MS      100
+#define RADIO_STATUS_MAX_AGE_US 1500000LL  // BUSY/TX is polled every five iterations
 #define ANSWER_TIMEOUT_MS   300
 #define TX_TIMEOUT_MS       200
 #define RX_BUF_BYTES        64
@@ -100,6 +101,7 @@ static const char *TAG = "cat";
 static SemaphoreHandle_t s_lock;       // protects s_state
 static cat_state_t s_state;
 static int64_t s_last_answer_us;
+static int64_t s_last_tx_status_us;     // protected by s_lock
 static int64_t s_last_set_main_sq_us;
 static int64_t s_last_set_sub_sq_us;
 static int64_t s_last_set_notch_us[2];       // [MAIN, SUB]: last local BP write (ON/OFF or frequency)
@@ -594,6 +596,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_state.connected = false;
         s_state.busy = false;
         s_state.tx = false;
+        s_last_tx_status_us = 0;
         s_state.s_main = 0;
         s_state.s_sub = 0;
         s_state.freq_main = 0;
@@ -613,7 +616,8 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
 #define RI_P8_INDEX 9
 static bool parse_ri(const char *a, bool *busy, bool *tx)
 {
-    if (strlen(a) != RI_LEN || strncmp(a, "RI0", 3) != 0 || a[RI_LEN - 1] != ';') {
+    if (strlen(a) != RI_LEN || strncmp(a, "RI0", 3) != 0 || a[RI_LEN - 1] != ';' ||
+            a[RI_P4_INDEX] < '0' || a[RI_P4_INDEX] > '2') {
         return false;
     }
     *busy = a[RI_P8_INDEX] == '1';
@@ -858,12 +862,13 @@ static void handle_cat_packet(const char *pkt)
     }
 
     bool ri_busy = false, ri_tx = false;
-    if (parse_ri(pkt, &ri_busy, &ri_tx)) {
+    if (s_rig->has_ri && parse_ri(pkt, &ri_busy, &ri_tx)) {
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
             s_state.busy = ri_busy;
             s_state.tx = ri_tx;
             s_state.connected = true;
             s_last_answer_us = esp_timer_get_time();
+            s_last_tx_status_us = s_last_answer_us;
             xSemaphoreGive(s_lock);
         }
         return;
@@ -881,11 +886,12 @@ static void handle_cat_packet(const char *pkt)
     }
 
     bool tx_on = false;
-    if (parse_tx(pkt, &tx_on)) {
+    if (s_rig->has_by_tx && parse_tx(pkt, &tx_on)) {
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
             s_state.tx = tx_on;
             s_state.connected = true;
             s_last_answer_us = esp_timer_get_time();
+            s_last_tx_status_us = s_last_answer_us;
             xSemaphoreGive(s_lock);
         }
         return;
@@ -1164,6 +1170,18 @@ void cat_get_state(cat_state_t *state)
     *state = s_state;
     state->age_ms = s_state.connected ? (uint32_t)((esp_timer_get_time() - s_last_answer_us) / 1000) : 0;
     xSemaphoreGive(s_lock);
+}
+
+bool cat_radio_rx_confirmed(void)
+{
+    if (!s_lock) {
+        return false;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const bool confirmed = s_state.connected && !s_disconnected && !s_state.tx && s_last_tx_status_us > 0 &&
+                           esp_timer_get_time() - s_last_tx_status_us <= RADIO_STATUS_MAX_AGE_US;
+    xSemaphoreGive(s_lock);
+    return confirmed;
 }
 
 /** Queue exactly one allow-listed command (with its ';'). Private on purpose: callers use the typed functions. */
