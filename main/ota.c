@@ -19,6 +19,7 @@
 #include "esp_system.h"
 #include "web_auth.h"
 #include "ota.h"
+#include "usb_audio.h"
 
 #define OTA_CHUNK_BYTES      4096
 #define OTA_MAX_TIMEOUTS     5                    // consecutive 5 s receive timeouts before giving up
@@ -107,6 +108,7 @@ static esp_err_t ota_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "Wrote %u bytes to %s, rebooting", (unsigned)total, part->label);
     httpd_resp_send(req, "Update OK, rebooting\n", HTTPD_RESP_USE_STRLEN);
     vTaskDelay(REBOOT_DELAY);   // let the response leave before the connection is dropped
+    usb_audio_prepare_restart();   // let the radio see its USB devices unplugged before the new firmware
     esp_restart();
     return ESP_OK;
 }

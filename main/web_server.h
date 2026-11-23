@@ -24,6 +24,7 @@ extern "C" {
  *                     streams at a lower rate (low-pass filtered), for a weak Wi-Fi link
  *  - GET /stream.wav  WAV container with open-ended length
  *  - GET /catlog      The recent CAT traffic (?since=N), for the page's CAT LOG panel
+ *  - GET /scope.bin   The FTDX10's ACC scope rows as a binary stream (?fps=1-25)
  *
  * Only one stream client is served at a time.
  */
