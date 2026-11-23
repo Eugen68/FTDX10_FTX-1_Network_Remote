@@ -995,12 +995,16 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     }
 
     const tx_state_t state = tx_get_state();
+    cat_state_t cat;
+    cat_get_state(&cat);
+    const char *tx_vfo = cat.tx_vfo == CAT_TX_VFO_MAIN ? "main" :
+                         cat.tx_vfo == CAT_TX_VFO_SUB ? "sub" : "";
     const char *phase = state.phase == TX_KEYED ? "KEYED" : state.phase == TX_ARMED ? "ARMED" : "IDLE";
     char json[256];
     const int n = snprintf(json, sizeof(json),
                            "{\"t\":\"tx\",\"state\":\"%s\",\"left_s\":%u,\"reason\":\"%s\","
-                           "\"on_air\":%s,\"auth\":%s,\"owner\":%s,\"error\":\"%s\"}",
-                           phase, state.left_s, state.reason, state.on_air ? "true" : "false",
+                           "\"on_air\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\"}",
+                           phase, state.left_s, state.reason, state.on_air ? "true" : "false", tx_vfo,
                            session ? "true" : "false",
                            session && state.owner == session->owner ? "true" : "false", error);
     if (n < 0 || n >= sizeof(json)) {

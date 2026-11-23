@@ -319,6 +319,16 @@
       0 0 5px rgba(94, 197, 255, 0.65);
   }
 
+  .vfd-bezel .freq-readout.is-transmitting {
+    color: #ff6565;
+    text-shadow: 0 0 1px #ff6565, 0 0 5px rgba(255, 101, 101, 0.65);
+  }
+
+  #txPtt.is-transmitting {
+    background-color: #b91c1c;
+    color: #fff;
+  }
+
   .freq-unit {
     font-size: 0.68rem;
     font-weight: 600;
@@ -1527,10 +1537,9 @@
 
   <!-- CAT traffic log (Collapsible): what the device sends to the radio and what the radio answers -->
   <section id="txPanel" hidden aria-label="Transmit">
-    <label>TX password <input id="txPass" type="password" maxlength="64" autocomplete="off"></label>
+    <label>TX password <input id="txPass" type="password" minlength="6" maxlength="64" autocomplete="off"></label>
     <button id="txConnect" type="button">Authorize TX</button>
     <button id="txPtt" type="button" disabled aria-pressed="false">Hold to talk</button>
-    <strong id="txAir" hidden style="color:#ff4646;font-size:1.5rem">ON AIR</strong>
     <span id="txInfo" role="status"></span>
   </section>
 
@@ -3744,12 +3753,17 @@ const txPanel = document.getElementById('txPanel');
 const txPass = document.getElementById('txPass');
 const txConnect = document.getElementById('txConnect');
 const ptt = document.getElementById('txPtt');
-const txAir = document.getElementById('txAir');
 const txInfo = document.getElementById('txInfo');
 let txSocket = null;
 let txAuthenticated = false;
 let txHeld = false;
 let txHeartbeat = null;
+
+function showTransmitState(onAir, txVfo) {
+  ptt.classList.toggle('is-transmitting', onAir);
+  freqMainDisplay.classList.toggle('is-transmitting', onAir && txVfo === 'main');
+  freqSubDisplay.classList.toggle('is-transmitting', onAir && txVfo === 'sub');
+}
 
 function sendTx(message) {
   if (txSocket?.readyState === WebSocket.OPEN) txSocket.send(JSON.stringify(message));
@@ -3770,7 +3784,7 @@ function pressPtt() {
 }
 
 txConnect.addEventListener('click', () => {
-  if (txSocket || txPass.value.length < 12) return;
+  if (txSocket || txPass.value.length < txPass.minLength) return;
   const url = new URL('/ws?csrf=ftx1', location.href);
   url.protocol = 'wss:';
   const socket = new WebSocket(url);
@@ -3788,7 +3802,7 @@ txConnect.addEventListener('click', () => {
     if (state.t !== 'tx') return;
     txAuthenticated = state.auth;
     ptt.disabled = !state.auth;
-    txAir.hidden = !state.on_air;
+    showTransmitState(state.on_air === true, state.tx_vfo);
     txInfo.textContent = state.error || state.reason || (state.state === 'KEYED'
       ? `${state.left_s} s left` : state.auth ? 'Ready' : 'TX authorization required');
     if (!state.auth) {
@@ -3805,7 +3819,7 @@ txConnect.addEventListener('click', () => {
     pass = '';
     txAuthenticated = false;
     releasePtt();
-    txAir.hidden = true;
+    showTransmitState(false);
     ptt.disabled = true;
     txConnect.disabled = false;
     if (txInfo.textContent === 'Connecting…') txInfo.textContent = 'TX connection failed';

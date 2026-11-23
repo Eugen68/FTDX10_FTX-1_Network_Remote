@@ -182,7 +182,8 @@ static bool user_id_is_valid(const char *s, size_t max_len)
 }
 
 /** Ask for a secret that protects network access (OTA / web UI). Returns true when cfg value was changed. */
-static bool prompt_secret(const char *prompt, char *out, size_t out_size, const char *cleared_msg, const char *updated_msg)
+static bool prompt_secret(const char *prompt, char *out, size_t out_size, size_t minimum,
+                          const char *cleared_msg, const char *updated_msg)
 {
     console_write_str(prompt);
     char temp[APP_CONFIG_PASS_MAX_LEN + 1];
@@ -195,9 +196,9 @@ static bool prompt_secret(const char *prompt, char *out, size_t out_size, const 
         console_write_str(cleared_msg);
         return true;
     }
-    if (strlen(temp) < APP_CONFIG_MIN_SECRET_LEN) {
+    if (strlen(temp) < minimum) {
         char err[96];
-        snprintf(err, sizeof(err), "-> Rejected: the password must have at least %d characters\r\n", APP_CONFIG_MIN_SECRET_LEN);
+        snprintf(err, sizeof(err), "-> Rejected: the password must have at least %u characters\r\n", (unsigned)minimum);
         console_write_str(err);
         return false;
     }
@@ -276,7 +277,7 @@ void console_menu_run(void)
             "  9: Set Web User ID (web UI, audio stream, /cat)\r\n"
             "  0: Set Web Password (12+ chars)\r\n"
             "  t: Toggle remote TX\r\n"
-            "  p: Set TX password (12+ chars)\r\n"
+            "  p: Set TX password (6+ chars)\r\n"
             "  m: Set TX time limit (10–600 seconds)\r\n"
             "  h: Set Host name (mDNS / DHCP)\r\n"
             "--------------------------------------------------\r\n"
@@ -336,7 +337,7 @@ void console_menu_run(void)
             }
             case '4': {
                 prompt_secret("Enter OTA Password, 12+ chars (CLEAR to disable OTA, Enter to keep): ",
-                              cfg.ota_pass, sizeof(cfg.ota_pass),
+                              cfg.ota_pass, sizeof(cfg.ota_pass), APP_CONFIG_MIN_SECRET_LEN,
                               "-> OTA Password cleared (OTA disabled)\r\n",
                               "-> OTA Password updated\r\n");
                 break;
@@ -361,7 +362,7 @@ void console_menu_run(void)
             }
             case '0': {
                 prompt_secret("Enter Web Password, 12+ chars (CLEAR to fall back to the OTA password, Enter to keep): ",
-                              cfg.web_pass, sizeof(cfg.web_pass),
+                              cfg.web_pass, sizeof(cfg.web_pass), APP_CONFIG_MIN_SECRET_LEN,
                               "-> Web Password cleared (the OTA password is used, or the web UI is locked)\r\n",
                               "-> Web Password updated\r\n");
                 break;
@@ -370,8 +371,8 @@ void console_menu_run(void)
                 cfg.tx_enabled = !cfg.tx_enabled;
                 break;
             case 'p':
-                prompt_secret("Set TX password, 12+ chars (CLEAR to disable, Enter to keep): ",
-                              cfg.tx_pass, sizeof(cfg.tx_pass), "-> TX password cleared\r\n",
+                prompt_secret("Set TX password, 6+ chars (CLEAR to disable, Enter to keep): ",
+                              cfg.tx_pass, sizeof(cfg.tx_pass), APP_CONFIG_MIN_TX_SECRET_LEN, "-> TX password cleared\r\n",
                               "-> TX password updated\r\n");
                 break;
             case 'm': {

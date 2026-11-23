@@ -45,7 +45,7 @@ int main(void) {
     CHECK(!ok("FA;") && !ok("AI1;") && !ok("FA014074000;"), "none profile blocks");
 
     // never: transmit commands on any profile
-    const char *never[] = {"TX1;", "TX2;", "TX0;", "MX1;", "KY0;", "VX1;", "PC100;", "FT2;", "EX010411100;x", "AI0;", NULL};
+    const char *never[] = {"TX1;", "TX2;", "TX0;", "MX1;", "KY0;", "VX1;", "PC100;", "FT0;", "FT1;", "FT2;", "FT3;", "EX010411100;x", "AI0;", NULL};
     const char *ids[] = {"0840", "0761", "9999", NULL};
     for (int r = 0; ids[r]; r++) { use(ids[r]); for (int k = 0; never[k]; k++) CHECK(!ok(never[k]), "%s allowed %s", ids[r], never[k]); }
 
@@ -151,6 +151,23 @@ int main(void) {
     CHECK(s_state.s_main == 10 && s_state.s_sub == 20, "meter settled: %u %u", s_state.s_main, s_state.s_sub);
     handle_cat_packet("RM0200020;");
     CHECK(s_state.s_main == 200, "meter rises at once: %u", s_state.s_main);
+
+    cat_state_t reported;
+    CHECK(ok("FT;"), "FTX-1 TX VFO query");
+    handle_cat_packet("FT0;");
+    cat_get_state(&reported);
+    CHECK(reported.tx_vfo == CAT_TX_VFO_MAIN, "FTX-1 reports MAIN transmitter");
+    use("0761");
+    CHECK(ok("FT;"), "FTDX10 TX VFO query");
+    handle_cat_packet("FT1;");
+    handle_cat_packet("FT3;");
+    cat_get_state(&reported);
+    CHECK(reported.tx_vfo == CAT_TX_VFO_SUB, "FTDX10 reports SUB transmitter");
+    g_now_us += RADIO_STATUS_MAX_AGE_US + 1;
+    cat_get_state(&reported);
+    CHECK(reported.tx_vfo == CAT_TX_VFO_UNKNOWN, "stale selection cannot color a VFO");
+    use("9999");
+    CHECK(!ok("FT;"), "unknown radio cannot query TX VFO");
 
     // CAT log: blocked commands are logged as BLOCKED and never reach the port; reads come back oldest first
     use("0840");

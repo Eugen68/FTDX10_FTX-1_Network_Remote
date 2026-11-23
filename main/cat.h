@@ -32,6 +32,12 @@ typedef enum {
 /**
  * @brief Radio state read over CAT (the FTX-1's CP210x USB serial port)
  */
+typedef enum {
+    CAT_TX_VFO_UNKNOWN,
+    CAT_TX_VFO_MAIN,
+    CAT_TX_VFO_SUB,
+} cat_tx_vfo_t;
+
 typedef struct {
     bool connected;         /*!< A CAT port is open and answering */
     cat_rig_t rig;          /*!< Detected radio model */
@@ -44,6 +50,7 @@ typedef struct {
     bool can_control;       /*!< Set commands are allowed (false for an unknown radio) */
     bool c4fm;              /*!< The radio has the C4FM modes */
     bool busy;              /*!< Squelch is open on the receiver reported by RI (BUSY) */
+    cat_tx_vfo_t tx_vfo;    /*!< Transmitter selected by the radio, from FT; */
     bool tx_cat;
     bool tx_radio;
     bool tx;                /*!< The radio is transmitting (RI P4 = 1) */

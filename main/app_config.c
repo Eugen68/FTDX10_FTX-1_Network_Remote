@@ -180,7 +180,7 @@ bool app_config_hostname_is_valid(const char *s)
 
 bool app_config_tx_enabled(void)
 {
-    return s_active_config.tx_enabled && strlen(s_active_config.tx_pass) >= APP_CONFIG_MIN_SECRET_LEN;
+    return s_active_config.tx_enabled && strlen(s_active_config.tx_pass) >= APP_CONFIG_MIN_TX_SECRET_LEN;
 }
 
 bool app_config_is_valid(const app_config_t *cfg)

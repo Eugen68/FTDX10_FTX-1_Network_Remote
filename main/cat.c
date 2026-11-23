@@ -105,6 +105,7 @@ static SemaphoreHandle_t s_ptt_lock;  // serializes PTT writes with closing the 
 static cdc_acm_dev_hdl_t s_ptt_port;
 static bool s_ptt_ready;
 static int64_t s_swr_status_us;
+static int64_t s_tx_vfo_status_us;
 static int64_t s_last_ptt_status_us;
 static char s_ptt_mode;
 static bool s_hi_swr;
@@ -381,6 +382,8 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         return rig->can_tx && pl == 1 && p[0] == '0';
     case CAT_TWO('B', 'Y'):         // busy (read), FTDX10
         return rig->has_by_tx && pl == 0;
+    case CAT_TWO('F', 'T'):         // transmitter selection, read only
+        return rig->can_tx && pl == 0;
     case CAT_TWO('T', 'X'):
         return rig->can_tx && (pl == 0 || (pl == 1 && (p[0] == '0' || p[0] == '1') && app_config_tx_enabled()));
     case CAT_TWO('R', 'M'):         // meter (read): the S meter item of this radio only
@@ -512,7 +515,7 @@ static void log_cmds(char dir, uint8_t kind, const char *cmds)
 static bool is_poll_answer(const char *pkt)
 {
     return strncmp(pkt, "RM", 2) == 0 || strncmp(pkt, "RI", 2) == 0 || strncmp(pkt, "BY", 2) == 0 ||
-           strncmp(pkt, "TX", 2) == 0;
+           strncmp(pkt, "TX", 2) == 0 || strncmp(pkt, "FT", 2) == 0;
 }
 
 size_t cat_log_read(uint32_t since_seq, cat_log_entry_t *out, size_t max)
@@ -618,6 +621,8 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_state.tx = false;
         s_last_tx_status_us = 0;
         s_swr_status_us = 0;
+        s_tx_vfo_status_us = 0;
+        s_state.tx_vfo = CAT_TX_VFO_UNKNOWN;
         s_last_ptt_status_us = 0;
         s_ptt_mode = 0;
         s_hi_swr = false;
@@ -918,6 +923,17 @@ static void handle_cat_packet(const char *pkt)
         return;
     }
 
+    // Both manuals define FT0; as MAIN and FT1; as SUB in the read response.
+    if (s_rig->can_tx && strncmp(pkt, "FT", 2) == 0 && strlen(pkt) == 4 && pkt[3] == ';' &&
+        (pkt[2] == '0' || pkt[2] == '1')) {
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+            s_state.tx_vfo = pkt[2] == '0' ? CAT_TX_VFO_MAIN : CAT_TX_VFO_SUB;
+            s_tx_vfo_status_us = now_pkt_us;
+            xSemaphoreGive(s_lock);
+        }
+        return;
+    }
+
     bool tx_on = false;
     if (s_rig->can_tx && parse_tx(pkt, &tx_on)) {
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -1056,6 +1072,9 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
                 initialize_ptt_port(dev);
             }
             send_poll(dev, rig->poll_status);
+            if (rig->can_tx && app_config_tx_enabled()) {
+                send_poll(dev, "FT;");
+            }
             if (rig->has_by_tx && cat_tx_requested()) {
                 send_poll(dev, "RI0;");
             }
@@ -1232,6 +1251,10 @@ void cat_get_state(cat_state_t *state)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *state = s_state;
     state->tx_radio = s_state.tx;
+    if (!s_state.connected || s_disconnected || s_tx_vfo_status_us == 0 ||
+        esp_timer_get_time() - s_tx_vfo_status_us > RADIO_STATUS_MAX_AGE_US) {
+        state->tx_vfo = CAT_TX_VFO_UNKNOWN;
+    }
     state->age_ms = s_state.connected ? (uint32_t)((esp_timer_get_time() - s_last_answer_us) / 1000) : 0;
     xSemaphoreGive(s_lock);
 }

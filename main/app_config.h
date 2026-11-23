@@ -30,6 +30,7 @@ extern "C" {
 
 /** Shortest accepted OTA / web password when it is entered on the console */
 #define APP_CONFIG_MIN_SECRET_LEN   12
+#define APP_CONFIG_MIN_TX_SECRET_LEN 6
 #define TX_DEFAULT_SECONDS 120
 #define TX_MIN_SECONDS 10
 #define TX_MAX_SECONDS 600
