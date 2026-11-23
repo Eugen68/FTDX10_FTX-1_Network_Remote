@@ -25,6 +25,7 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "soc/usb_reg.h"
 #include "usb/usb_host.h"
 #include "usb/usb_helpers.h"
 #include "usb/uac_host.h"
@@ -44,9 +45,10 @@
 _Static_assert(CONFIG_AUDIO_RING_BUFFER_SIZE != USB_AUDIO_TX_RING_BYTES,
                "RX and TX rings must have distinct sizes for the UAC allocator");
 
-// ESP32-S3 USB OTG FIFO has 256 32-bit lines. Keep the balanced profile's
-// RX space and move 32 lines from bulk/control OUT to periodic OUT.
-#define USB_FIFO_LINES          256
+// ESP32-S3 reports 200 FIFO lines in GHWCFG3.DFIFODEPTH. Use that budget
+// rather than the 256 lines used to calculate the driver's default bias ratios.
+// Keep RX at 104 lines, as in the balanced profile on a 200-line controller.
+#define USB_FIFO_LINES          200
 #define USB_NPTX_FIFO_LINES      32
 #define USB_PTX_FIFO_LINES       64
 #define USB_RX_FIFO_LINES       (USB_FIFO_LINES - USB_NPTX_FIFO_LINES - USB_PTX_FIFO_LINES)
@@ -508,7 +510,10 @@ static void usb_lib_task(void *arg)
         },
     };
     ESP_ERROR_CHECK(usb_host_install(&host_config));
-    ESP_LOGI(TAG, "USB Host installed, FIFO MPS limits: IN %u B, bulk/control OUT %u B, periodic OUT %u B",
+    const unsigned fifo_depth = REG_GET_FIELD(USB_GHWCFG3_REG, USB_DFIFODEPTH);
+    ESP_LOGI(TAG, "USB Host installed, FIFO lines: RX %u, NPTX %u, PTX %u, hardware depth %u",
+             USB_RX_FIFO_LINES, USB_NPTX_FIFO_LINES, USB_PTX_FIFO_LINES, fifo_depth);
+    ESP_LOGI(TAG, "FIFO MPS limits: IN %u B, bulk/control OUT %u B, periodic OUT %u B",
              USB_RX_MPS_LIMIT, USB_BULK_OUT_MPS_LIMIT, USB_ISOC_OUT_MPS_LIMIT);
     xTaskNotifyGive((TaskHandle_t)arg);
 
