@@ -19,6 +19,7 @@ static inline void *xTaskGetCurrentTaskHandle(void){return 0;}
 static inline int xQueueReceive(void *q, void *i, uint32_t t){(void)q;(void)i;(void)t;return 0;}
 static inline int xQueueSend(void *q, const void *i, uint32_t t){(void)q;(void)i;(void)t;return 1;}
 static inline void *xQueueCreate(int n, int s){(void)n;(void)s;return (void*)1;}
+static inline int xTaskCreate(void (*f)(void*), const char *n, int s, void *a, int p, void *h){return 1;}
 static inline int xTaskCreatePinnedToCore(void (*f)(void*), const char *n, int s, void *a, int p, void *h, int c){return 1;}
 typedef int portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED 0

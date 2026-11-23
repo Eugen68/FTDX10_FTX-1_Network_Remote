@@ -32,6 +32,12 @@ typedef enum {
 /**
  * @brief Radio state read over CAT (the FTX-1's CP210x USB serial port)
  */
+typedef enum {
+    CAT_TX_VFO_UNKNOWN,
+    CAT_TX_VFO_MAIN,
+    CAT_TX_VFO_SUB,
+} cat_tx_vfo_t;
+
 typedef struct {
     bool connected;         /*!< A CAT port is open and answering */
     cat_rig_t rig;          /*!< Detected radio model */
@@ -44,6 +50,9 @@ typedef struct {
     bool can_control;       /*!< Set commands are allowed (false for an unknown radio) */
     bool c4fm;              /*!< The radio has the C4FM modes */
     bool busy;              /*!< Squelch is open on the receiver reported by RI (BUSY) */
+    cat_tx_vfo_t tx_vfo;    /*!< Transmitter selected by the radio, from FT; */
+    bool tx_cat;
+    bool tx_radio;
     bool tx;                /*!< The radio is transmitting (RI P4 = 1) */
     uint8_t s_main;         /*!< S meter, MAIN side, 0-255 */
     uint8_t s_sub;          /*!< S meter, SUB side, 0-255 */
@@ -109,6 +118,11 @@ void cat_get_state(cat_state_t *state);
 
 /** True only when a recent CAT status report confirmed the radio is not transmitting. */
 bool cat_radio_rx_confirmed(void);
+bool cat_radio_rx_after(int64_t after_us);
+bool cat_radio_tx(void);
+esp_err_t cat_ptt(bool on);
+const char *cat_ptt_fault(int64_t started, int64_t grace_us);
+const char *cat_ptt_mode_error(void);
 
 /*
  * There is deliberately no function that sends a free-form CAT string. Every command is built here from

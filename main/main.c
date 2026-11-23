@@ -11,6 +11,7 @@
 #include "app_config.h"
 #include "acc_scope.h"
 #include "cat.h"
+#include "tx.h"
 #include "console_menu.h"
 #include "mdns.h"
 #include "nvs_flash.h"
@@ -44,6 +45,7 @@ void app_main(void)
         return;
     }
 
+    ESP_ERROR_CHECK(tx_init());
     ESP_ERROR_CHECK(usb_audio_init());
     ESP_ERROR_CHECK(cat_init());   // after usb_audio_init(): that installs the USB Host Library
     ESP_ERROR_CHECK(acc_scope_init());   // waits for CAT to identify an FTDX10 before touching any pin

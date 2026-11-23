@@ -62,3 +62,7 @@ CONFIG_AUDIO_RING_BUFFER_SIZE=32768
 # bytes ("Configuration descriptor larger than control transfer max length", its hub port then disabled).
 # Each attached device gets a control buffer of this size (5 devices: 10 KB).
 CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048
+
+# Authenticated same-origin control socket for remote PTT.
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_HTTPD_WS_PRE_HANDSHAKE_CB_SUPPORT=y

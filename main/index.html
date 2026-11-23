@@ -319,6 +319,16 @@
       0 0 5px rgba(94, 197, 255, 0.65);
   }
 
+  .vfd-bezel .freq-readout.is-transmitting {
+    color: #ff6565;
+    text-shadow: 0 0 1px #ff6565, 0 0 5px rgba(255, 101, 101, 0.65);
+  }
+
+  #txPtt.is-transmitting {
+    background-color: #b91c1c;
+    color: #fff;
+  }
+
   .freq-unit {
     font-size: 0.68rem;
     font-weight: 600;
@@ -1526,6 +1536,13 @@
   </details>
 
   <!-- CAT traffic log (Collapsible): what the device sends to the radio and what the radio answers -->
+  <section id="txPanel" hidden aria-label="Transmit">
+    <label>TX password <input id="txPass" type="password" minlength="6" maxlength="64" autocomplete="off"></label>
+    <button id="txConnect" type="button">Authorize TX</button>
+    <button id="txPtt" type="button" disabled aria-pressed="false">Hold to talk</button>
+    <span id="txInfo" role="status"></span>
+  </section>
+
   <details class="sq-section" id="catLogSection">
     <summary class="card-title sq-summary">
       <span>CAT LOG</span>
@@ -3626,7 +3643,7 @@ function handleFreqWheel(e, sub) {
   e.preventDefault();
   const dir = e.deltaY < 0 ? 1 : -1;
   // The digit under the pointer decides the step (10 MHz ... 1 Hz); off the digits the step buttons apply
-  const seg = e.target.closest ? e.target.closest('[data-step]') : null;
+  const seg = e.target.closest ? e.target.closest?.('[data-step]') : null;
   let step = seg ? parseInt(seg.dataset.step, 10) : getStep(sub);
   if (!step || isNaN(step) || step <= 0) step = getStep(sub);
   stepFreq(sub, dir * step);
@@ -3732,7 +3749,120 @@ freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
 // Applied once per change of the reported radio. Nothing here is a safety check: the firmware enforces
 // the frequency range, the squelch range and which receiver exists on its own.
 let rigProfileKey = '';
+const txPanel = document.getElementById('txPanel');
+const txPass = document.getElementById('txPass');
+const txConnect = document.getElementById('txConnect');
+const ptt = document.getElementById('txPtt');
+const txInfo = document.getElementById('txInfo');
+let txSocket = null;
+let txAuthenticated = false;
+let txHeld = false;
+let txHeartbeat = null;
+
+function showTransmitState(onAir, txVfo) {
+  ptt.classList.toggle('is-transmitting', onAir);
+  freqMainDisplay.classList.toggle('is-transmitting', onAir && txVfo === 'main');
+  freqSubDisplay.classList.toggle('is-transmitting', onAir && txVfo === 'sub');
+}
+
+function sendTx(message) {
+  if (txSocket?.readyState === WebSocket.OPEN) txSocket.send(JSON.stringify(message));
+}
+
+function releasePtt() {
+  if (!txHeld) return;
+  txHeld = false;
+  ptt.setAttribute('aria-pressed', 'false');
+  sendTx({t: 'ptt', on: false});
+}
+
+function pressPtt() {
+  if (!txAuthenticated || txHeld || !document.hasFocus() || document.hidden) return;
+  txHeld = true;
+  ptt.setAttribute('aria-pressed', 'true');
+  sendTx({t: 'ptt', on: true});
+}
+
+txConnect.addEventListener('click', () => {
+  if (txSocket || txPass.value.length < txPass.minLength) return;
+  const url = new URL('/ws?csrf=ftx1', location.href);
+  url.protocol = 'wss:';
+  const socket = new WebSocket(url);
+  txSocket = socket;
+  txConnect.disabled = true;
+  txInfo.textContent = 'Connecting…';
+  let pass = txPass.value;
+  txPass.value = '';
+  socket.addEventListener('open', () => {
+    sendTx({t: 'tx_auth', pass});
+    pass = '';
+  });
+  socket.addEventListener('message', event => {
+    const state = JSON.parse(event.data);
+    if (state.t !== 'tx') return;
+    txAuthenticated = state.auth;
+    ptt.disabled = !state.auth;
+    showTransmitState(state.on_air === true, state.tx_vfo);
+    txInfo.textContent = state.error || state.reason || (state.state === 'KEYED'
+      ? `${state.left_s} s left` : state.auth ? 'Ready' : 'TX authorization required');
+    if (!state.auth) {
+      socket.close();
+    } else if (!txHeartbeat) {
+      txHeartbeat = setInterval(() => sendTx({t: txHeld && !document.hidden && document.hasFocus() ? 'hb' : 'status'}), 250);
+    }
+    if (state.error) releasePtt();
+  });
+  socket.addEventListener('close', () => {
+    clearInterval(txHeartbeat);
+    txHeartbeat = null;
+    txSocket = null;
+    pass = '';
+    txAuthenticated = false;
+    releasePtt();
+    showTransmitState(false);
+    ptt.disabled = true;
+    txConnect.disabled = false;
+    if (txInfo.textContent === 'Connecting…') txInfo.textContent = 'TX connection failed';
+    else if (txInfo.textContent !== 'TX authorization refused') txInfo.textContent = 'TX disconnected';
+  });
+});
+
+ptt.addEventListener('pointerdown', e => {
+  if (e.button === 0) {
+    e.preventDefault();
+    pressPtt();
+  }
+});
+ptt.addEventListener('pointerleave', releasePtt);
+window.addEventListener('pointerup', releasePtt);
+window.addEventListener('pointercancel', releasePtt);
+window.addEventListener('blur', releasePtt);
+window.addEventListener('pagehide', () => {
+  releasePtt();
+  txSocket?.close();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) releasePtt();
+});
+window.addEventListener('keydown', e => {
+  if (e.code !== 'Space' || e.repeat || !txAuthenticated ||
+      (e.target !== ptt && e.target.closest?.('input,select,textarea,button,[contenteditable="true"]'))) return;
+  e.preventDefault();
+  pressPtt();
+});
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space' && txHeld) {
+    e.preventDefault();
+    releasePtt();
+  }
+});
+
 function applyRigProfile(d) {
+  txPanel.hidden = !d.tx_enabled;
+  if (txPanel.hidden && txSocket) {
+    releasePtt();
+    txSocket.close();
+  }
   if (!d.rig) return;                         // no radio identified yet: keep the current layout
   const key = [d.rig, d.dual_rx, d.c4fm, d.sq_max, d.freq_max].join('|');
   if (key === rigProfileKey) return;
