@@ -804,6 +804,7 @@
   }
   .direct-input {
     flex: 1;
+    min-width: 0;          /* may shrink, so the SET button stays on screen */
     background: #0f172a;
     border: 1px solid #334155;
     border-radius: 3px;
@@ -988,6 +989,8 @@
     .rig-btn { min-height: 2rem; }
     .catlog-bar { gap: .4rem; }
     .catlog-legend { display: none; }
+    .direct-input-row .rig-btn { flex: 0 0 auto; padding-left: .8rem; padding-right: .8rem; }
+    .sq-summary { flex-wrap: wrap; gap: .2rem; }
   }
 </style>
 </head>
@@ -1997,9 +2000,16 @@ let isUserStopped = true;
 let reconnectTimer = null;
 
 // ---- Background playback on phones (screen off, other app in front) ----
+// Phones stop page audio (and the media elements fed from it) when the page goes to the background. What
+// they keep playing is an ordinary audio stream from a server, like internet radio. So on a phone, when the
+// page is hidden, the page's own stream is closed and the device's /stream.wav is played by an <audio>
+// element instead; when the page is visible again it switches back. The scope and FT8 pause meanwhile.
 const BG_AUDIO = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
                  (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));   // iPadOS
 const bgAudio = document.getElementById('bgAudio');
+let bgMode = false;          // the <audio> element is playing /stream.wav instead of the page
+let bgRetryTimer = null;
+
 function mediaSessionUpdate(playing) {
   if (!('mediaSession' in navigator)) return;
   try {
@@ -2011,21 +2021,67 @@ function mediaSessionUpdate(playing) {
     navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
   } catch (e) {}
 }
+
+function bgPlay() {
+  if (!bgMode) return;
+  // A new URL each time: the device serves one stream at a time and must see the old one closed first
+  bgAudio.src = '/stream.wav?rate=' + encodeURIComponent(streamRateSel.value) + '&t=' + Date.now();
+  bgAudio.play().catch((e) => console.warn('Background stream did not start:', e));
+  mediaSessionUpdate(true);
+}
+bgAudio.addEventListener('error', () => {
+  // Usually "another client is streaming" for a moment after the switch: try again shortly
+  if (!bgMode || bgRetryTimer) return;
+  bgRetryTimer = setTimeout(() => { bgRetryTimer = null; bgPlay(); }, 800);
+});
+bgAudio.addEventListener('ended', () => { if (bgMode) bgPlay(); });
+
+function enterBackground() {
+  if (!BG_AUDIO || bgMode || !abort) return;   // only while the page is playing
+  stop();                                       // closes the page's stream and its AudioContext
+  bgMode = true;
+  btnPlay.textContent = 'PWR OFF / STOP';       // still on air, from the <audio> element
+  btnPlay.classList.add('running');
+  setTimeout(bgPlay, 300);                      // let the device notice the closed stream
+}
+
+function leaveBackground() {
+  if (!bgMode) return;
+  bgMode = false;
+  if (bgRetryTimer) { clearTimeout(bgRetryTimer); bgRetryTimer = null; }
+  bgAudio.pause();
+  bgAudio.removeAttribute('src');
+  bgAudio.load();                               // closes the HTTP stream
+  setTimeout(start, 300);                       // start() retries by itself if the device is still busy
+}
+
 if ('mediaSession' in navigator) {
   try {
-    navigator.mediaSession.setActionHandler('play', () => { if (!abort) start(); });
-    navigator.mediaSession.setActionHandler('pause', () => { if (abort) stop(); });
-    navigator.mediaSession.setActionHandler('stop', () => { if (abort) stop(); });
+    navigator.mediaSession.setActionHandler('play', () => {
+      if (document.visibilityState === 'hidden' && BG_AUDIO) { bgMode = true; bgPlay(); }
+      else if (!abort) start();
+    });
+    const pause = () => {
+      if (bgMode) {
+        bgMode = false;
+        bgAudio.pause(); bgAudio.removeAttribute('src'); bgAudio.load();
+        btnPlay.textContent = 'POWER / PLAY'; btnPlay.classList.remove('running');
+        mediaSessionUpdate(false);
+      } else if (abort) stop();
+    };
+    navigator.mediaSession.setActionHandler('pause', pause);
+    navigator.mediaSession.setActionHandler('stop', pause);
   } catch (e) {}
 }
-// Coming back to the page (or the screen turning on): resume anything the browser suspended
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible' || !abort) return;
-  if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
-  if (BG_AUDIO && bgAudio.srcObject && bgAudio.paused) bgAudio.play().catch(() => {});
+  if (document.visibilityState === 'hidden') enterBackground();
+  else {
+    leaveBackground();
+    if (abort && ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+  }
 });
 // Keep the lock-screen title on the current frequency
-setInterval(() => { if (abort && BG_AUDIO) mediaSessionUpdate(true); }, 5000);
+setInterval(() => { if ((abort || bgMode) && BG_AUDIO) mediaSessionUpdate(true); }, 5000);
 
 // Stream rate asked from the device (it low-pass filters and decimates the radio's 48 kHz)
 const STREAM_RATE_KEY = 'ftx1.streamRate';
@@ -2081,20 +2137,8 @@ async function start() {
     limiter.attack.value = 0.002;
     limiter.release.value = 0.15;
     merger.connect(limiter);
-    if (BG_AUDIO) {
-      // Phone: play through an <audio> element fed from this graph. Browsers keep media elements playing
-      // in the background and with the screen off, which they do not promise for a bare AudioContext.
-      const mediaDest = ctx.createMediaStreamDestination();
-      limiter.connect(mediaDest);
-      bgAudio.srcObject = mediaDest.stream;
-      bgAudio.play().catch((e) => {
-        console.warn('Background audio element refused to play, using the AudioContext directly:', e);
-        limiter.connect(ctx.destination);
-      });
-      mediaSessionUpdate(true);
-    } else {
-      limiter.connect(ctx.destination);
-    }
+    limiter.connect(ctx.destination);
+    mediaSessionUpdate(true);
     speakerGains = [0, 1].map((i) => {
       const g = ctx.createGain();
       splitter.connect(g, ch >= 2 ? i : 0);
@@ -2238,7 +2282,6 @@ function stop() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (abort) { abort.abort(); abort = null; }
   if (ctx) { ctx.close(); ctx = null; scopeAnalysers = [null, null]; speakerGains = [null, null]; }
-  if (bgAudio.srcObject) { bgAudio.pause(); bgAudio.srcObject = null; }
   mediaSessionUpdate(false);
   btnPlay.textContent = 'POWER / PLAY';
   btnPlay.classList.remove('running');

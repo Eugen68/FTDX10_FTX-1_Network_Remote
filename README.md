@@ -583,7 +583,7 @@ So that the radio cannot be put into transmit over the network, the CAT commands
 - Only one audio input device is used (a second and later ones are ignored).
 - Only UAC 1.0 devices are supported.
 - Browser playback has a delay of a few hundred milliseconds.
-- Phones: the page has a one-column phone layout and, on Android / iOS, plays through a media element so audio can continue with the screen off or another app in front (Media Session controls on the lock screen). Whether the browser keeps it running in the background is up to the phone (tested on Android Chrome by the owner; iOS Safari is stricter). Wi-Fi power saving with the screen off can add gaps.
+- Phones: the page has a one-column phone layout. On Android / iOS, when the page goes to the background (screen off, another app in front) it closes its own stream and plays `/stream.wav` through an `<audio>` element, which phones keep playing like internet radio; it switches back when the page is visible again. The scope and FT8 pause while it is in the background. Lock-screen controls through Media Session. Whether a given phone keeps it running is up to its power settings; Wi-Fi power saving with the screen off can add gaps.
 
 ## Troubleshooting
 
