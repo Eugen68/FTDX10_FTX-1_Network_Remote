@@ -709,6 +709,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     if (n > 0 && (size_t)n < sizeof(json)) {
         const tx_state_t tx = tx_get_state();
         const usb_tx_stats_t audio = usb_audio_tx_stats();
+        const usb_tx_transfer_stats_t transfers = usb_audio_tx_transfer_stats();
         const char *phase = tx.phase == TX_KEYED ? "KEYED" : tx.phase == TX_ARMED ? "ARMED" : "IDLE";
         char reason[32], swr[16], po[8];
         if (tx.swr_valid) {
@@ -726,10 +727,14 @@ static esp_err_t status_handler(httpd_req_t *req)
                       ",\"tx\":{\"state\":\"%s\",\"owner\":%lu,\"left_s\":%u,\"reason\":\"%s\","
                       "\"stopping\":%s,\"off_attempts\":%u,\"off_error\":%d,"
                       "\"audio_rate\":%u,\"underruns\":%u,\"written_bytes\":%u,"
+                      "\"completed_bytes\":%u,\"completed_packets\":%u,\"failed_packets\":%u,\"pcm_peak\":%u,\"submit_error\":%d,"
                       "\"swr\":%s,\"swr_raw\":%u,\"po\":%s,\"po_raw\":%u}}",
                       phase, (unsigned long)tx.owner, tx.left_s, tx_reason(&tx, reason),
                       tx.stopping ? "true" : "false", tx.off_attempts, tx.off_error,
-                      audio.audio_rate, audio.underruns, audio.written_bytes, swr, tx.swr_raw, po, tx.po_raw);
+                      audio.audio_rate, audio.underruns, audio.written_bytes,
+                      transfers.completed_bytes, transfers.completed_packets, transfers.failed_packets,
+                      transfers.pcm_peak, transfers.submit_error,
+                      swr, tx.swr_raw, po, tx.po_raw);
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const cat_write_stats_t cat = cat_get_write_stats();

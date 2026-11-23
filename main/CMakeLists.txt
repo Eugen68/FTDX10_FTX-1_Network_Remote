@@ -41,10 +41,13 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     # Redirect the managed UAC component's ring calls only. The application
     # provides an explicit PSRAM backing store for the 16 KiB TX ring.
     idf_component_get_property(uac_target espressif__usb_host_uac COMPONENT_LIB)
-    target_sources(${uac_target} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/uac_ringbuffer.c")
+    target_sources(${uac_target} PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/uac_ringbuffer.c"
+        "${CMAKE_CURRENT_LIST_DIR}/uac_tx_transfer.c")
     target_compile_definitions(${uac_target} PRIVATE
         xRingbufferCreate=ftx_uac_ring_create
-        vRingbufferDelete=ftx_uac_ring_delete)
+        vRingbufferDelete=ftx_uac_ring_delete
+        usb_host_transfer_submit=ftx_uac_transfer_submit)
 
     file(GLOB BUILD_STAMP_DEPS "${CMAKE_CURRENT_LIST_DIR}/*.c" "${CMAKE_CURRENT_LIST_DIR}/*.h"
                                "${CMAKE_CURRENT_LIST_DIR}/*.html")

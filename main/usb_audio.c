@@ -592,6 +592,7 @@ static void tx_audio_task(void *arg)
         if (request && !active && !error && request == atomic_load(&s_tx_request)) {
             atomic_store(&s_tx_clean, false);
             atomic_store(&s_tx_transfer_error, false);
+            usb_audio_tx_reset_transfer_stats();
             if (!s_output_handle || !atomic_load(&s_tx_available) ||
                 uac_host_device_start(s_output_handle, &s_tx_format) != ESP_OK) {
                 error = "USB TX audio start failed";
@@ -614,8 +615,14 @@ static void tx_audio_task(void *arg)
                 blocks = TX_PREFILL_BLOCKS;
             }
         }
-        if (active && atomic_exchange(&s_tx_transfer_error, false)) {
-            error = "USB TX transfer failed";
+        if (active) {
+            const esp_err_t submit_error = usb_audio_tx_transfer_stats().submit_error;
+            if (submit_error != ESP_OK) {
+                ESP_LOGW(TAG, "USB TX transfer submit: %s", esp_err_to_name(submit_error));
+                error = "USB TX submit failed";
+            } else if (atomic_exchange(&s_tx_transfer_error, false)) {
+                error = "USB TX transfer failed";
+            }
         }
         if (active && !error && active == atomic_load(&s_tx_request)) {
             const int64_t now = esp_timer_get_time();

@@ -49,6 +49,13 @@ typedef struct {
     unsigned audio_rate, underruns, written_bytes;
 } usb_tx_stats_t;
 
+typedef struct {
+    unsigned completed_bytes, completed_packets, failed_packets, pcm_peak;
+    esp_err_t submit_error;
+} usb_tx_transfer_stats_t;
+
+void usb_audio_tx_reset_transfer_stats(void);
+usb_tx_transfer_stats_t usb_audio_tx_transfer_stats(void);
 bool usb_audio_tx_available(void);
 bool usb_audio_tx_idle(void);
 void usb_audio_tx_request(tx_tone_t tone, int dbfs);
