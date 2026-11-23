@@ -944,7 +944,7 @@ static esp_err_t tx_ws_pre_handshake(httpd_req_t *req)
 static esp_err_t tx_ws_handler(httpd_req_t *req)
 {
     static uint32_t next_owner;
-    tx_ws_session_t *session = req->sess_ctx;
+    tx_ws_session_t *session = req->free_ctx == free_tx_session ? req->sess_ctx : NULL;
     httpd_ws_frame_t frame = {0};
     uint8_t input[192];
     if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK ||
@@ -991,7 +991,8 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     } else if (!tx_acquire(session->owner)) {
         error = "TX busy or unavailable";
     } else if (!tx_key(session->owner)) {
-        error = "PTT unavailable";
+        const tx_state_t refused = tx_get_state();
+        error = refused.reason[0] ? refused.reason : "PTT unavailable";
     }
 
     const tx_state_t state = tx_get_state();
@@ -1000,14 +1001,14 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     const char *tx_vfo = cat.tx_vfo == CAT_TX_VFO_MAIN ? "main" :
                          cat.tx_vfo == CAT_TX_VFO_SUB ? "sub" : "";
     const char *phase = state.phase == TX_KEYED ? "KEYED" : state.phase == TX_ARMED ? "ARMED" : "IDLE";
-    char json[256];
+    char json[384];
     const int n = snprintf(json, sizeof(json),
                            "{\"t\":\"tx\",\"state\":\"%s\",\"left_s\":%u,\"reason\":\"%s\","
                            "\"on_air\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\"}",
                            phase, state.left_s, state.reason, state.on_air ? "true" : "false", tx_vfo,
                            session ? "true" : "false",
                            session && state.owner == session->owner ? "true" : "false", error);
-    if (n < 0 || n >= sizeof(json)) {
+    if (n < 0 || (size_t)n >= sizeof(json)) {
         return ESP_FAIL;
     }
     frame = (httpd_ws_frame_t){.type = HTTPD_WS_TYPE_TEXT, .payload = (uint8_t *)json, .len = n};

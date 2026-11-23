@@ -44,15 +44,18 @@ int main(void) {
     CHECK(ok("ID;"), "ID before ident");
     CHECK(!ok("FA;") && !ok("AI1;") && !ok("FA014074000;"), "none profile blocks");
 
+    CHECK(ok("TX0;") && !ok("TX1;") && !ok("TX;"), "unkey allowed even before identification");
+    CHECK(!ok("TX00;") && !ok("TX01;"), "only the exact TX0 command is unconditional");
+
     // never: transmit commands on any profile
-    const char *never[] = {"TX1;", "TX2;", "TX0;", "MX1;", "KY0;", "VX1;", "PC100;", "FT0;", "FT1;", "FT2;", "FT3;", "EX010411100;x", "AI0;", NULL};
+    const char *never[] = {"TX1;", "TX2;", "MX1;", "KY0;", "VX1;", "PC100;", "FT0;", "FT1;", "FT2;", "FT3;", "EX010411100;x", "AI0;", NULL};
     const char *ids[] = {"0840", "0761", "9999", NULL};
     for (int r = 0; ids[r]; r++) { use(ids[r]); for (int k = 0; never[k]; k++) CHECK(!ok(never[k]), "%s allowed %s", ids[r], never[k]); }
 
 
     tx_enabled = true;
     use("0840");
-    CHECK(!ok("TX1;") && !ok("TX0;"), "TX disabled without password");
+    CHECK(!ok("TX1;") && ok("TX0;"), "unkey allowed without password");
     tx_password = true;
     CHECK(ok("TX1;") && ok("TX0;") && !ok("TX2;"), "FTX-1 authorized TX");
     use("0761");
@@ -60,7 +63,7 @@ int main(void) {
           "FTDX10 only allows the intended TX commands");
     CHECK(ok("EX010415;") && !ok("EX010415001;"), "TX menu read only");
     use("9999");
-    CHECK(!ok("TX1;") && !ok("TX0;") && !ok("EX010415;"), "unknown radio cannot TX");
+    CHECK(!ok("TX1;") && ok("TX0;") && !ok("EX010415;"), "unknown radio allows only the emergency PTT write");
     tx_enabled = tx_password = false;
     // FTX-1
     use("0840");
@@ -168,6 +171,35 @@ int main(void) {
     CHECK(reported.tx_vfo == CAT_TX_VFO_UNKNOWN, "stale selection cannot color a VFO");
     use("9999");
     CHECK(!ok("FT;"), "unknown radio cannot query TX VFO");
+
+    use("0840");
+    handle_cat_packet("FT0;");
+    const char permitted[] = "128C";
+    const char refused[] = "345679ABDEFHI";
+    char mode_packet[] = "MD00;";
+    for (size_t i = 0; i < sizeof(permitted) - 1; i++) {
+        mode_packet[3] = permitted[i];
+        handle_cat_packet(mode_packet);
+        CHECK(cat_ptt_mode_error() == NULL, "MAIN mode %c permits PTT", permitted[i]);
+    }
+    for (size_t i = 0; i < sizeof(refused) - 1; i++) {
+        mode_packet[3] = refused[i];
+        handle_cat_packet(mode_packet);
+        CHECK(cat_ptt_mode_error() != NULL, "MAIN mode %c must block PTT", refused[i]);
+    }
+    handle_cat_packet("MD02;");
+    handle_cat_packet("FT1;");
+    handle_cat_packet("MD14;");
+    CHECK(cat_ptt_mode_error() != NULL, "SUB FM must block PTT when SUB was selected for TX");
+    handle_cat_packet("MD18;");
+    CHECK(cat_ptt_mode_error() == NULL, "SUB DATA-LSB is permitted");
+    g_now_us += RADIO_STATUS_MAX_AGE_US + 1;
+    CHECK(cat_ptt_mode_error() != NULL, "stale mode must block PTT");
+    handle_cat_packet("MD02;");
+    CHECK(cat_ptt_mode_error() != NULL, "unconfirmed TX VFO must block PTT");
+    handle_cat_packet("FT0;");
+    CHECK(cat_set_mode_char(false, '5') == ESP_OK, "queue an AM mode change");
+    CHECK(cat_ptt_mode_error() != NULL, "optimistic mode change cannot authorize PTT");
 
     // CAT log: blocked commands are logged as BLOCKED and never reach the port; reads come back oldest first
     use("0840");

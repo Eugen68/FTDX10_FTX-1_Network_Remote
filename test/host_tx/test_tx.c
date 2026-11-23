@@ -11,6 +11,9 @@ static bool cat_available = true;
 static bool usb_available = true;
 static unsigned on_writes, off_writes;
 static const char *fault;
+static const char *mode_error;
+
+const char *cat_ptt_mode_error(void) { return mode_error; }
 
 bool app_config_tx_enabled(void) { return enabled; }
 void app_config_get(app_config_t *cfg) { *cfg = (app_config_t){.tx_max_seconds = 10}; }
@@ -63,6 +66,15 @@ int main(void)
     enabled = false;
     assert(!tx_acquire(1));
     enabled = true;
+
+    mode_error = "Set MAIN mode to USB, LSB, DATA-USB or DATA-LSB";
+    rx_us = g_now_us;
+    assert(tx_acquire(1));
+    assert(!tx_key(1));
+    assert(tx_get_state().phase == TX_IDLE);
+    assert(tx_get_state().reason == mode_error);
+    assert(on_writes == 0 && off_writes == 0);
+    mode_error = NULL;
 
     key();
     tx_heartbeat(2);
@@ -127,5 +139,11 @@ int main(void)
     confirm_rx();
     assert(tx_begin_usb_recovery());
     tx_resume();
+    key();
+    fault = NULL;
+    mode_error = "Set SUB mode to USB, LSB, DATA-USB or DATA-LSB";
+    watchdog_tick();
+    assert(off_writes == 8 && tx_get_state().reason == mode_error);
+    confirm_rx();
     puts("all TX state tests passed");
 }

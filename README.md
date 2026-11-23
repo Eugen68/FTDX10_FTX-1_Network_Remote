@@ -588,7 +588,7 @@ Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
   Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main`.
 - Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `EX`), checked against the profile of the connected radio.
   For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
-  Supported radios also allow read-only modulation menu queries and transmitter selection status (`FT;`). `TX;` reads TX status. The only PTT writes are `TX1;` and `TX0;`, and they require a supported radio, the TX setting and a configured TX password.
+  Supported radios also allow read-only modulation menu queries and transmitter selection status (`FT;`). `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.
   The ordinary CAT endpoint has no raw-command or PTT operation.
 - Frequency settings are range-checked against the radio's profile (FTX-1 30 kHz – 470 MHz, FTDX10 30 kHz – 75 MHz); anything outside it is rejected.
 - The allow list and the answer parsers are covered by a host test that runs without the board: `test/host_cat/run.sh`.
@@ -603,12 +603,13 @@ option 6 to restart. Clearing the TX password also disables remote PTT. The page
 and the TX password. Five failed TX password attempts from the same IP trigger the 60-second lockout.
 One browser can hold PTT at a time. Hold the button or Space while the page has focus. During confirmed TX, the PTT button and the
 frequency readout for the radio-selected TX VFO turn red.
-This version provides PTT without USB transmit audio. Select the modulation source on the radio for the
-intended mode. The firmware leaves the modulation-source and transmit-gain menus under local control.
+This version provides PTT without USB transmit audio. Set MAIN to USB, LSB, DATA-USB or DATA-LSB.
+When the radio selects SUB for transmit, set SUB to one of those modes too. The firmware waits for fresh
+CAT confirmation of the mode and the selected transmitter. Select the modulation source on the radio. The firmware leaves the modulation-source and transmit-gain menus under local control.
 
 The device releases PTT on button/key release, a closed connection, 1.5 seconds without the owner's
 heartbeat, the transmit time limit, loss of CAT or USB audio, high SWR, or unexpected transmit status.
-It sends TX off when the CAT port comes up with TX enabled. USB recovery, reboot, and OTA wait for
+It sends TX off when a supported radio is identified, even with remote TX disabled. USB recovery, reboot, and OTA wait for
 confirmed receive after a device-controlled transmission. During idle, automatic USB recovery can run
 without CAT, but defers if a recent CAT report shows a transmission. If CAT is physically unavailable
 while keyed, the firmware retries TX off when the link returns and blocks further PTT and power-cycles in

@@ -106,6 +106,8 @@ static cdc_acm_dev_hdl_t s_ptt_port;
 static bool s_ptt_ready;
 static int64_t s_swr_status_us;
 static int64_t s_tx_vfo_status_us;
+static int64_t s_mode_status_us[2];
+static char s_reported_mode[2];
 static int64_t s_last_ptt_status_us;
 static char s_ptt_mode;
 static bool s_hi_swr;
@@ -385,7 +387,10 @@ static bool cat_cmd_allowed(const char *c, size_t len)
     case CAT_TWO('F', 'T'):         // transmitter selection, read only
         return rig->can_tx && pl == 0;
     case CAT_TWO('T', 'X'):
-        return rig->can_tx && (pl == 0 || (pl == 1 && (p[0] == '0' || p[0] == '1') && app_config_tx_enabled()));
+        if (pl == 1 && p[0] == '0') {
+            return true;   // emergency unkey, independent of PTT authorization or profile
+        }
+        return rig->can_tx && (pl == 0 || (pl == 1 && p[0] == '1' && app_config_tx_enabled()));
     case CAT_TWO('R', 'M'):         // meter (read): the S meter item of this radio only
         return rig->meter_side != 0 && pl == 1 && p[0] == rig->meter_side;
     case CAT_TWO('P', 'S'):         // power
@@ -622,6 +627,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_last_tx_status_us = 0;
         s_swr_status_us = 0;
         s_tx_vfo_status_us = 0;
+        memset(s_mode_status_us, 0, sizeof(s_mode_status_us));
         s_state.tx_vfo = CAT_TX_VFO_UNKNOWN;
         s_last_ptt_status_us = 0;
         s_ptt_mode = 0;
@@ -802,6 +808,8 @@ static void handle_cat_packet(const char *pkt)
     if (parse_mode(pkt, "MD0", &mode_raw, mode_name, sizeof(mode_name))) {
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
             s_state.mode_main_raw = mode_raw;
+            s_reported_mode[0] = mode_raw;
+            s_mode_status_us[0] = esp_timer_get_time();
             strlcpy(s_state.mode_main, mode_name, sizeof(s_state.mode_main));
             s_state.connected = true;
             s_last_answer_us = esp_timer_get_time();
@@ -812,6 +820,8 @@ static void handle_cat_packet(const char *pkt)
     if (parse_mode(pkt, "MD1", &mode_raw, mode_name, sizeof(mode_name))) {
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
             s_state.mode_sub_raw = mode_raw;
+            s_reported_mode[1] = mode_raw;
+            s_mode_status_us[1] = esp_timer_get_time();
             strlcpy(s_state.mode_sub, mode_name, sizeof(s_state.mode_sub));
             s_state.connected = true;
             s_last_answer_us = esp_timer_get_time();
@@ -1068,12 +1078,12 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
 
         // 3. Poll BUSY / TX every 500 ms (every 5 iterations)
         if ((poll_count % 5) == 0) {
-            if (rig->can_tx && app_config_tx_enabled()) {
+            if (rig->can_tx) {
                 initialize_ptt_port(dev);
             }
             send_poll(dev, rig->poll_status);
             if (rig->can_tx && app_config_tx_enabled()) {
-                send_poll(dev, "FT;");
+                send_poll(dev, "FT;MD0;MD1;");
             }
             if (rig->has_by_tx && cat_tx_requested()) {
                 send_poll(dev, "RI0;");
@@ -1209,7 +1219,7 @@ static void cat_task(void *arg)
             s_ptt_port = dev;
             s_ptt_ready = false;
             xSemaphoreGive(s_ptt_lock);
-            if (s_rig->can_tx && app_config_tx_enabled()) {
+            if (s_rig->can_tx) {
                 initialize_ptt_port(dev);
             }
             poll_loop(dev);
@@ -1334,6 +1344,37 @@ const char *cat_ptt_fault(int64_t started, int64_t grace_us)
                (s_ptt_mode != '1' || s_last_ptt_status_us < started || s_swr_status_us < started ||
                 now - s_swr_status_us > RADIO_STATUS_MAX_AGE_US)) {
         reason = "Radio TX status unexpected";
+    }
+    xSemaphoreGive(s_lock);
+    return reason;
+}
+
+/** Only sideband modes are allowed while remote PTT has no audio. */
+static bool ptt_sideband_mode(char mode)
+{
+    return mode == '1' || mode == '2' || mode == '8' || mode == 'C';
+}
+
+const char *cat_ptt_mode_error(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const int64_t now = esp_timer_get_time();
+    const char *reason = NULL;
+    if (!s_mode_status_us[0] || now - s_mode_status_us[0] > RADIO_STATUS_MAX_AGE_US ||
+        s_state.mode_main_raw != s_reported_mode[0]) {
+        reason = "Waiting for MAIN mode confirmation";
+    } else if (!ptt_sideband_mode(s_reported_mode[0])) {
+        reason = "Set MAIN mode to USB, LSB, DATA-USB or DATA-LSB";
+    } else if (s_state.tx_vfo == CAT_TX_VFO_UNKNOWN || !s_tx_vfo_status_us ||
+               now - s_tx_vfo_status_us > RADIO_STATUS_MAX_AGE_US) {
+        reason = "Waiting for TX VFO confirmation";
+    } else if (s_state.tx_vfo == CAT_TX_VFO_SUB) {
+        if (!s_mode_status_us[1] || now - s_mode_status_us[1] > RADIO_STATUS_MAX_AGE_US ||
+            s_state.mode_sub_raw != s_reported_mode[1]) {
+            reason = "Waiting for SUB mode confirmation";
+        } else if (!ptt_sideband_mode(s_reported_mode[1])) {
+            reason = "Set SUB mode to USB, LSB, DATA-USB or DATA-LSB";
+        }
     }
     xSemaphoreGive(s_lock);
     return reason;

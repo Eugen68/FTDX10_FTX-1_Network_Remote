@@ -67,15 +67,21 @@ bool tx_key(uint32_t owner)
     app_config_get(&cfg);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool keyed = false;
+    const char *refusal = "PTT unavailable";
     if (s_state.phase == TX_ARMED && s_state.owner == owner && !s_inhibited &&
         usb_audio_get_format(NULL) && cat_radio_rx_after(0)) {
-        s_keyed_at = esp_timer_get_time();
-        s_deadline = s_keyed_at + (int64_t)cfg.tx_max_seconds * 1000000;
-        s_state.phase = TX_KEYED;  // even a failed write may have reached the radio
-        keyed = cat_ptt(true) == ESP_OK;
+        const char *mode_error = cat_ptt_mode_error();
+        if (mode_error) {
+            refusal = mode_error;
+        } else {
+            s_keyed_at = esp_timer_get_time();
+            s_deadline = s_keyed_at + (int64_t)cfg.tx_max_seconds * 1000000;
+            s_state.phase = TX_KEYED;  // even a failed write may have reached the radio
+            keyed = cat_ptt(true) == ESP_OK;
+        }
     }
     if (!keyed && s_state.owner == owner) {
-        stop_locked("PTT unavailable");
+        stop_locked(refusal);
     }
     xSemaphoreGive(s_lock);
     return keyed;
@@ -125,6 +131,9 @@ static void watchdog_tick(void)
                 stop_locked("USB audio lost");
             } else {
                 const char *reason = cat_ptt_fault(s_keyed_at, CONFIRM_US);
+                if (!reason) {
+                    reason = cat_ptt_mode_error();
+                }
                 if (reason) {
                     stop_locked(reason);
                 }
