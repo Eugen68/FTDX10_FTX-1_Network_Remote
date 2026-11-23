@@ -11,6 +11,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FTX-1 Companion</title>
 <style>
+  /* Phones: do not let the browser enlarge text by itself ("font boosting" in Chrome on Android) */
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,500;0,700;1,500&family=JetBrains+Mono:wght@700;800&family=Rajdhani:wght@600;700&family=Share+Tech+Mono&display=swap');
 
   :root {
@@ -962,10 +964,38 @@
     .screen-meters, .vfo-display-grid, .sq-grid, .scope-pair {
       grid-template-columns: 1fr;
     }
+    /* Phone layout: everything fits the screen width, nothing scrolls sideways */
+    .rig-chassis { padding: .4rem; }
+    .rig-header { flex-wrap: wrap; gap: .4rem; }
+    .brand-logo { flex: 1 1 100%; }
+    .header-controls { flex: 1 1 100%; flex-wrap: wrap; justify-content: space-between; gap: .4rem; }
+    .led-group { flex: 1 1 100%; justify-content: flex-start; }
+    .header-controls button { flex: 1 1 0; min-height: 2.4rem; padding: .3rem .4rem; }
+    .tft-screen, .control-card { min-width: 0; }
+    .vfo-ops-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: .3rem; }
+    .vfo-op-btn { white-space: nowrap; font-size: .68rem; padding: .45rem .2rem; min-height: 2.4rem; }
+    .vfo-op-btn .vfo-op-icon { display: none; }
+    .vfo-font-select-wrap { grid-column: 1 / -1; }
+    .vfd-bezel .freq-readout, .vfd-bezel[class*="font-"] .freq-readout { font-size: clamp(1.3rem, 8.5vw, 1.85rem); letter-spacing: .5px; }
+    .scope-header { flex-wrap: wrap; row-gap: .25rem; }
+    .scope-spans { flex-wrap: wrap; row-gap: .25rem; }
+    .scope-span-btn { min-height: 1.9rem; min-width: 2.2rem; }
+    .scope-vol { width: 90px; height: 18px; }
+    .scope-rate-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .3rem; }
+    .ft8-header { flex-wrap: wrap; row-gap: .3rem; }
+    .ft8-ctrls { flex-wrap: wrap; }
+    .ft8-list-container { overflow-x: auto; }
+    .rig-btn { min-height: 2rem; }
+    .catlog-bar { gap: .4rem; }
+    .catlog-legend { display: none; }
   }
 </style>
 </head>
 <body>
+
+<!-- Phones: the audio is played through this element so the browser treats the page as media playback
+     and keeps it playing in the background and with the screen off (see BG_AUDIO in the script) -->
+<audio id="bgAudio" playsinline hidden></audio>
 
 <div class="rig-chassis">
   <!-- Header -->
@@ -1138,13 +1168,13 @@
       <!-- VFO Operations Bar (Swap / Copy / Font Selector) -->
       <div class="vfo-ops-bar">
         <button type="button" class="vfo-op-btn" id="btnSwapVfo" title="Swap frequency and mode between MAIN and SUB (SV;)">
-          <span class="vfo-op-icon">⇄</span> SWAP (A ⇄ B)
+          <span class="vfo-op-icon">&#8596;</span> SWAP (A &#8596; B)
         </button>
         <button type="button" class="vfo-op-btn" id="btnCopyAtoB" title="Copy MAIN to SUB (AB;)">
-          <span class="vfo-op-icon">➔</span> A ➔ B (A=B)
+          <span class="vfo-op-icon">&#8594;</span> A &#8594; B (A=B)
         </button>
         <button type="button" class="vfo-op-btn" id="btnCopyBtoA" title="Copy SUB to MAIN (BA;)">
-          <span class="vfo-op-icon">🠔</span> A 🠔 B (B=A)
+          <span class="vfo-op-icon">&#8592;</span> A &#8592; B (B=A)
         </button>
         <div class="vfo-font-select-wrap" title="VFO frequency display font (saved in this browser)">
           <label for="vfoFontSelect" class="vfo-font-label">FONT</label>
@@ -1966,6 +1996,37 @@ requestAnimationFrame(renderScope);
 let isUserStopped = true;
 let reconnectTimer = null;
 
+// ---- Background playback on phones (screen off, other app in front) ----
+const BG_AUDIO = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+                 (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));   // iPadOS
+const bgAudio = document.getElementById('bgAudio');
+function mediaSessionUpdate(playing) {
+  if (!('mediaSession' in navigator)) return;
+  try {
+    const rig = rigProfileKey ? rigProfileKey.split('|')[0] : 'Radio';
+    const mode = (typeof modeBadgeMain !== 'undefined' && modeBadgeMain) ? modeBadgeMain.textContent : '';
+    const mhz = curFreqMain ? (curFreqMain / 1e6).toFixed(3) + ' MHz' : '';
+    navigator.mediaSession.metadata = new MediaMetadata({ title: [mhz, mode].filter(Boolean).join(' ') || rig,
+                                                           artist: rig + ' Companion' });
+    navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+  } catch (e) {}
+}
+if ('mediaSession' in navigator) {
+  try {
+    navigator.mediaSession.setActionHandler('play', () => { if (!abort) start(); });
+    navigator.mediaSession.setActionHandler('pause', () => { if (abort) stop(); });
+    navigator.mediaSession.setActionHandler('stop', () => { if (abort) stop(); });
+  } catch (e) {}
+}
+// Coming back to the page (or the screen turning on): resume anything the browser suspended
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !abort) return;
+  if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+  if (BG_AUDIO && bgAudio.srcObject && bgAudio.paused) bgAudio.play().catch(() => {});
+});
+// Keep the lock-screen title on the current frequency
+setInterval(() => { if (abort && BG_AUDIO) mediaSessionUpdate(true); }, 5000);
+
 // Stream rate asked from the device (it low-pass filters and decimates the radio's 48 kHz)
 const STREAM_RATE_KEY = 'ftx1.streamRate';
 const streamRateSel = document.getElementById('streamRateSel');
@@ -2020,7 +2081,20 @@ async function start() {
     limiter.attack.value = 0.002;
     limiter.release.value = 0.15;
     merger.connect(limiter);
-    limiter.connect(ctx.destination);
+    if (BG_AUDIO) {
+      // Phone: play through an <audio> element fed from this graph. Browsers keep media elements playing
+      // in the background and with the screen off, which they do not promise for a bare AudioContext.
+      const mediaDest = ctx.createMediaStreamDestination();
+      limiter.connect(mediaDest);
+      bgAudio.srcObject = mediaDest.stream;
+      bgAudio.play().catch((e) => {
+        console.warn('Background audio element refused to play, using the AudioContext directly:', e);
+        limiter.connect(ctx.destination);
+      });
+      mediaSessionUpdate(true);
+    } else {
+      limiter.connect(ctx.destination);
+    }
     speakerGains = [0, 1].map((i) => {
       const g = ctx.createGain();
       splitter.connect(g, ch >= 2 ? i : 0);
@@ -2164,6 +2238,8 @@ function stop() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (abort) { abort.abort(); abort = null; }
   if (ctx) { ctx.close(); ctx = null; scopeAnalysers = [null, null]; speakerGains = [null, null]; }
+  if (bgAudio.srcObject) { bgAudio.pause(); bgAudio.srcObject = null; }
+  mediaSessionUpdate(false);
   btnPlay.textContent = 'POWER / PLAY';
   btnPlay.classList.remove('running');
   ledRx.classList.remove('on-green');

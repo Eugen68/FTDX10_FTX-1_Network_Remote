@@ -583,7 +583,7 @@ So that the radio cannot be put into transmit over the network, the CAT commands
 - Only one audio input device is used (a second and later ones are ignored).
 - Only UAC 1.0 devices are supported.
 - Browser playback has a delay of a few hundred milliseconds.
-- Smartphone browsers are not supported. The UI is designed for the browser of a PC / Mac.
+- Phones: the page has a one-column phone layout and, on Android / iOS, plays through a media element so audio can continue with the screen off or another app in front (Media Session controls on the lock screen). Whether the browser keeps it running in the background is up to the phone (tested on Android Chrome by the owner; iOS Safari is stricter). Wi-Fi power saving with the screen off can add gaps.
 
 ## Troubleshooting
 
