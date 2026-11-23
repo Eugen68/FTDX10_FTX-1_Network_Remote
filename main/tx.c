@@ -202,7 +202,8 @@ tx_state_t tx_get_state(void)
     if (s_keyed_at > 0) {
         result.po_valid = meters.po_us >= s_keyed_at && now - meters.po_us <= TX_METER_MAX_AGE_US;
         result.swr_valid = result.po_valid && meters.po >= TX_PO_MIN_RAW &&
-                           meters.swr_us >= s_keyed_at && now - meters.swr_us <= TX_METER_MAX_AGE_US;
+                           meters.swr_po >= TX_PO_MIN_RAW && meters.swr_po_us >= s_keyed_at &&
+                           now - meters.swr_us <= TX_METER_MAX_AGE_US;
         result.swr = result.swr_valid ? tx_swr_value(meters.rig, meters.swr) : 0;
         result.swr_raw = meters.swr_us >= s_keyed_at ? meters.swr : 0;
         result.po_raw = meters.po_us >= s_keyed_at ? meters.po : 0;

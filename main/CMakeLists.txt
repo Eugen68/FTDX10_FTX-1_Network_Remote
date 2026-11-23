@@ -30,7 +30,7 @@ idf_component_register(SRCS "web_auth.c" "console_menu.c" "app_config.c" "main.c
                     INCLUDE_DIRS "."
                     PRIV_REQUIRES esp_wifi esp_netif esp_event nvs_flash esp_https_server espressif__mdns lwip
                                   app_update esp_app_format mbedtls esp_timer espressif__usb espressif__usb_host_cdc_acm
-                                  esp_driver_usb_serial_jtag esp_driver_uart esp_driver_gpio esp_driver_spi
+                                  esp_driver_usb_serial_jtag esp_driver_uart esp_driver_gpio esp_driver_spi esp_ringbuf
                     EMBED_TXTFILES "index.html" "map.html" "${CERT_FILE}" "${KEY_FILE}"
                     )
 
@@ -38,6 +38,14 @@ idf_component_register(SRCS "web_auth.c" "console_menu.c" "app_config.c" "main.c
 # or embedded page changes, so the build time shown in the GUI is always current.
 # (set_source_files_properties is not scriptable, so skip it during IDF's requirements scan.)
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    # Redirect the managed UAC component's ring calls only. The application
+    # provides an explicit PSRAM backing store for the 16 KiB TX ring.
+    idf_component_get_property(uac_target espressif__usb_host_uac COMPONENT_LIB)
+    target_sources(${uac_target} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/uac_ringbuffer.c")
+    target_compile_definitions(${uac_target} PRIVATE
+        xRingbufferCreate=ftx_uac_ring_create
+        vRingbufferDelete=ftx_uac_ring_delete)
+
     file(GLOB BUILD_STAMP_DEPS "${CMAKE_CURRENT_LIST_DIR}/*.c" "${CMAKE_CURRENT_LIST_DIR}/*.h"
                                "${CMAKE_CURRENT_LIST_DIR}/*.html")
     list(REMOVE_ITEM BUILD_STAMP_DEPS "${CMAKE_CURRENT_LIST_DIR}/build_info.c")

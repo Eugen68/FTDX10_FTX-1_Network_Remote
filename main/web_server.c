@@ -37,7 +37,7 @@
 
 #define STREAM_CHUNK_BYTES   4096
 #define CAT_POST_MAX_BYTES   192     // largest accepted POST /cat body, including the NUL
-#define CAT_JSON_BYTES       1152    // GET /cat response
+#define CAT_JSON_BYTES       1344    // GET /cat response
 #define STREAM_READ_TIMEOUT  pdMS_TO_TICKS(200)
 #define KEEPALIVE_IDLE_READS 5       // idle waits (about 1 s) before a keep-alive silence block is sent
 #define KEEPALIVE_FRAMES     64      // length of that block in audio frames
@@ -635,7 +635,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 256];
+    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 640];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -731,6 +731,18 @@ static esp_err_t status_handler(httpd_req_t *req)
                       tx.stopping ? "true" : "false", tx.off_attempts, tx.off_error,
                       audio.audio_rate, audio.underruns, audio.written_bytes, swr, tx.swr_raw, po, tx.po_raw);
     }
+    if (n > 0 && (size_t)n < sizeof(json)) {
+        const cat_write_stats_t cat = cat_get_write_stats();
+        n--;
+        n += snprintf(json + n, sizeof(json) - n,
+                      ",\"cat_write\":{\"budget_ms\":%u,"
+                      "\"all\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
+                      "\"keyed\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
+                      "\"meters\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u}}}",
+                      cat.budget_ms, cat.all.calls, cat.all.timeouts, cat.all.over_budget, cat.all.max_us,
+                      cat.keyed.calls, cat.keyed.timeouts, cat.keyed.over_budget, cat.keyed.max_us,
+                      cat.meters.calls, cat.meters.timeouts, cat.meters.over_budget, cat.meters.max_us);
+    }
     return send_json(req, json, n, sizeof(json));
 }
 
@@ -741,9 +753,10 @@ static esp_err_t cat_handler(httpd_req_t *req)
         return ESP_OK;
     }
     cat_state_t st;
-    char note[2 * sizeof(st.last_error) + 1];
+    char note[2 * sizeof(st.last_error) + 1], write_error[2 * sizeof(st.write_error) + 1];
     char json[CAT_JSON_BYTES];
     cat_get_state(&st);
+    json_escape(st.write_error, write_error, sizeof(write_error));
     json_escape(st.last_error, note, sizeof(note));   // contains bytes echoed by the radio
     char rig_name[2 * sizeof(st.rig_name) + 1];
     char rig_id[2 * sizeof(st.rig_id) + 1];
@@ -778,10 +791,10 @@ static esp_err_t cat_handler(httpd_req_t *req)
     if (n > 0 && (size_t)n < sizeof(json)) {
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s}",
+                      ",\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\"}",
                       app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
-                      st.tx_radio_known ? "true" : "false");
+                      st.tx_radio_known ? "true" : "false", (unsigned long)st.write_error_seq, write_error);
     }
     return send_json(req, json, n, sizeof(json));
 }

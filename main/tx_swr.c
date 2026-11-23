@@ -54,9 +54,10 @@ tx_swr_result_t tx_swr_check(tx_swr_guard_t *g, const cat_tx_meters_t *m,
     if (!g->power_since_us) {
         g->power_since_us = m->po_us;
     }
-    if (m->swr_us < g->power_since_us || now - m->swr_us > TX_METER_MAX_AGE_US) {
+    if (m->swr_po_us < g->power_since_us || m->swr_po < TX_PO_MIN_RAW ||
+        now - m->swr_us > TX_METER_MAX_AGE_US) {
         return now - g->power_since_us > TX_METER_MAX_AGE_US ||
-               (m->swr_us >= g->power_since_us && now - m->swr_us > TX_METER_MAX_AGE_US)
+               (m->swr_po_us >= g->power_since_us && now - m->swr_us > TX_METER_MAX_AGE_US)
                ? TX_SWR_STALE : TX_SWR_OK;
     }
     const unsigned swr = tx_swr_value(m->rig, m->swr);

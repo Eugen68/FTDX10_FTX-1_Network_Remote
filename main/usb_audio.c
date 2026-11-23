@@ -40,7 +40,9 @@
 #define USB_CORE                1        // away from the Wi-Fi driver and LwIP on core 0
 #define PREFERRED_BITS          16
 #define MAX_LOCK_WAIT_MS        500
-#define TX_RING_BUFFER_BYTES    (16 * 1024)
+_Static_assert(CONFIG_AUDIO_RING_BUFFER_SIZE != USB_AUDIO_TX_RING_BYTES,
+               "RX and TX rings must have distinct sizes for the UAC allocator");
+
 #define TX_TASK_PRIORITY        18
 #define TX_BLOCK_MS             10
 #define TX_PREFILL_BLOCKS       4
@@ -212,7 +214,7 @@ static void handle_output_connected(uint8_t addr, uint8_t iface_num)
     const uac_host_device_config_t config = {
         .addr = addr,
         .iface_num = iface_num,
-        .buffer_size = TX_RING_BUFFER_BYTES,
+        .buffer_size = USB_AUDIO_TX_RING_BYTES,
         .callback = uac_device_cb,
         .callback_arg = &s_tx_available,  // marks this interface as output
     };

@@ -28,7 +28,8 @@ void usb_audio_tx_request(tx_tone_t tone, int dbfs) { audio_request = tone; }
 cat_tx_meters_t cat_get_tx_meters(void)
 {
     return (cat_tx_meters_t){
-        .rig = CAT_RIG_FTDX10, .po = po_raw, .swr = swr_raw, .po_us = g_now_us, .swr_us = g_now_us
+        .rig = CAT_RIG_FTDX10, .po = po_raw, .swr = swr_raw, .swr_po = po_raw, .po_us = g_now_us,
+        .swr_us = g_now_us, .swr_po_us = g_now_us
     };
 }
 bool cat_radio_rx_after(int64_t after_us) { return cat_available && !radio_on && rx_us > after_us; }

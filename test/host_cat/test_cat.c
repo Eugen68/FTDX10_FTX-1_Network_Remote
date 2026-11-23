@@ -211,6 +211,8 @@ int main(void) {
     CHECK(meters.rig == CAT_RIG_FTDX10 && meters.po == 22 && meters.swr == 126, "FTDX10 meters");
     use("0840");
     CHECK(ok("RM5;") && ok("RM6;"), "FTX-1 PO/SWR");
+    ++g_now_us;
+    handle_cat_packet("RM5010000;");
     handle_cat_packet("RM6089000;");
     meters = cat_get_tx_meters();
     CHECK(meters.rig == CAT_RIG_FTX1 && meters.swr == 89, "FTX-1 SWR");
@@ -225,6 +227,21 @@ int main(void) {
     handle_cat_packet("FA014074000;");
     cat_get_state(&reported);
     CHECK(!reported.tx_radio_known && !reported.tx_radio, "other CAT replies do not refresh TX state");
+
+    const int64_t last_pair = meters.swr_us;
+    ++g_now_us;
+    handle_cat_packet("RM6100000;");
+    CHECK(cat_get_tx_meters().swr_us == last_pair, "RM6 alone cannot refresh a metering pair");
+
+    cat_write_timing_t timing = {0};
+    capture_write_timing(&timing, 200000, ESP_ERR_TIMEOUT);
+    capture_write_timing(&timing, 201000, ESP_OK);
+    CHECK(timing.calls == 2 && timing.timeouts == 1 && timing.over_budget == 1 && timing.max_us == 201000,
+          "measure timeout and duration independently");
+    report_queued_write_failure("MD02;", ESP_ERR_TIMEOUT);
+    cat_get_state(&reported);
+    CHECK(reported.write_error_seq == 1 && strstr(reported.write_error, "MD02;"),
+          "failed command is visible in the web status");
 
     // CAT log: blocked commands are logged as BLOCKED and never reach the port; reads come back oldest first
     use("0840");

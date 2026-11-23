@@ -15,6 +15,8 @@
 #include "sdkconfig.h"
 #include "tx_tone.h"
 
+#define USB_AUDIO_TX_RING_BYTES (16 * 1024)
+
 #ifdef __cplusplus
 extern "C" {
 #endif

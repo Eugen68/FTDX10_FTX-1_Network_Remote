@@ -634,7 +634,13 @@ The panel and `/status` show both raw meters. SWR conversions use provisional, m
 and [FTDX10](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftdx10.h) Hamlib reference points.
 Check these against the radio and known loads on the bench before relying on the numeric ratio.
 In `/status`, the TX audio counters show the output sample rate, missed audio task deadlines and
-bytes accepted by the USB driver.
+bytes accepted by the USB driver. The 16 KiB TX staging ring uses PSRAM, with its control block in internal RAM.
+The UAC driver allocates USB transfer buffers when the output stream starts.
+
+`/status.cat_write` reports write counts, timeouts, maximum elapsed microseconds and calls exceeding the
+200 ms driver budget. It reports these since boot for all writes, writes while keyed, and RM5/RM6 batches.
+Failed queued commands are visible in the page and CAT LOG. Compare `int_min` after identical runs with
+ACC enabled, because it tracks the lowest free internal memory since boot.
 
 ### USB audio discovery
 

@@ -9,7 +9,8 @@
 static tx_swr_result_t sample(tx_swr_guard_t *g, unsigned raw, unsigned power, int64_t now)
 {
     const cat_tx_meters_t meters = {
-        .rig = CAT_RIG_FTDX10, .po = power, .swr = raw, .po_us = now, .swr_us = now,
+        .rig = CAT_RIG_FTDX10, .po = power, .swr = raw, .swr_po = power, .po_us = now,
+        .swr_us = now, .swr_po_us = now,
     };
     return tx_swr_check(g, &meters, 1000000, now, 300);
 }
@@ -57,6 +58,18 @@ int main(void)
     assert(tx_swr_check(&guard, &missing, 1000000, 2400000, 300) == TX_SWR_STALE);
     missing.po = 0;
     assert(tx_swr_check(&guard, &missing, 1000000, 2400000, 300) == TX_SWR_OK);
+
+    // A new high PO sample cannot unlock an old SWR sample taken at low PO.
+    guard = (tx_swr_guard_t){0};
+    cat_tx_meters_t unmatched = {
+        .rig = CAT_RIG_FTDX10, .po = 20, .swr = 126, .swr_po = 1,
+        .po_us = 1700000, .swr_us = 1600000, .swr_po_us = 1600000
+    };
+    assert(tx_swr_check(&guard, &unmatched, 1000000, 1700000, 300) == TX_SWR_OK);
+    unmatched.swr_po = 20;
+    unmatched.swr_po_us = 1700000;
+    unmatched.swr_us = 1700001;
+    assert(tx_swr_check(&guard, &unmatched, 1000000, 1700001, 300) == TX_SWR_LIMIT);
 
     int16_t pcm[960];
     tx_tone_fill(pcm, 48000, 2, TX_TONE_SINGLE, -24);

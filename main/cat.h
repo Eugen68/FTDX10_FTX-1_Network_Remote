@@ -76,6 +76,8 @@ typedef struct {
     uint8_t devices;        /*!< USB devices seen on the last scan (hubs included) */
     uint8_t cp210x;         /*!< Of those, CP210x (VID 0x10C4) devices opened */
     uint8_t answered;       /*!< Of those, devices that answered ID; */
+    uint32_t write_error_seq;
+    char write_error[80];   /*!< Last failed queued CAT write */
     char last_error[80];    /*!< Last scan problem, "" if none */
 } cat_state_t;
 
@@ -122,11 +124,22 @@ void cat_get_state(cat_state_t *state);
 bool cat_radio_rx_confirmed(void);
 typedef struct {
     cat_rig_t rig;
-    unsigned po, swr;
-    int64_t po_us, swr_us;
+    unsigned po, swr, swr_po;
+    int64_t po_us, swr_us, swr_po_us;
 } cat_tx_meters_t;
 
 cat_tx_meters_t cat_get_tx_meters(void);
+
+typedef struct {
+    unsigned calls, timeouts, over_budget, max_us;
+} cat_write_timing_t;
+
+typedef struct {
+    cat_write_timing_t all, keyed, meters;
+    unsigned budget_ms;
+} cat_write_stats_t;
+
+cat_write_stats_t cat_get_write_stats(void);
 bool cat_radio_rx_after(int64_t after_us);
 bool cat_radio_tx(void);
 esp_err_t cat_ptt(bool on);

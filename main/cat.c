@@ -106,6 +106,7 @@ static cdc_acm_dev_hdl_t s_ptt_port;
 static bool s_ptt_ready;
 static int64_t s_swr_status_us;
 static cat_tx_meters_t s_tx_meters;
+static cat_write_stats_t s_write_stats;
 static int64_t s_tx_vfo_status_us;
 static int64_t s_mode_status_us[2];
 static char s_reported_mode[2];
@@ -544,6 +545,16 @@ size_t cat_log_read(uint32_t since_seq, cat_log_entry_t *out, size_t max)
     return n;
 }
 
+static void capture_write_timing(cat_write_timing_t *stats, unsigned us, esp_err_t err)
+{
+    ++stats->calls;
+    stats->timeouts += err == ESP_ERR_TIMEOUT;
+    stats->over_budget += us > TX_TIMEOUT_MS * 1000;
+    if (us > stats->max_us) {
+        stats->max_us = us;
+    }
+}
+
 /** The only place that writes to the radio */
 static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_kind_t kind)
 {
@@ -554,7 +565,21 @@ static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_ki
         }
         return ESP_ERR_INVALID_ARG;
     }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const bool keyed = s_state.tx_cat;
+    xSemaphoreGive(s_lock);
+    const int64_t start = esp_timer_get_time();
     const esp_err_t err = cdc_acm_host_data_tx_blocking(dev, (const uint8_t *)cmds, strlen(cmds), TX_TIMEOUT_MS);
+    const unsigned elapsed = (unsigned)(esp_timer_get_time() - start);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    capture_write_timing(&s_write_stats.all, elapsed, err);
+    if (keyed) {
+        capture_write_timing(&s_write_stats.keyed, elapsed, err);
+    }
+    if (strcmp(cmds, "RM5;RM6;") == 0) {
+        capture_write_timing(&s_write_stats.meters, elapsed, err);
+    }
+    xSemaphoreGive(s_lock);
     log_cmds('T', err == ESP_OK ? kind : CAT_LOG_ERROR, cmds);
     return err;
 }
@@ -974,9 +999,13 @@ static void handle_cat_packet(const char *pkt)
             if (pkt[2] == '5') {
                 s_tx_meters.po = raw;
                 s_tx_meters.po_us = now_pkt_us;
-            } else {
+            } else if (s_tx_meters.po_us > s_tx_meters.swr_po_us &&
+                       now_pkt_us - s_tx_meters.po_us <= 250000) {
+                // RM5 precedes RM6 in each poll. A later SWR cannot refresh an old PO/SWR pair.
                 s_tx_meters.swr = raw;
                 s_tx_meters.swr_us = now_pkt_us;
+                s_tx_meters.swr_po = s_tx_meters.po;
+                s_tx_meters.swr_po_us = s_tx_meters.po_us;
             }
             xSemaphoreGive(s_lock);
         }
@@ -1054,6 +1083,14 @@ static void initialize_ptt_port(cdc_acm_dev_hdl_t dev)
     xSemaphoreGive(s_ptt_lock);
 }
 
+static void report_queued_write_failure(const char *cmd, esp_err_t err)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    ++s_state.write_error_seq;
+    snprintf(s_state.write_error, sizeof(s_state.write_error), "%s: %s", cmd, esp_err_to_name(err));
+    xSemaphoreGive(s_lock);
+}
+
 static void poll_loop(cdc_acm_dev_hdl_t dev)
 {
     const rig_profile_t *rig = s_rig;
@@ -1076,7 +1113,7 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             const esp_err_t err = cat_tx(dev, item.cmd);
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "CAT write failed (%s): %s", item.cmd, esp_err_to_name(err));
-                diag("CAT write failed (%s): %s", item.cmd, esp_err_to_name(err));
+                report_queued_write_failure(item.cmd, err);
                 break;
             }
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -1315,6 +1352,15 @@ cat_tx_meters_t cat_get_tx_meters(void)
     const cat_tx_meters_t meters = s_tx_meters;
     xSemaphoreGive(s_lock);
     return meters;
+}
+
+cat_write_stats_t cat_get_write_stats(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    cat_write_stats_t stats = s_write_stats;
+    xSemaphoreGive(s_lock);
+    stats.budget_ms = TX_TIMEOUT_MS;
+    return stats;
 }
 
 bool cat_radio_rx_after(int64_t after_us)
