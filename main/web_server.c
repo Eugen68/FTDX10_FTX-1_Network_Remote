@@ -27,6 +27,7 @@
 #include <math.h>
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "esp_netif.h"
 #include "usb_audio.h"
 #include "web_auth.h"
 #include "web_server.h"
@@ -1024,6 +1025,105 @@ static esp_err_t wav_handler(httpd_req_t *req)
     return start_stream(req, true);
 }
 
+// ---- Plain HTTP on port 80: only a redirect to HTTPS ---------------------------------------------------
+// Typing just the IP address (or ftx-1c.local) makes a browser try http:// first, where nothing answered.
+// This server answers every request with 301 to the same host over https, and does nothing else: no page,
+// no data, no authentication (the HTTPS server asks for it).
+
+/** A host name or IPv4 address as it may appear in a Host header, without the port */
+static bool redirect_host_ok(const char *h)
+{
+    const size_t n = strlen(h);
+    if (n == 0 || n > 63) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        const char c = h[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Keep the path of the request if it is plain (so http://<ip>/map lands on /map), otherwise "/" */
+static bool redirect_path_ok(const char *p)
+{
+    const size_t n = strlen(p);
+    if (n == 0 || n > 64 || p[0] != '/' || (n > 1 && p[1] == '/')) {
+        return false;
+    }
+    for (size_t i = 0; i < n; i++) {
+        const char c = p[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '/' || c == '.' || c == '_' || c == '-')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static esp_err_t redirect_handler(httpd_req_t *req)
+{
+    char host[72] = "";
+    if (httpd_req_get_hdr_value_len(req, "Host") < sizeof(host)) {
+        httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host));
+    }
+    char *colon = strchr(host, ':');            // drop ":80"
+    if (colon) {
+        *colon = '\0';
+    }
+    if (!redirect_host_ok(host)) {
+        // No usable Host header: use this device's own address
+        esp_netif_ip_info_t ip;
+        esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (netif == NULL || esp_netif_get_ip_info(netif, &ip) != ESP_OK) {
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Use https://");
+        }
+        snprintf(host, sizeof(host), IPSTR, IP2STR(&ip.ip));
+    }
+    char path[72] = "/";
+    const char *q = strchr(req->uri, '?');
+    const size_t plen = q ? (size_t)(q - req->uri) : strlen(req->uri);
+    if (plen < sizeof(path)) {
+        memcpy(path, req->uri, plen);
+        path[plen] = '\0';
+        if (!redirect_path_ok(path)) {
+            strcpy(path, "/");
+        }
+    }
+    char location[160];
+    snprintf(location, sizeof(location), "https://%s%s", host, path);
+    httpd_resp_set_status(req, "301 Moved Permanently");
+    httpd_resp_set_hdr(req, "Location", location);
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    return httpd_resp_send(req, NULL, 0);
+}
+
+static void redirect_server_start(void)
+{
+    httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+    cfg.server_port = 80;
+    cfg.ctrl_port = 32769;                      // the HTTPS server uses the default 32768
+    cfg.max_open_sockets = 2;
+    cfg.max_uri_handlers = 2;
+    cfg.lru_purge_enable = true;
+    cfg.core_id = 1;
+    cfg.stack_size = 3072;
+    cfg.uri_match_fn = httpd_uri_match_wildcard;
+    httpd_handle_t h = NULL;
+    if (httpd_start(&h, &cfg) != ESP_OK) {
+        ESP_LOGW(TAG, "HTTP redirect server on port 80 did not start (HTTPS still works)");
+        return;
+    }
+    static const httpd_uri_t any_get = {.uri = "/*", .method = HTTP_GET, .handler = redirect_handler};
+    static const httpd_uri_t any_head = {.uri = "/*", .method = HTTP_HEAD, .handler = redirect_handler};
+    httpd_register_uri_handler(h, &any_get);
+    httpd_register_uri_handler(h, &any_head);
+    ESP_LOGI(TAG, "HTTP port 80 redirects to HTTPS");
+}
+
 esp_err_t web_server_start(void)
 {
     httpd_ssl_config_t config = HTTPD_SSL_CONFIG_DEFAULT();
@@ -1069,6 +1169,7 @@ esp_err_t web_server_start(void)
     }
     ESP_RETURN_ON_ERROR(ota_register(server), TAG, "register ota");
     ESP_LOGI(TAG, "HTTPS server started on port %d", config.port_secure);
+    redirect_server_start();
     web_auth_log_startup();
     return ESP_OK;
 }

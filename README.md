@@ -398,6 +398,7 @@ All of them require Basic authentication (see "Security notes" below).
 | `/stream.pcm` | Raw PCM (little endian). The format is reported in the `X-Sample-Rate` / `X-Channels` / `X-Bytes-Per-Sample` headers |
 | `/stream.wav` | With a WAV header (indefinite length). For external players |
 | `POST /ota` | Firmware update (Basic authentication; see "OTA update" below) |
+| `http://…` (port 80) | Redirects every request to the same host over `https://` (so typing just the IP or `ftx-1c.local` works). Serves nothing else and asks for no login |
 
 Example with an external player (48 kHz / 16 bit / mono):
 

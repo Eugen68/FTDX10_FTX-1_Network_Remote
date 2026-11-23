@@ -19,7 +19,8 @@ CONFIG_ESP_WIFI_TX_BA_WIN=16
 CONFIG_ESP_WIFI_RX_BA_WIN=16
 # The HTTPS server uses max_open_sockets = 8 and the HTTP server reserves 3 sockets internally,
 # so LwIP needs at least 11 (the default of 10 makes httpd_ssl_start() fail and the firmware abort)
-CONFIG_LWIP_MAX_SOCKETS=16
+# + the plain HTTP redirect server on port 80 (2 sockets + its own 3), with room to spare
+CONFIG_LWIP_MAX_SOCKETS=24
 # Faster TLS handshake (ECDSA is computed in software)
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # Primary console on UART0 (USB-to-UART / hardware pins) with secondary on USB Serial/JTAG
