@@ -24,7 +24,8 @@ transmit in a way that keeps the radio safe.
 | File | Role today |
 |---|---|
 | `main/cat.c`, `main/cat.h` | CAT client. Detects the radio from `ID;` and loads a `rig_profile_t` (`s_profiles[]`). **Every byte sent to the radio passes `cat_cmd_allowed()`**, an allow-list checked against the profile. `TX` is allowed today only in its read form `TX;` (FTDX10). |
-| `main/usb_audio.c`, `.h` | USB host + `espressif/usb_host_uac`. Opens the radio's audio **input** only (`UAC_HOST_DRIVER_EVENT_RX_CONNECTED`). USB host task, its interrupt and the UAC task run on **core 1** at priority 20 (`USB_CORE`); do not move them (core 0 has Wi-Fi at 23, and USB audio packets were lost there). |
+| `main/usb_audio.c`, `.h` | USB host + `espressif/usb_host_uac`. Opens the radio's audio **input** only (`UAC_HOST_DRIVER_EVENT_RX_CONNECTED`). USB host task, its interrupt and the UAC task run on **core 1** at priority 20 (`USB_CORE`); do not move them (core 0 has Wi-Fi at 23, and USB audio packets were lost there). **Bus recovery** (`recover_tick()` in `manager_task`): when devices are on the bus but no audio *input* streams for 10 s, the root port is powered off and on (3 tries 15 s apart, then every 2 min); `usb_audio_prepare_restart()` powers it off before REBOOT and OTA restarts. Keep both. |
+| `main/acc_scope.c`, `acc_frame.c` | FTDX10 only: reads the radio's scope from the ACC socket as an **SPI slave on SPI2_HOST, GPIO10 / 11 / 13** (GPIO38 / 39 carry a passive link), task on core 1 at priority 12. Do not reuse these pins or SPI2_HOST. |
 | `main/web_server.c`, `.h` | HTTPS server. `/stream.pcm` / `/stream.wav` (with `?rate=`), `/cat` GET/POST, `/status`, `/reboot`. Stream: USB reader task (core 1, prio 19) → FIFO in PSRAM → sender task. Strict, allocation-free JSON parser for `POST /cat`. |
 | `main/web_auth.c` | Basic auth, lockout, CSRF (`X-Requested-With: ftx1`, `Origin`, `Sec-Fetch-Site`), CSP header. |
 | `main/app_config.c`, `main/console_menu.c` | Settings in NVS, serial menu on the UART (COM) port. |
@@ -62,7 +63,14 @@ transmit in a way that keeps the radio safe.
 - Deliver firmware to the owner as `build/ftx1_companion.bin` (renamed `ftx1_companion_ota.bin`) plus
   `build/ota_data_initial.bin`; he flashes them with `tools/scrie_firmware.bat` option 1, which keeps the
   Wi-Fi and passwords. **Never** hand him the merged image for an update: it erases NVS.
-- App partition: two 1700 KB OTA slots, about 160 KB free today. If a phase does not fit, propose a new
+- Partitions: `partitions.csv`, two **4 MB** OTA app slots (the app uses about 39 %), NVS at 0x9000, an 8 MB `storage`
+  data partition reserved (not used yet; stored voice messages could go there). Do not change the table without a
+  reason: moving boards to a new table needs a cable write (`tools/scrie_firmware.bat` option 3).
+- Other parts that exist since this plan was first written: the CAT LOG (`GET /catlog`, every command sent, BLOCKED
+  ones included; TX commands will show there), `/status` stream statistics (`usb_in_hz`, `usb_bus_resets`, ...), the
+  page's AUDIO rate (`?rate=`) and LATENCY (Low / Normal / Safe) selectors, background playback on phones through
+  `/stream.wav`, and a plain HTTP server on port 80 that only redirects to HTTPS. LwIP has 24 sockets, HTTPS 10.
+- (Superseded) App partition: two 1700 KB OTA slots, about 160 KB free at the time. If a phase does not fit, propose a new
   partition table in the PR (16 MB flash allows much larger slots); changing it needs one serial flash.
 
 **Git workflow.** One branch per phase from up-to-date `main` (`tx-phase-1-ptt`, ...). Small commits with
@@ -88,7 +96,10 @@ not merge yourself.
    - the client disconnects, the CAT port is lost, the USB audio device goes away;
    - the radio reports something unexpected (FTX-1 `RI0;` P2 = 1 Hi-SWR; FTDX10: poll `RI0;`, P2 = 1 is
      Hi-SWR — verify in the manual);
-   - the firmware boots (always send `TX0;` once CAT is found), reboots, starts an OTA update.
+   - the firmware boots (always send `TX0;` once CAT is found), reboots, starts an OTA update;
+   - **before the USB bus recovery power-cycles the root port**: `recover_tick()` must call the unkey path
+     first (or skip the reset while KEYED and let the state machine stop TX on its own). A bus reset in the
+     middle of a transmission would drop CAT and the audio output with the radio still keyed.
 4. **One transmitter at a time.** The first client that asks gets PTT; others are refused with a clear
    message until it releases. Show the owner in `/status`.
 5. **Separate authorisation.** Transmit needs the web login **and** a separate TX password (NVS
@@ -129,6 +140,11 @@ per profile) and warn when MOD SOURCE is not USB in the current mode.
 ## 3. Phases
 
 ### Phase 0: find the radio's USB audio output (no transmit)
+
+Build on the current `main` (bus recovery, 4 MB partitions, ACC scope). Opening the output interface must not
+disturb the input stream or make `recover_tick()` think audio is missing: it only looks at the input, keep it
+that way. Check `stream.usb_in_hz` (about 47,950 or more) and `usb_bus_resets` (0) in `/status` with the output
+interface opened, on the FTX-1 and on the FTDX10.
 
 Goal: know whether the radio exposes a UAC **output** (speaker) interface and its formats.
 
