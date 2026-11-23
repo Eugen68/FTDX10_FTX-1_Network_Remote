@@ -236,8 +236,8 @@ static uint16_t output_alt_mps(const usb_config_desc_t *config, uint8_t iface_nu
             return 0;
         }
     }
-    // The radios' UAC speaker alternate has one data endpoint.
-    if (iface == NULL || iface->bNumEndpoints != 1) {
+    // The streaming data endpoint precedes any explicit feedback endpoint.
+    if (iface == NULL || iface->bNumEndpoints == 0) {
         return 0;
     }
     const usb_ep_desc_t *ep = usb_parse_endpoint_descriptor_by_index(iface, 0, config->wTotalLength, &offset);
