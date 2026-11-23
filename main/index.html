@@ -1026,6 +1026,7 @@
       <div class="brand-title" id="brandTitle">FTX-1 Companion</div>
       <div class="brand-build" id="buildInfo" title="Firmware build time"></div>
     </div>
+    <span id="catCommandError" role="status" hidden></span>
     <div class="header-controls">
       <div class="led-group">
         <div class="led-item"><div class="led" id="ledCat"></div>CAT</div>
@@ -3070,13 +3071,18 @@ async function processCatQueue() {
   if (!payloadToSend) return;
 
   catBusy = true;
+  const feedback = document.getElementById('catCommandError');
   try {
-    await fetch('/cat', {
+    const response = await fetch('/cat', {
       method: 'POST',
       headers: CAT_POST_HEADERS,
       body: JSON.stringify(payloadToSend)
     });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    feedback.hidden = true;
   } catch (e) {
+    feedback.textContent = 'CAT command failed: ' + e.message;
+    feedback.hidden = false;
     console.error('CAT command error:', e);
   } finally {
     catBusy = false;
@@ -3727,7 +3733,7 @@ freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
       const nearBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 20;
       for (let i = 0; i < 4; i++) {   // catch up after a pause, 64 entries per answer
         const res = await fetch('/catlog?since=' + seq, { cache: 'no-store' });
-        if (!res.ok) break;
+        if (!res.ok) throw new Error('HTTP ' + res.status);
         const d = await res.json();
         if (d.seq < seq) { list.textContent = ''; }          // the device rebooted: start over
         d.e.forEach(add);
@@ -3739,7 +3745,7 @@ freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
       firstLoad = false;
       info.textContent = list.children.length + ' entries (time = device uptime)';
     } catch (e) {
-      info.textContent = 'log unavailable';
+      info.textContent = 'CAT log unavailable: ' + e.message;
     } finally {
       busy = false;
     }

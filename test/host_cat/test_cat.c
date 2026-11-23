@@ -246,6 +246,9 @@ int main(void) {
     n = cat_log_read(le[159].seq, le, 200);
     CHECK(n == 0, "nothing newer");
 
+    n = cat_log_read(UINT32_MAX, le, 200);
+    CHECK(n == 160, "resume log after stale browser cursor");
+
     printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     return fails != 0;
 }

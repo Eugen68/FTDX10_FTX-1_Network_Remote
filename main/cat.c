@@ -530,6 +530,9 @@ size_t cat_log_read(uint32_t since_seq, cat_log_entry_t *out, size_t max)
     size_t n = 0;
     taskENTER_CRITICAL(&s_log_mux);
     const uint32_t last = s_log_seq;
+    if (since_seq > last) {
+        since_seq = 0;  // the browser kept its cursor across a board restart
+    }
     uint32_t first = (last > CAT_LOG_LEN) ? last - CAT_LOG_LEN + 1 : 1;
     if (since_seq + 1 > first) {
         first = since_seq + 1;
@@ -1070,8 +1073,17 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
         cat_cmd_item_t item;
         while (s_cmd_queue && xQueueReceive(s_cmd_queue, &item, 0) == pdTRUE) {
             ESP_LOGI(TAG, "Sending CAT command: %s", item.cmd);
-            cat_tx(dev, item.cmd);
+            const esp_err_t err = cat_tx(dev, item.cmd);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "CAT write failed (%s): %s", item.cmd, esp_err_to_name(err));
+                diag("CAT write failed (%s): %s", item.cmd, esp_err_to_name(err));
+                break;
+            }
             vTaskDelay(pdMS_TO_TICKS(10));
+            if (strncmp(item.cmd, "MD", 2) == 0 && strlen(item.cmd) == 5) {
+                const char readback[] = {'M', 'D', item.cmd[2], ';', '\0'};
+                send_poll(dev, readback);
+            }
             // SV (swap) / AB / BA (copy) change both VFOs: re-read them so the UI does not
             // show stale values until the next periodic sync
             if (strcmp(item.cmd, "SV;") == 0 || strcmp(item.cmd, "AB;") == 0 || strcmp(item.cmd, "BA;") == 0) {
