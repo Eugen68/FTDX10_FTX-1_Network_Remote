@@ -20,6 +20,7 @@
 #include "esp_https_server.h"
 #include "esp_system.h"
 #include "build_info.h"
+#include "acc_scope.h"
 #include "cat.h"
 #include "ota.h"
 #include "esp_heap_caps.h"
@@ -593,7 +594,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[768];
+    char json[1024];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -604,6 +605,10 @@ static esp_err_t status_handler(httpd_req_t *req)
         n = snprintf(json, sizeof(json), "{\"streaming\":false,\"version\":\"%s\",\"build\":\"%s\"", FTX1_VERSION, build_info_get());
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
+        acc_scope_stats_t acc;
+        acc_scope_get_stats(&acc);
+        char acc_reason[2 * sizeof(acc.reason) + 1];
+        json_escape(acc.reason, acc_reason, sizeof(acc_reason));
         // Measured USB input rate, in tenths of a hertz
         uint64_t usb_in_dhz = 0;
         const int64_t t0 = s_st_usb_t0_us;
@@ -619,7 +624,9 @@ static esp_err_t status_handler(httpd_req_t *req)
                       "\"int_free\":%lu,\"int_min\":%lu,\"int_block\":%lu,\"rssi\":%d,"
                       "\"conn_opened\":%lu,\"conn_closed\":%lu,"
                       "\"stream\":{\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
-                      "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu}}",
+                      "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu},"
+                      "\"acc\":{\"enabled\":%s,\"fps\":%lu,\"frames\":%lu,\"accepted\":%lu,\"rejected\":%lu,"
+                      "\"age_ms\":%ld,\"last_len\":%lu,\"reason\":\"%s\"}}",
                       (unsigned long)(esp_timer_get_time() / 1000000),
                       (unsigned long)esp_get_free_heap_size(),
                       (unsigned long)esp_get_minimum_free_heap_size(),
@@ -633,7 +640,10 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)s_st_usb_timeouts, (unsigned long)s_st_slow_sends,
                       (unsigned long)s_st_max_send_ms,
                       (unsigned long)s_st_buf_ms, (unsigned long)s_st_buf_max_ms, (unsigned long)s_st_overflows,
-                      (unsigned long)s_st_rate, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10));
+                      (unsigned long)s_st_rate, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10),
+                      acc.enabled ? "true" : "false", (unsigned long)acc.fps, (unsigned long)acc.frames,
+                      (unsigned long)acc.accepted, (unsigned long)acc.rejected,
+                      acc.age_ms == UINT32_MAX ? -1L : (long)acc.age_ms, (unsigned long)acc.last_len, acc_reason);
     }
     return send_json(req, json, n, sizeof(json));
 }

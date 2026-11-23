@@ -9,6 +9,7 @@
 
 #include "esp_log.h"
 #include "app_config.h"
+#include "acc_scope.h"
 #include "cat.h"
 #include "console_menu.h"
 #include "mdns.h"
@@ -45,6 +46,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(usb_audio_init());
     ESP_ERROR_CHECK(cat_init());   // after usb_audio_init(): that installs the USB Host Library
+    ESP_ERROR_CHECK(acc_scope_init());   // waits for CAT to identify an FTDX10 before touching any pin
 
     if (wifi_sta_connect() != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi connection failed. Please check Wi-Fi credentials in serial menu.");
