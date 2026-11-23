@@ -84,6 +84,7 @@
 #define RX_BUF_BYTES        64
 #define MAX_FAILS           10       // consecutive missing answers before the port is dropped
 #define SCAN_PERIOD_MS      2000
+#define SM_RELEASE          0.25f    // S meter fall per 100 ms reading: about 0.35 s to settle
 
 // CP210x vendor requests (Silicon Labs AN571)
 #define CP210X_REQ_OUT      (USB_BM_REQUEST_TYPE_TYPE_VENDOR | USB_BM_REQUEST_TYPE_RECIP_INTERFACE | USB_BM_REQUEST_TYPE_DIR_OUT)
@@ -892,9 +893,18 @@ static void handle_cat_packet(const char *pkt)
 
     int sm_main = 0, sm_sub = 0;
     if (parse_rm(pkt, &sm_main, &sm_sub)) {
+        // Meter ballistics: the S meter is polled every 100 ms but the page reads it every 400 ms. The FTDX10
+        // reports the instantaneous value, so each page read caught a random peak or gap and the needle
+        // jumped. Rise at once, fall by SM_RELEASE of the gap per reading (about 0.35 s), like an analogue
+        // meter; the page then always sees the recent peak level.
+        static float sm_f[2];
+        const float v[2] = {(float)sm_main, sm_sub >= 0 ? (float)sm_sub : 0.0f};
+        for (int i = 0; i < 2; i++) {
+            sm_f[i] = (v[i] >= sm_f[i]) ? v[i] : sm_f[i] + (v[i] - sm_f[i]) * SM_RELEASE;
+        }
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
-            s_state.s_main = (uint8_t)sm_main;
-            s_state.s_sub = sm_sub >= 0 ? (uint8_t)sm_sub : 0;
+            s_state.s_main = (uint8_t)(sm_f[0] + 0.5f);
+            s_state.s_sub = (uint8_t)(sm_f[1] + 0.5f);
             s_state.connected = true;
             s_last_answer_us = esp_timer_get_time();
             xSemaphoreGive(s_lock);

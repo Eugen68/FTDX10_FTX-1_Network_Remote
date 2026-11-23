@@ -2216,6 +2216,7 @@ if (btnRigOff) {
 const SM_S9_RAW = 120;
 const SM_S9_FRAC = 0.6;
 const SM_ARC_DEG = 28.7;
+const SM_TAU_UP = 0.1, SM_TAU_DOWN = 0.45;   // needle time constants, seconds
 const SM_CX = 150, SM_CY = 286, SM_R = 250;   // pivot sits far below the face, like a real moving-coil meter
 const SM_NEEDLE = SM_R + 6;
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -2368,23 +2369,29 @@ function makeSMeter(host, title) {
     reading.textContent = raw === null ? '--' : smText(raw);
     reading.setAttribute('fill', INK);
   };
-  m.draw = () => {
-    m.cur += (m.target - m.cur) * (m.target > m.cur ? 0.4 : 0.08);
+  let lastT = 0;
+  m.draw = (t) => {
+    // Time-based ballistics (independent of the screen's frame rate): rises in about 0.1 s, falls in about
+    // 0.45 s. The device already holds the recent peak between the page's reads.
+    const dt = lastT ? Math.min(0.1, (t - lastT) / 1000) : 0.016;
+    lastT = t;
+    const tau = m.target > m.cur ? SM_TAU_UP : SM_TAU_DOWN;
+    m.cur += (m.target - m.cur) * (1 - Math.exp(-dt / tau));
     if (Math.abs(m.target - m.cur) < 0.0005) m.cur = m.target;
     if (m.cur !== m.shown) {
       needle.setAttribute('transform', 'rotate(' + n2((m.cur * 2 - 1) * SM_ARC_DEG) + ' ' + SM_CX + ' ' + SM_CY + ')');
       m.shown = m.cur;
     }
   };
-  m.draw();
+  m.draw(performance.now());
   return m;
 }
 
 const smHost = document.getElementById('smeters');
 const smMeters = [makeSMeter(smHost, 'MAIN'), makeSMeter(smHost, 'SUB')];
 
-(function smAnimate() {
-  smMeters.forEach((m) => m.draw());
+(function smAnimate(t) {
+  smMeters.forEach((m) => m.draw(t || performance.now()));
   requestAnimationFrame(smAnimate);
 })();
 

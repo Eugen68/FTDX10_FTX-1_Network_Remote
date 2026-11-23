@@ -95,8 +95,13 @@ int main(void) {
     CHECK(!s_state.busy && !s_state.tx, "ftdx10 state clear");
     use("0840");
     handle_cat_packet("RI00000000 1;"); // malformed: ignored
+    // Meter ballistics: rise at once, fall a quarter of the gap per reading, settle after a few readings
     handle_cat_packet("RM0010020;");
-    CHECK(s_state.s_main == 10 && s_state.s_sub == 20, "ftx1 meter");
+    CHECK(s_state.s_main == 153 && s_state.s_sub == 20, "meter after one reading: %u %u", s_state.s_main, s_state.s_sub);
+    for (int i = 0; i < 30; i++) handle_cat_packet("RM0010020;");
+    CHECK(s_state.s_main == 10 && s_state.s_sub == 20, "meter settled: %u %u", s_state.s_main, s_state.s_sub);
+    handle_cat_packet("RM0200020;");
+    CHECK(s_state.s_main == 200, "meter rises at once: %u", s_state.s_main);
 
     // CAT log: blocked commands are logged as BLOCKED and never reach the port; reads come back oldest first
     use("0840");
