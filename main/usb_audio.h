@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
+#include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,6 +27,19 @@ typedef struct {
     uint8_t subframe_size;  /*!< Bytes per sample (container size) */
     uint8_t bit_resolution; /*!< Significant bits per sample */
 } usb_audio_format_t;
+
+/** First advertised output format. A continuous range has rate_count == 0. */
+typedef struct {
+    uint32_t rates[CONFIG_UAC_FREQ_NUM_MAX];
+    uint32_t rate_min;
+    uint32_t rate_max;
+    uint8_t rate_count;
+    uint8_t channels;
+    uint8_t bits;
+} usb_audio_output_format_t;
+
+/** Copy the output descriptor summary. Returns true while the interface is open. */
+bool usb_audio_get_output_format(usb_audio_output_format_t *fmt);
 
 /**
  * @brief Install USB Host Library and UAC class driver

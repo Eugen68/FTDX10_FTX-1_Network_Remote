@@ -107,6 +107,9 @@ esp_err_t cat_init(void);
  */
 void cat_get_state(cat_state_t *state);
 
+/** True only when a recent CAT status report confirmed the radio is not transmitting. */
+bool cat_radio_rx_confirmed(void);
+
 /*
  * There is deliberately no function that sends a free-form CAT string. Every command is built here from
  * typed arguments, and cat.c only lets an allow-list of commands (frequency, mode, AF gain, squelch,

@@ -596,6 +596,19 @@ So that the radio cannot be put into transmit over the network, the CAT commands
 - As a second safeguard, consider also setting `RPTT SELECT` / `TX INHIBIT` on the radio itself.
 - Transmission that does not go through the ESP32 (microphone PTT, front-panel operation) cannot be prevented.
 
+### Transmit phase 0: USB audio discovery
+
+The firmware opens the radio's USB audio output interface to read its descriptors, with the output stream
+stopped. The serial log lists the advertised formats. The authenticated `/status` endpoint reports
+`tx_audio.present` and summarizes the first advertised format in `rates`, `channels`, and `bits`.
+A continuous rate range uses `rate_min` and `rate_max` with an empty `rates` array.
+During playback, `stream.active` indicates an open audio stream. The measured `stream.usb_in_hz` covers
+the USB reads in that stream and remains available after playback ends. The serial log prints the final
+rate and USB bus reset count when the stream ends.
+
+Automatic USB recovery still monitors the input stream. A missing input can trigger a bus reset only
+while a recent CAT status confirms the radio is out of transmit. A missing or stale CAT status defers recovery.
+
 ### Input validation and build settings
 
 - The request body length, the JSON, and the USB audio format (channels, sample size, sample rate) are validated, and values outside the limits are rejected.

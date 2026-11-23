@@ -9,8 +9,10 @@
  */
 
 #include <stdio.h>
+#include <stdint.h>
 #include <assert.h>
 char g_sent[1024];
+int64_t g_now_us = 1000000;
 #include "cat.c"   // the real file, built against the stubs in stub/
 
 static int fails = 0;
@@ -89,11 +91,31 @@ int main(void) {
     CHECK(parse_tx("TX2;", &b) && b && parse_tx("TX0;", &b) && !b && !parse_tx("TX3;", &b), "tx");
     // packet handling: FTDX10 meter/busy/tx land in the state
     use("0761");
+    CHECK(!cat_radio_rx_confirmed(), "recovery requires a TX status");
     handle_cat_packet("RM1200000;"); handle_cat_packet("BY10;"); handle_cat_packet("TX2;");
     CHECK(s_state.s_main == 200 && s_state.s_sub == 0 && s_state.busy && s_state.tx, "ftdx10 state");
+    CHECK(!cat_radio_rx_confirmed(), "manual TX defers recovery");
+    handle_cat_packet("TX1;");
+    CHECK(!cat_radio_rx_confirmed(), "CAT TX defers recovery");
     handle_cat_packet("TX0;"); handle_cat_packet("BY00;");
     CHECK(!s_state.busy && !s_state.tx, "ftdx10 state clear");
+    CHECK(cat_radio_rx_confirmed(), "recovery resumes with RX confirmed");
+    g_now_us += RADIO_STATUS_MAX_AGE_US + 1;
+    handle_cat_packet("RM1200000;");
+    handle_cat_packet("RI00000000;");
+    CHECK(!cat_radio_rx_confirmed(), "other replies do not refresh stale TX state");
+    handle_cat_packet("TX0;");
+    s_disconnected = true;
+    CHECK(!cat_radio_rx_confirmed(), "CAT loss defers recovery");
+    publish(false, 0, 0, 0, 0, 0, 0, NULL, 0, NULL);
+    s_disconnected = false;
     use("0840");
+    handle_cat_packet("RI00010000;");
+    CHECK(s_state.tx && !cat_radio_rx_confirmed(), "FTX-1 TX defers recovery");
+    handle_cat_packet("RI000X0000;");
+    CHECK(s_state.tx && !cat_radio_rx_confirmed(), "invalid FTX-1 status does not clear TX");
+    handle_cat_packet("RI00000000;");
+    CHECK(cat_radio_rx_confirmed(), "FTX-1 confirmed RX permits recovery");
     handle_cat_packet("RI00000000 1;"); // malformed: ignored
     // Meter ballistics: rise at once, fall a quarter of the gap per reading, settle after a few readings
     handle_cat_packet("RM0010020;");
