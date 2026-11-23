@@ -20,6 +20,7 @@
 #include "web_auth.h"
 #include "ota.h"
 #include "usb_audio.h"
+#include "tx.h"
 
 #define OTA_CHUNK_BYTES      4096
 #define OTA_MAX_TIMEOUTS     5                    // consecutive 5 s receive timeouts before giving up
@@ -56,6 +57,12 @@ static esp_err_t ota_handler(httpd_req_t *req)
     if (!atomic_compare_exchange_strong(&s_busy, &expected, true)) {
         httpd_resp_set_status(req, "409 Conflict");
         return httpd_resp_send(req, "An update is already in progress", HTTPD_RESP_USE_STRLEN);
+    }
+
+    if (!tx_quiesce("OTA update")) {
+        atomic_store(&s_busy, false);
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "Waiting for radio RX. Retry the update.");
     }
 
     uint8_t *buf = malloc(OTA_CHUNK_BYTES);
@@ -98,6 +105,7 @@ static esp_err_t ota_handler(httpd_req_t *req)
     }
 
     if (err != ESP_OK) {
+        tx_resume();
         ESP_LOGE(TAG, "Update failed after %u of %u bytes: %s", (unsigned)received, (unsigned)total, esp_err_to_name(err));
         atomic_store(&s_busy, false);
         return httpd_resp_send_err(req, err == ESP_ERR_OTA_VALIDATE_FAILED ? HTTPD_400_BAD_REQUEST

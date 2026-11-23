@@ -54,6 +54,7 @@ typedef struct {
 
 // Only touched from the HTTP server task (esp_https_server runs every handler there)
 static lock_entry_t s_locks[LOCK_TABLE_SIZE];
+static lock_entry_t s_tx_locks[LOCK_TABLE_SIZE];
 
 typedef enum { HDR_ABSENT, HDR_OK, HDR_BAD } hdr_result_t;
 typedef enum { AUTH_MISSING, AUTH_BAD, AUTH_OK } auth_result_t;
@@ -120,10 +121,10 @@ static void peer_key(httpd_req_t *req, uint8_t key[16], char *label, size_t labe
     }
 }
 
-static lock_entry_t *find_lock(const uint8_t key[16], int64_t now)
+static lock_entry_t *find_lock(lock_entry_t *locks, const uint8_t key[16], int64_t now)
 {
     for (size_t i = 0; i < LOCK_TABLE_SIZE; i++) {
-        lock_entry_t *e = &s_locks[i];
+        lock_entry_t *e = &locks[i];
         if (!e->used) {
             continue;
         }
@@ -138,35 +139,35 @@ static lock_entry_t *find_lock(const uint8_t key[16], int64_t now)
     return NULL;
 }
 
-static bool is_locked(const uint8_t key[16], int64_t now)
+static bool is_locked(lock_entry_t *locks, const uint8_t key[16], int64_t now)
 {
-    const lock_entry_t *e = find_lock(key, now);
+    const lock_entry_t *e = find_lock(locks, key, now);
     return e != NULL && now < e->locked_until_us;
 }
 
-static void record_failure(const uint8_t key[16], int64_t now)
+static void record_failure(lock_entry_t *locks, const uint8_t key[16], int64_t now)
 {
-    lock_entry_t *e = find_lock(key, now);
+    lock_entry_t *e = find_lock(locks, key, now);
     if (e == NULL) {
         // Reuse a free slot; otherwise evict the quietest entry that is not locked (or the quietest of all)
         lock_entry_t *victim = NULL;
         for (size_t i = 0; i < LOCK_TABLE_SIZE && victim == NULL; i++) {
-            if (!s_locks[i].used) {
-                victim = &s_locks[i];
+            if (!locks[i].used) {
+                victim = &locks[i];
             }
         }
         for (size_t i = 0; i < LOCK_TABLE_SIZE && victim == NULL; i++) {
-            lock_entry_t *c = &s_locks[i];
+            lock_entry_t *c = &locks[i];
             bool c_locked = now < c->locked_until_us;
             if (!c_locked && (victim == NULL || c->last_us < victim->last_us)) {
                 victim = c;
             }
         }
         if (victim == NULL) {
-            victim = &s_locks[0];
+            victim = &locks[0];
             for (size_t i = 1; i < LOCK_TABLE_SIZE; i++) {
-                if (s_locks[i].last_us < victim->last_us) {
-                    victim = &s_locks[i];
+                if (locks[i].last_us < victim->last_us) {
+                    victim = &locks[i];
                 }
             }
         }
@@ -186,9 +187,9 @@ static void record_failure(const uint8_t key[16], int64_t now)
     }
 }
 
-static void clear_failures(const uint8_t key[16], int64_t now)
+static void clear_failures(lock_entry_t *locks, const uint8_t key[16], int64_t now)
 {
-    lock_entry_t *e = find_lock(key, now);
+    lock_entry_t *e = find_lock(locks, key, now);
     if (e != NULL) {
         e->used = false;
     }
@@ -241,15 +242,8 @@ static auth_result_t check_basic(httpd_req_t *req, const char *user, const char 
     return result;
 }
 
-/** Cross-site request forgery checks for a request that changes state */
-static bool csrf_ok(httpd_req_t *req)
+static bool request_origin_ok(httpd_req_t *req, bool require_origin)
 {
-    char marker[16];
-    if (read_hdr(req, WEB_AUTH_CSRF_HEADER, marker, sizeof(marker)) != HDR_OK ||
-        strcmp(marker, WEB_AUTH_CSRF_VALUE) != 0) {
-        return false;
-    }
-
     char site[24];
     switch (read_hdr(req, "Sec-Fetch-Site", site, sizeof(site))) {
     case HDR_BAD:
@@ -281,10 +275,23 @@ static bool csrf_ok(httpd_req_t *req)
         break;
     }
     default:
-        break;
+        return !require_origin;
     }
     return true;
 }
+
+/** Cross-site request forgery checks for a request that changes state */
+static bool csrf_ok(httpd_req_t *req)
+{
+    char marker[16];
+    if (read_hdr(req, WEB_AUTH_CSRF_HEADER, marker, sizeof(marker)) != HDR_OK ||
+        strcmp(marker, WEB_AUTH_CSRF_VALUE) != 0) {
+        return false;
+    }
+
+    return request_origin_ok(req, false);
+}
+
 
 bool web_auth_check(httpd_req_t *req, web_auth_realm_t realm, bool state_changing)
 {
@@ -306,7 +313,7 @@ bool web_auth_check(httpd_req_t *req, web_auth_realm_t realm, bool state_changin
     peer_key(req, key, label, sizeof(label));
     const int64_t now = esp_timer_get_time();
 
-    if (is_locked(key, now)) {
+    if (is_locked(s_locks, key, now)) {
         secure_zero(&cfg, sizeof(cfg));
         web_auth_set_common_headers(req);
         httpd_resp_set_hdr(req, "Retry-After", "60");
@@ -319,7 +326,7 @@ bool web_auth_check(httpd_req_t *req, web_auth_realm_t realm, bool state_changin
 
     if (result != AUTH_OK) {
         if (result == AUTH_BAD) {
-            record_failure(key, now);
+            record_failure(s_locks, key, now);
             ESP_LOGW(TAG, "Rejected a request with wrong credentials from %s", label);
         }
         web_auth_set_common_headers(req);
@@ -328,7 +335,7 @@ bool web_auth_check(httpd_req_t *req, web_auth_realm_t realm, bool state_changin
                                                        : "Basic realm=\"ftx-1\", charset=\"UTF-8\"");
         return reject(req, "401 Unauthorized", "Unauthorized");
     }
-    clear_failures(key, now);
+    clear_failures(s_locks, key, now);
 
     if (state_changing && !csrf_ok(req)) {
         ESP_LOGW(TAG, "Rejected a cross-site or incomplete state changing request from %s", label);
@@ -337,6 +344,42 @@ bool web_auth_check(httpd_req_t *req, web_auth_realm_t realm, bool state_changin
         return reject(req, "403 Forbidden", "Forbidden");
     }
     return true;
+}
+
+bool web_auth_ws_check(httpd_req_t *req)
+{
+    char query[16];
+    return app_config_tx_enabled() && request_origin_ok(req, true) &&
+           httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+           strcmp(query, "csrf=ftx1") == 0 && web_auth_check(req, WEB_AUTH_REALM_WEB, false);
+}
+
+bool web_auth_tx_check(httpd_req_t *req, const char *pass)
+{
+    uint8_t key[16];
+    char label[40];
+    peer_key(req, key, label, sizeof(label));
+    const int64_t now = esp_timer_get_time();
+    if (is_locked(s_tx_locks, key, now) || !app_config_tx_enabled()) {
+        return false;
+    }
+
+    app_config_t cfg;
+    app_config_get(&cfg);
+    unsigned char given[sizeof(cfg.tx_pass)] = {0};
+    unsigned char expected[sizeof(cfg.tx_pass)] = {0};
+    strlcpy((char *)given, pass, sizeof(given));
+    strlcpy((char *)expected, cfg.tx_pass, sizeof(expected));
+    const bool ok = mbedtls_ct_memcmp(given, expected, sizeof(given)) == 0;
+    secure_zero(given, sizeof(given));
+    secure_zero(expected, sizeof(expected));
+    secure_zero(&cfg, sizeof(cfg));
+    if (ok) {
+        clear_failures(s_tx_locks, key, now);
+    } else {
+        record_failure(s_tx_locks, key, now);
+    }
+    return ok;
 }
 
 void web_auth_log_startup(void)

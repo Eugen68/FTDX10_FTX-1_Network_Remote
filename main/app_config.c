@@ -39,6 +39,7 @@ esp_err_t app_config_load(app_config_t *cfg)
 {
     if (!cfg) return ESP_ERR_INVALID_ARG;
     memset(cfg, 0, sizeof(*cfg));
+    cfg->tx_max_seconds = TX_DEFAULT_SECONDS;
 
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
@@ -59,6 +60,15 @@ esp_err_t app_config_load(app_config_t *cfg)
         read_nvs_str_or_default(handle, NVS_KEY_WEB_USER, cfg->web_user, sizeof(cfg->web_user), def_web_user);
         read_nvs_str_or_default(handle, NVS_KEY_WEB_PASS, cfg->web_pass, sizeof(cfg->web_pass), def_web_pass);
         read_nvs_str_or_default(handle, NVS_KEY_HOSTNAME, cfg->hostname, sizeof(cfg->hostname), def_hostname);
+        uint8_t tx_enabled = 0;
+        uint16_t tx_seconds = 0;
+        nvs_get_u8(handle, "tx_enabled", &tx_enabled);
+        nvs_get_u16(handle, "tx_max_seconds", &tx_seconds);
+        cfg->tx_enabled = tx_enabled == 1;
+        if (tx_seconds >= TX_MIN_SECONDS && tx_seconds <= TX_MAX_SECONDS) {
+            cfg->tx_max_seconds = tx_seconds;
+        }
+        read_nvs_str_or_default(handle, "tx_pass", cfg->tx_pass, sizeof(cfg->tx_pass), "");
         nvs_close(handle);
     } else {
         // NVS namespace not created yet; fall back to defaults
@@ -97,6 +107,9 @@ esp_err_t app_config_save(const app_config_t *cfg)
     if (err == ESP_OK) err = nvs_set_str(handle, NVS_KEY_WEB_USER, cfg->web_user);
     if (err == ESP_OK) err = nvs_set_str(handle, NVS_KEY_WEB_PASS, cfg->web_pass);
     if (err == ESP_OK) err = nvs_set_str(handle, NVS_KEY_HOSTNAME, cfg->hostname);
+    if (err == ESP_OK) err = nvs_set_u8(handle, "tx_enabled", cfg->tx_enabled);
+    if (err == ESP_OK) err = nvs_set_str(handle, "tx_pass", cfg->tx_pass);
+    if (err == ESP_OK) err = nvs_set_u16(handle, "tx_max_seconds", cfg->tx_max_seconds);
 
     if (err == ESP_OK) {
         err = nvs_commit(handle);
@@ -163,6 +176,11 @@ bool app_config_hostname_is_valid(const char *s)
         }
     }
     return true;
+}
+
+bool app_config_tx_enabled(void)
+{
+    return s_active_config.tx_enabled && strlen(s_active_config.tx_pass) >= APP_CONFIG_MIN_SECRET_LEN;
 }
 
 bool app_config_is_valid(const app_config_t *cfg)

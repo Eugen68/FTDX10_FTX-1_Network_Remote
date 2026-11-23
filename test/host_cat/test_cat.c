@@ -15,6 +15,9 @@ char g_sent[1024];
 int64_t g_now_us = 1000000;
 #include "cat.c"   // the real file, built against the stubs in stub/
 
+static bool tx_enabled, tx_password;
+bool app_config_tx_enabled(void) { return tx_enabled && tx_password; }
+
 static int fails = 0;
 #define CHECK(cond, ...) do { if (!(cond)) { fails++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
 static bool ok(const char *c) { return cat_cmds_allowed(c, 1); }
@@ -46,13 +49,26 @@ int main(void) {
     const char *ids[] = {"0840", "0761", "9999", NULL};
     for (int r = 0; ids[r]; r++) { use(ids[r]); for (int k = 0; never[k]; k++) CHECK(!ok(never[k]), "%s allowed %s", ids[r], never[k]); }
 
+
+    tx_enabled = true;
+    use("0840");
+    CHECK(!ok("TX1;") && !ok("TX0;"), "TX disabled without password");
+    tx_password = true;
+    CHECK(ok("TX1;") && ok("TX0;") && !ok("TX2;"), "FTX-1 authorized TX");
+    use("0761");
+    CHECK(ok("TX1;") && ok("TX0;") && !ok("TX2;") && !ok("MX1;") && !ok("KY0;") && !ok("VX1;") && !ok("PC100;"),
+          "FTDX10 only allows the intended TX commands");
+    CHECK(ok("EX010415;") && !ok("EX010415001;"), "TX menu read only");
+    use("9999");
+    CHECK(!ok("TX1;") && !ok("TX0;") && !ok("EX010415;"), "unknown radio cannot TX");
+    tx_enabled = tx_password = false;
     // FTX-1
     use("0840");
     CHECK(s_rig->rig == CAT_RIG_FTX1, "ftx1 detect");
     CHECK(ok("FA470000000;") && !ok("FA470000001;") && !ok("FA000029999;"), "ftx1 freq");
     CHECK(ok("AG1255;") && ok("SQ1255;") && ok("BP11320;") && ok("MD1H;"), "ftx1 sub + c4fm");
     CHECK(ok("EX010411100;") && !ok("EX010413100;") && !ok("EX010411101;") && !ok("EX010411;"), "ftx1 EX");
-    CHECK(ok("RI0;") && ok("RM0;") && !ok("RM1;") && !ok("BY;") && !ok("TX;"), "ftx1 status");
+    CHECK(ok("RI0;") && ok("RM0;") && !ok("RM1;") && !ok("BY;") && ok("TX;"), "ftx1 status");
 
     // FTDX10
     use("0761");
@@ -62,7 +78,7 @@ int main(void) {
     CHECK(ok("SQ0100;") && !ok("SQ0101;"), "ftdx10 sq max");
     CHECK(ok("MD1C;") && ok("MD0C;") && !ok("MD0H;") && !ok("MD0I;"), "ftdx10 modes");
     CHECK(ok("EX010413100;") && !ok("EX010411100;"), "ftdx10 EX: 010411 is HCUT FREQ there");
-    CHECK(ok("BY;") && ok("TX;") && ok("RM1;") && !ok("RM0;") && !ok("RI0;"), "ftdx10 status");
+    CHECK(ok("BY;") && ok("TX;") && ok("RM1;") && !ok("RM0;") && ok("RI0;"), "ftdx10 status");
 
     // unknown radio: read only
     use("9999");
@@ -116,6 +132,17 @@ int main(void) {
     CHECK(s_state.tx && !cat_radio_rx_confirmed(), "invalid FTX-1 status does not clear TX");
     handle_cat_packet("RI00000000;");
     CHECK(cat_radio_rx_confirmed(), "FTX-1 confirmed RX permits recovery");
+    CHECK(!cat_radio_rx_after(0), "FTX-1 RI alone cannot confirm CAT PTT is off");
+    handle_cat_packet("TX0;");
+    CHECK(cat_radio_rx_after(0) && !cat_radio_rx_after(g_now_us), "fresh TX0 status confirms RX");
+    handle_cat_packet("RI01010000;");
+    CHECK(strcmp(cat_ptt_fault(g_now_us, 1500000), "High SWR") == 0, "FTX-1 RI reports high SWR");
+    use("0761");
+    handle_cat_packet("RI01;");
+    CHECK(strcmp(cat_ptt_fault(g_now_us, 1500000), "High SWR") == 0, "FTDX10 RI reports high SWR");
+    use("0840");
+    handle_cat_packet("RI00000000;");
+
     handle_cat_packet("RI00000000 1;"); // malformed: ignored
     // Meter ballistics: rise at once, fall a quarter of the gap per reading, settle after a few readings
     handle_cat_packet("RM0010020;");

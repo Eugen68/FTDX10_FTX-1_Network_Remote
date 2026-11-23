@@ -27,7 +27,7 @@
 #include "usb/usb_host.h"
 #include "usb/uac_host.h"
 #include "esp_timer.h"
-#include "cat.h"
+#include "tx.h"
 #include "usb_audio.h"
 
 // Above the stream's USB reader (6), the web server and LwIP (18), below the Wi-Fi driver (23): the
@@ -302,7 +302,7 @@ static void recover_tick(void)
     if (now - s_dev_seen_ms < RECOVER_AFTER_MS || (s_last_recover_ms && now - s_last_recover_ms < gap)) {
         return;
     }
-    if (!cat_radio_rx_confirmed()) {
+    if (!tx_begin_usb_recovery()) {
         return;
     }
     s_recover_attempts++;
@@ -312,6 +312,7 @@ static void recover_tick(void)
     ESP_LOGW(TAG, "%d USB device(s) but no audio input for %d s: resetting the USB bus (attempt %d)", count,
              RECOVER_AFTER_MS / 1000, s_recover_attempts);
     bus_power_cycle(500);
+    tx_resume();
 }
 
 void usb_audio_prepare_restart(void)

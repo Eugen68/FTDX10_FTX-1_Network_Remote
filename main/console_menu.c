@@ -211,6 +211,8 @@ static void print_config_summary(const app_config_t *cfg)
     char masked_wifi_pass[64];
     char masked_ota_pass[64];
     char masked_web_pass[64];
+    char masked_tx_pass[64];
+    mask_string(cfg->tx_pass, masked_tx_pass, sizeof(masked_tx_pass));
     mask_string(cfg->wifi_pass, masked_wifi_pass, sizeof(masked_wifi_pass));
     mask_string(cfg->ota_pass, masked_ota_pass, sizeof(masked_ota_pass));
     mask_string(cfg->web_pass, masked_web_pass, sizeof(masked_web_pass));
@@ -227,6 +229,9 @@ static void print_config_summary(const app_config_t *cfg)
         " 4) OTA Password     : %s\r\n"
         " 9) Web User ID      : %s\r\n"
         " 0) Web Password     : %s\r\n"
+        " t) TX enabled       : %s\r\n"
+        " p) TX password      : %s\r\n"
+        " m) TX limit         : %u s\r\n"
         " h) Host name        : %s.local\r\n"
         "==================================================\r\n",
         cfg->wifi_ssid[0] ? cfg->wifi_ssid : "(not set)",
@@ -235,6 +240,8 @@ static void print_config_summary(const app_config_t *cfg)
         masked_ota_pass,
         cfg->web_user[0] ? cfg->web_user : "admin",
         cfg->web_pass[0] ? masked_web_pass : (cfg->ota_pass[0] ? "(empty: uses the OTA password)" : "(empty: web UI refuses all requests)"),
+        cfg->tx_enabled ? "yes" : "no",
+        cfg->tx_pass[0] ? masked_tx_pass : "(not set)", cfg->tx_max_seconds,
         cfg->hostname
     );
     console_write_str(msg);
@@ -268,9 +275,12 @@ void console_menu_run(void)
             "  8: Erase NVS configuration (Reset to defaults)\r\n"
             "  9: Set Web User ID (web UI, audio stream, /cat)\r\n"
             "  0: Set Web Password (12+ chars)\r\n"
+            "  t: Toggle remote TX\r\n"
+            "  p: Set TX password (12+ chars)\r\n"
+            "  m: Set TX time limit (10–600 seconds)\r\n"
             "  h: Set Host name (mDNS / DHCP)\r\n"
             "--------------------------------------------------\r\n"
-            "Enter selection (0-9, h): "
+            "Enter selection (0-9, h, t, p, m): "
         );
 
         char opt[8] = {0};
@@ -354,6 +364,27 @@ void console_menu_run(void)
                               cfg.web_pass, sizeof(cfg.web_pass),
                               "-> Web Password cleared (the OTA password is used, or the web UI is locked)\r\n",
                               "-> Web Password updated\r\n");
+                break;
+            }
+            case 't':
+                cfg.tx_enabled = !cfg.tx_enabled;
+                break;
+            case 'p':
+                prompt_secret("Set TX password, 12+ chars (CLEAR to disable, Enter to keep): ",
+                              cfg.tx_pass, sizeof(cfg.tx_pass), "-> TX password cleared\r\n",
+                              "-> TX password updated\r\n");
+                break;
+            case 'm': {
+                char value[12] = {0};
+                console_write_str("TX limit in seconds [10–600]: ");
+                read_line(value, sizeof(value), false);
+                char *end;
+                const long seconds = strtol(value, &end, 10);
+                if (*end || seconds < TX_MIN_SECONDS || seconds > TX_MAX_SECONDS) {
+                    console_write_str("-> Enter an integer from 10 to 600\r\n");
+                } else {
+                    cfg.tx_max_seconds = (unsigned)seconds;
+                }
                 break;
             }
             case 'h':

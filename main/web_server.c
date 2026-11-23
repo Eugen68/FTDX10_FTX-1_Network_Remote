@@ -23,6 +23,8 @@
 #include "acc_scope.h"
 #include "cat.h"
 #include "ota.h"
+#include "app_config.h"
+#include "tx.h"
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
 #include <math.h>
@@ -694,6 +696,14 @@ static esp_err_t status_handler(httpd_req_t *req)
                       ",\"tx_audio\":{\"present\":%s,\"rates\":[%s],\"channels\":%u,\"bits\":%u%s}}",
                       present ? "true" : "false", rates, output.channels, output.bits, range);
     }
+    if (n > 0 && (size_t)n < sizeof(json)) {
+        const tx_state_t tx = tx_get_state();
+        const char *phase = tx.phase == TX_KEYED ? "KEYED" : tx.phase == TX_ARMED ? "ARMED" : "IDLE";
+        n--;
+        n += snprintf(json + n, sizeof(json) - n,
+                      ",\"tx\":{\"state\":\"%s\",\"owner\":%lu,\"left_s\":%u,\"reason\":\"%s\"}}",
+                      phase, (unsigned long)tx.owner, tx.left_s, tx.reason);
+    }
     return send_json(req, json, n, sizeof(json));
 }
 
@@ -738,6 +748,13 @@ static esp_err_t cat_handler(httpd_req_t *req)
              st.notch_main ? "true" : "false", st.notch_sub ? "true" : "false",
              st.notch_hz_main, st.notch_hz_sub,
              (unsigned long)st.age_ms, st.devices, st.cp210x, st.answered, note);
+    if (n > 0 && (size_t)n < sizeof(json)) {
+        n--;
+        n += snprintf(json + n, sizeof(json) - n,
+                      ",\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s}",
+                      app_config_tx_enabled() ? "true" : "false",
+                      st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false");
+    }
     return send_json(req, json, n, sizeof(json));
 }
 
@@ -814,6 +831,183 @@ static bool parse_token(const char **p, char *out, size_t out_size)
     }
     out[n] = '\0';
     return n > 0;
+}
+
+typedef struct {
+    uint32_t owner;
+} tx_ws_session_t;
+
+typedef struct {
+    char type[12];
+    char pass[APP_CONFIG_PASS_MAX_LEN + 1];
+    bool on;
+} tx_ws_message_t;
+
+static bool parse_tx_password(const char **p, char out[APP_CONFIG_PASS_MAX_LEN + 1])
+{
+    if (**p != '"') {
+        return false;
+    }
+    ++*p;
+    size_t n = 0;
+    while (**p != '"') {
+        unsigned char c = (unsigned char)**p;
+        if (c < 0x20 || c > 0x7e || n == APP_CONFIG_PASS_MAX_LEN) {
+            return false;
+        }
+        ++*p;
+        if (c == '\\') {
+            c = (unsigned char)**p;
+            if (c != '\\' && c != '"') {
+                return false;
+            }
+            ++*p;
+        }
+        out[n++] = (char)c;
+    }
+    ++*p;
+    return true;
+}
+
+static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
+{
+    skip_ws(&p);
+    if (*p++ != '{') {
+        return false;
+    }
+    enum { TYPE = 1, PASS = 2, ON = 4 };
+    unsigned fields = 0;
+    for (;;) {
+        char key[8];
+        skip_ws(&p);
+        if (!parse_string(&p, key, sizeof(key))) {
+            return false;
+        }
+        skip_ws(&p);
+        if (*p++ != ':') {
+            return false;
+        }
+        skip_ws(&p);
+        unsigned field;
+        if (strcmp(key, "t") == 0) {
+            field = TYPE;
+            if (!parse_string(&p, msg->type, sizeof(msg->type))) {
+                return false;
+            }
+        } else if (strcmp(key, "pass") == 0) {
+            field = PASS;
+            if (!parse_tx_password(&p, msg->pass)) {
+                return false;
+            }
+        } else if (strcmp(key, "on") == 0) {
+            field = ON;
+            char token[8];
+            if (!parse_token(&p, token, sizeof(token)) ||
+                (strcmp(token, "true") != 0 && strcmp(token, "false") != 0)) {
+                return false;
+            }
+            msg->on = strcmp(token, "true") == 0;
+        } else {
+            return false;
+        }
+        if (fields & field) {
+            return false;
+        }
+        fields |= field;
+        skip_ws(&p);
+        if (*p == '}') {
+            ++p;
+            break;
+        }
+        if (*p++ != ',') {
+            return false;
+        }
+    }
+    skip_ws(&p);
+    return *p == '\0' && ((fields == (TYPE | PASS) && strcmp(msg->type, "tx_auth") == 0) ||
+                          (fields == (TYPE | ON) && strcmp(msg->type, "ptt") == 0) ||
+                          (fields == TYPE && (strcmp(msg->type, "hb") == 0 || strcmp(msg->type, "status") == 0)));
+}
+
+static void free_tx_session(void *ctx)
+{
+    tx_ws_session_t *session = ctx;
+    tx_release(session->owner, "Client disconnected");
+    free(session);
+}
+
+static esp_err_t tx_ws_pre_handshake(httpd_req_t *req)
+{
+    return web_auth_ws_check(req) ? ESP_OK : ESP_FAIL;
+}
+
+static esp_err_t tx_ws_handler(httpd_req_t *req)
+{
+    static uint32_t next_owner;
+    tx_ws_session_t *session = req->sess_ctx;
+    httpd_ws_frame_t frame = {0};
+    uint8_t input[192];
+    if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK ||
+        frame.type != HTTPD_WS_TYPE_TEXT || !frame.final || frame.len == 0 || frame.len >= sizeof(input)) {
+        return ESP_FAIL;
+    }
+    frame.payload = input;
+    if (httpd_ws_recv_frame(req, &frame, frame.len) != ESP_OK || memchr(input, 0, frame.len)) {
+        return ESP_FAIL;
+    }
+    input[frame.len] = 0;
+
+    tx_ws_message_t msg = {0};
+    if (!parse_tx_message((const char *)input, &msg)) {
+        return ESP_FAIL;
+    }
+    const char *error = "";
+    if (strcmp(msg.type, "tx_auth") == 0) {
+        if (session) {
+            return ESP_FAIL;  // authenticate once per connection
+        }
+        if (!web_auth_tx_check(req, msg.pass)) {
+            error = "TX authorization refused";
+        } else {
+            session = calloc(1, sizeof(*session));
+            if (!session) {
+                return ESP_ERR_NO_MEM;
+            }
+            if (++next_owner == 0) {
+                ++next_owner;
+            }
+            session->owner = next_owner;
+            req->sess_ctx = session;
+            req->free_ctx = free_tx_session;
+        }
+    } else if (!session) {
+        return ESP_FAIL;
+    } else if (strcmp(msg.type, "hb") == 0) {
+        tx_heartbeat(session->owner);
+    } else if (strcmp(msg.type, "status") == 0) {
+        // Inspect state without extending the heartbeat.
+    } else if (!msg.on) {
+        tx_release(session->owner, "PTT released");
+    } else if (!tx_acquire(session->owner)) {
+        error = "TX busy or unavailable";
+    } else if (!tx_key(session->owner)) {
+        error = "PTT unavailable";
+    }
+
+    const tx_state_t state = tx_get_state();
+    const char *phase = state.phase == TX_KEYED ? "KEYED" : state.phase == TX_ARMED ? "ARMED" : "IDLE";
+    char json[256];
+    const int n = snprintf(json, sizeof(json),
+                           "{\"t\":\"tx\",\"state\":\"%s\",\"left_s\":%u,\"reason\":\"%s\","
+                           "\"on_air\":%s,\"auth\":%s,\"owner\":%s,\"error\":\"%s\"}",
+                           phase, state.left_s, state.reason, state.on_air ? "true" : "false",
+                           session ? "true" : "false",
+                           session && state.owner == session->owner ? "true" : "false", error);
+    if (n < 0 || n >= sizeof(json)) {
+        return ESP_FAIL;
+    }
+    frame = (httpd_ws_frame_t){.type = HTTPD_WS_TYPE_TEXT, .payload = (uint8_t *)json, .len = n};
+    return httpd_ws_send_frame(req, &frame);
 }
 
 static bool token_to_uint(const char *t, uint32_t max, uint32_t *out)
@@ -1063,6 +1257,10 @@ static esp_err_t reboot_handler(httpd_req_t *req)
 {
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, true)) {
         return ESP_OK;
+    }
+    if (!tx_quiesce("Reboot")) {
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "Waiting for radio RX. Retry reboot.");
     }
     web_auth_set_common_headers(req);
     httpd_resp_set_hdr(req, "Connection", "close");
@@ -1331,6 +1529,8 @@ esp_err_t web_server_start(void)
         {.uri = "/cat",        .method = HTTP_POST, .handler = cat_post_handler},
         {.uri = "/reboot",     .method = HTTP_POST, .handler = reboot_handler},
         {.uri = "/catlog",     .method = HTTP_GET,  .handler = catlog_handler},
+        {.uri = "/ws",         .method = HTTP_GET,  .handler = tx_ws_handler, .is_websocket = true,
+         .ws_pre_handshake_cb = tx_ws_pre_handshake},
         {.uri = "/scope.bin",  .method = HTTP_GET,  .handler = scope_handler},
         {.uri = "/stream.pcm", .method = HTTP_GET,  .handler = pcm_handler},
         {.uri = "/stream.wav", .method = HTTP_GET,  .handler = wav_handler},

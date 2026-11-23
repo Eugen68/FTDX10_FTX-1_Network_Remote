@@ -57,3 +57,6 @@ void web_auth_log_startup(void);
 #ifdef __cplusplus
 }
 #endif
+
+bool web_auth_ws_check(httpd_req_t *req);
+bool web_auth_tx_check(httpd_req_t *req, const char *pass);
