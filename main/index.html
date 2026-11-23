@@ -3809,7 +3809,7 @@ txConnect.addEventListener('click', () => {
     ptt.disabled = true;
     txConnect.disabled = false;
     if (txInfo.textContent === 'Connecting…') txInfo.textContent = 'TX connection failed';
-    if (txInfo.textContent === 'Ready') txInfo.textContent = 'TX disconnected';
+    else if (txInfo.textContent !== 'TX authorization refused') txInfo.textContent = 'TX disconnected';
   });
 });
 
