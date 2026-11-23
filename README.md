@@ -602,6 +602,9 @@ The firmware opens the radio's USB audio output interface to read its descriptor
 stopped. The serial log lists the advertised formats. The authenticated `/status` endpoint reports
 `tx_audio.present` and summarizes the first advertised format in `rates`, `channels`, and `bits`.
 A continuous rate range uses `rate_min` and `rate_max` with an empty `rates` array.
+During playback, `stream.active` indicates an open audio stream. The measured `stream.usb_in_hz` covers
+the USB reads in that stream and remains available after playback ends. The serial log prints the final
+rate and USB bus reset count when the stream ends.
 
 Automatic USB recovery still monitors the input stream. A missing input can trigger a bus reset only
 while a recent CAT status confirms the radio is out of transmit. A missing or stale CAT status defers recovery.

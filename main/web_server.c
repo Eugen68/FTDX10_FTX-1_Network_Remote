@@ -107,11 +107,28 @@ typedef struct {
 static audio_fifo_t s_fifo;
 static uint8_t s_usb_read_buf[USB_READ_BYTES];
 static volatile uint32_t s_st_rate;         // sample rate of the current / last stream
-// Measured USB input rate: frames actually received from the radio per second since the stream started.
-// Below the nominal rate means isochronous packets were lost between the radio and the reader.
-static volatile uint64_t s_st_usb_bytes;
-static volatile int64_t s_st_usb_t0_us;
-static volatile uint32_t s_st_in_frame_bytes;
+// Measure between the first and latest data reads. Time spent after playback ends
+// must not lower the reported rate for the completed stream.
+static portMUX_TYPE s_usb_rate_lock = portMUX_INITIALIZER_UNLOCKED;
+static struct {
+    uint64_t bytes;
+    int64_t first_us;
+    int64_t last_us;
+    uint32_t frame_bytes;
+} s_usb_rate;
+
+static uint64_t usb_input_rate_dhz(void)
+{
+    portENTER_CRITICAL(&s_usb_rate_lock);
+    const int64_t elapsed_us = s_usb_rate.last_us - s_usb_rate.first_us;
+    const uint64_t bytes = s_usb_rate.bytes;
+    const uint32_t frame_bytes = s_usb_rate.frame_bytes;
+    portEXIT_CRITICAL(&s_usb_rate_lock);
+    if (elapsed_us <= 1000000 || frame_bytes == 0) {
+        return 0;
+    }
+    return (bytes / frame_bytes) * 10000000ULL / (uint64_t)elapsed_us;
+}
 
 // Decimator state: only the USB reader task touches it while a stream runs
 typedef struct {
@@ -255,11 +272,15 @@ static void usb_reader_task(void *arg)
             n = sizeof(s_usb_read_buf);
         }
         if (n > 0) {
-            if (s_st_usb_t0_us == 0) {
-                s_st_usb_t0_us = esp_timer_get_time();   // from the first data, not the stream request
+            const int64_t now_us = esp_timer_get_time();
+            portENTER_CRITICAL(&s_usb_rate_lock);
+            if (s_usb_rate.first_us == 0) {
+                s_usb_rate.first_us = now_us;
             } else {
-                s_st_usb_bytes += n;                     // the first read only marks the start
+                s_usb_rate.bytes += n;     // the first read only marks the start
             }
+            s_usb_rate.last_us = now_us;
+            portEXIT_CRITICAL(&s_usb_rate_lock);
         }
         if (n > 0 && s_dec.factor > 1) {
             n = (uint32_t)decimate(&s_dec, s_usb_read_buf, n);
@@ -372,9 +393,12 @@ static void stream_task(void *arg)
     audio_fifo_t *f = &s_fifo;
     const uint32_t bytes_per_ms = (ctx->out_rate * frame_bytes + 999) / 1000;
     s_st_rate = ctx->out_rate;
-    s_st_usb_bytes = 0;
-    s_st_usb_t0_us = 0;
-    s_st_in_frame_bytes = frame_bytes;
+    portENTER_CRITICAL(&s_usb_rate_lock);
+    s_usb_rate.bytes = 0;
+    s_usb_rate.first_us = 0;
+    s_usb_rate.last_us = 0;
+    s_usb_rate.frame_bytes = frame_bytes;
+    portEXIT_CRITICAL(&s_usb_rate_lock);
     s_dec.factor = 1;
     if (ctx->decim > 1) {
         decimator_init(&s_dec, ctx->decim, ctx->fmt.channels, ctx->fmt.sample_rate, ctx->out_rate);
@@ -463,7 +487,11 @@ static void stream_task(void *arg)
         ESP_LOGE(TAG, "USB reader did not stop: keeping its buffer");   // never freed under a running task
     }
     f->data = NULL;
-    ESP_LOGI(TAG, "Stream ended");
+    const uint64_t usb_in_dhz = usb_input_rate_dhz();
+    ESP_LOGI(TAG, "Stream ended (%s), chunks=%lu, usb_in_hz=%lu.%lu, usb_bus_resets=%lu",
+             f->device_gone ? "USB input read failed" : esp_err_to_name(err),
+             (unsigned long)s_st_chunks, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10),
+             (unsigned long)usb_audio_bus_resets());
 
     httpd_resp_send_chunk(req, NULL, 0);
     httpd_req_async_handler_complete(req);
@@ -610,13 +638,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         acc_scope_get_stats(&acc);
         char acc_reason[2 * sizeof(acc.reason) + 1];
         json_escape(acc.reason, acc_reason, sizeof(acc_reason));
-        // Measured USB input rate, in tenths of a hertz
-        uint64_t usb_in_dhz = 0;
-        const int64_t t0 = s_st_usb_t0_us;
-        const int64_t el = t0 ? esp_timer_get_time() - t0 : 0;
-        if (el > 1000000 && s_st_in_frame_bytes) {
-            usb_in_dhz = (s_st_usb_bytes / s_st_in_frame_bytes) * 10000000ULL / (uint64_t)el;
-        }
+        const uint64_t usb_in_dhz = usb_input_rate_dhz();
         wifi_ap_record_t ap;
         const int rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
         // heap_* include PSRAM when it is enabled; int_* are the internal RAM only
@@ -624,7 +646,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       ",\"uptime_s\":%lu,\"heap_free\":%lu,\"heap_min\":%lu,\"heap_block\":%lu,"
                       "\"int_free\":%lu,\"int_min\":%lu,\"int_block\":%lu,\"rssi\":%d,"
                       "\"conn_opened\":%lu,\"conn_closed\":%lu,"
-                      "\"stream\":{\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
+                      "\"stream\":{\"active\":%s,\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
                       "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu,"
                       "\"usb_bus_resets\":%lu},"
                       "\"acc\":{\"enabled\":%s,\"fps\":%lu,\"frames\":%lu,\"accepted\":%lu,\"rejected\":%lu,"
@@ -640,6 +662,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       rssi,
                       (unsigned long)s_st_conn_opened, (unsigned long)s_st_conn_closed,
+                      atomic_load(&s_stream_active) ? "true" : "false",
                       (unsigned long)s_st_starts, (unsigned long)s_st_chunks,
                       (unsigned long)s_st_usb_timeouts, (unsigned long)s_st_slow_sends,
                       (unsigned long)s_st_max_send_ms,
