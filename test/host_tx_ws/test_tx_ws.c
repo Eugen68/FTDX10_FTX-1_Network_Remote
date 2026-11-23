@@ -6,6 +6,7 @@
 #include <string.h>
 #include "app_config.h"
 #include "cat.h"
+#include "esp_log.h"
 #include "tx.h"
 
 typedef struct {

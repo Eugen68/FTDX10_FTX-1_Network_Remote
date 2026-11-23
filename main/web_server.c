@@ -1003,6 +1003,7 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     uint8_t input[192];
     if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK ||
         frame.type != HTTPD_WS_TYPE_TEXT || !frame.final || frame.len == 0 || frame.len >= sizeof(input)) {
+        ESP_LOGW(TAG, "TX WebSocket rejected: invalid control frame");
         return ESP_FAIL;
     }
     frame.payload = input;
@@ -1013,6 +1014,7 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
 
     tx_ws_message_t msg = {0};
     if (!parse_tx_message((const char *)input, &msg)) {
+        ESP_LOGW(TAG, "TX WebSocket rejected: invalid control message");
         return ESP_FAIL;
     }
     const char *error = "";
@@ -1033,6 +1035,7 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
             session->owner = next_owner;
             req->sess_ctx = session;
             req->free_ctx = free_tx_session;
+            ESP_LOGI(TAG, "TX WebSocket authorized");
         }
     } else if (!session) {
         return ESP_FAIL;

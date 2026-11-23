@@ -3810,6 +3810,7 @@ txConnect.addEventListener('click', () => {
   let pass = txPass.value;
   txPass.value = '';
   socket.addEventListener('open', () => {
+    txInfo.textContent = 'Authorizing TX…';
     sendTx({t: 'tx_auth', pass});
     pass = '';
   });
@@ -3845,6 +3846,7 @@ txConnect.addEventListener('click', () => {
     ptt.disabled = true;
     txConnect.disabled = false;
     if (txInfo.textContent === 'Connecting…') txInfo.textContent = 'TX connection failed';
+    else if (txInfo.textContent === 'Authorizing TX…') txInfo.textContent = 'TX authorization connection closed';
     else if (txInfo.textContent !== 'TX authorization refused') txInfo.textContent = 'TX disconnected';
   });
 });
