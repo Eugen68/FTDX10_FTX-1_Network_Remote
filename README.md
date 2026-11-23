@@ -603,9 +603,9 @@ option 6 to restart. Clearing the TX password also disables remote PTT. The page
 and the TX password. Five failed TX password attempts from the same IP trigger the 60-second lockout.
 One browser can hold PTT at a time. Hold the button or Space while the page has focus. During confirmed TX, the PTT button and the
 frequency readout for the radio-selected TX VFO turn red.
-This version provides PTT without USB transmit audio. Set MAIN to USB, LSB, DATA-USB or DATA-LSB.
+The TX panel offers PTT only, a 1,000 Hz test tone, and a 700 + 1,900 Hz two-tone test. Set MAIN to USB, LSB, DATA-USB or DATA-LSB.
 When the radio selects SUB for transmit, set SUB to one of those modes too. The firmware waits for fresh
-CAT confirmation of the mode and the selected transmitter. Select the modulation source on the radio. The firmware leaves the modulation-source and transmit-gain menus under local control.
+CAT confirmation of the mode and the selected transmitter. Select USB modulation on the radio to use the test tones. The firmware leaves the modulation-source and transmit-gain menus under local control.
 
 The device releases PTT on button/key release, a closed connection, 1.5 seconds without the owner's
 heartbeat, the transmit time limit, loss of CAT or USB audio, high SWR, or unexpected transmit status.
@@ -614,6 +614,27 @@ confirmed receive after a device-controlled transmission. During idle, automatic
 without CAT, but defers if a recent CAT report shows a transmission. If CAT is physically unavailable
 while keyed, the firmware retries TX off when the link returns and blocks further PTT and power-cycles in
 the meantime. Use the radio's local controls to stop transmission if the CAT connection stays down.
+
+### USB test tone and SWR protection
+
+The test tone defaults to −24 dBFS, with an adjustable range of −60 to −6 dBFS. The level of the two-tone
+signal is bounded by the combined peak. Select DATA-USB with the radio's modulation source set to USB
+for the phase 2 bench test. The firmware preserves the radio's modulation source and input gain settings.
+Use a dummy load and minimum power.
+
+The serial menu option `s` sets the SWR limit from 1.5:1 to 3.0:1 (default 3.0:1). While keyed, the
+device reads RM5 (power) and RM6 (SWR). When PO reaches 3 on its raw 0–255 scale, the device checks the
+absolute limit and stops on an increase of at least 0.5:1 over a three-sample reference taken after
+one second of steady power. The rise also uses a three-sample average. Stale metering stops TX after
+a grace interval when power is high or cannot be confirmed. The radio's Hi-SWR report remains a
+separate stop condition.
+
+The panel and `/status` show both raw meters. SWR conversions use provisional, model-specific
+[FTX-1](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftx1/ftx1.h)
+and [FTDX10](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftdx10.h) Hamlib reference points.
+Check these against the radio and known loads on the bench before relying on the numeric ratio.
+In `/status`, the TX audio counters show the output sample rate, missed audio task deadlines and
+bytes accepted by the USB driver.
 
 ### USB audio discovery
 

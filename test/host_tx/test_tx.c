@@ -9,6 +9,10 @@ static bool enabled = true;
 static bool radio_on;
 static bool cat_available = true;
 static bool usb_available = true;
+static bool output_available = true;
+static bool output_idle = true;
+static tx_tone_t audio_request;
+static unsigned po_raw, swr_raw;
 static unsigned on_writes, off_writes;
 static const char *fault;
 static const char *mode_error;
@@ -16,8 +20,17 @@ static const char *mode_error;
 const char *cat_ptt_mode_error(void) { return mode_error; }
 
 bool app_config_tx_enabled(void) { return enabled; }
-void app_config_get(app_config_t *cfg) { *cfg = (app_config_t){.tx_max_seconds = 10}; }
+void app_config_get(app_config_t *cfg) { *cfg = (app_config_t){.tx_max_seconds = 10, .swr_max = 30}; }
 bool usb_audio_get_format(usb_audio_format_t *fmt) { return usb_available; }
+bool usb_audio_tx_available(void) { return output_available; }
+bool usb_audio_tx_idle(void) { return output_idle; }
+void usb_audio_tx_request(tx_tone_t tone, int dbfs) { audio_request = tone; }
+cat_tx_meters_t cat_get_tx_meters(void)
+{
+    return (cat_tx_meters_t){
+        .rig = CAT_RIG_FTDX10, .po = po_raw, .swr = swr_raw, .po_us = g_now_us, .swr_us = g_now_us
+    };
+}
 bool cat_radio_rx_after(int64_t after_us) { return cat_available && !radio_on && rx_us > after_us; }
 bool cat_radio_tx(void) { return cat_available && radio_on; }
 const char *cat_ptt_fault(int64_t started, int64_t grace_us) { return cat_available ? fault : "CAT lost"; }
@@ -144,6 +157,28 @@ int main(void)
     mode_error = "Set SUB mode to USB, LSB, DATA-USB or DATA-LSB";
     watchdog_tick();
     assert(off_writes == 8 && tx_get_state().reason == mode_error);
+    confirm_rx();
+    mode_error = NULL;
+    rx_us = g_now_us;
+    assert(tx_acquire(1));
+    output_available = false;
+    assert(!tx_key_tone(1, TX_TONE_SINGLE, -24));
+    assert(on_writes == 8 && audio_request == TX_TONE_OFF);
+    output_available = true;
+    output_idle = false;
+    assert(tx_acquire(1));
+    assert(!tx_key_tone(1, TX_TONE_SINGLE, -24));
+    assert(on_writes == 8 && audio_request == TX_TONE_OFF);
+    output_idle = true;
+    assert(tx_acquire(1));
+    assert(tx_key_tone(1, TX_TONE_SINGLE, -24));
+    assert(audio_request == TX_TONE_SINGLE);
+    po_raw = 10;
+    swr_raw = 126;
+    g_now_us += 100000;
+    watchdog_tick();
+    assert(audio_request == TX_TONE_OFF && off_writes == 9);
+    assert(tx_get_state().stop_swr == 300);
     confirm_rx();
     puts("all TX state tests passed");
 }

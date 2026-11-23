@@ -618,6 +618,16 @@ static char safe_mode_char(char c)
     return ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) ? c : ' ';
 }
 
+static const char *tx_reason(const tx_state_t *tx, char formatted[32])
+{
+    if (!tx->stop_swr) {
+        return tx->reason;
+    }
+    const unsigned tenths = (tx->stop_swr + 5) / 10;
+    snprintf(formatted, 32, "SWR %u.%u:1 (%s)", tenths / 10, tenths % 10, tx->reason);
+    return formatted;
+}
+
 static esp_err_t status_handler(httpd_req_t *req)
 {
     note_session(req);
@@ -625,7 +635,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 128];
+    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 256];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -698,11 +708,26 @@ static esp_err_t status_handler(httpd_req_t *req)
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const tx_state_t tx = tx_get_state();
+        const usb_tx_stats_t audio = usb_audio_tx_stats();
         const char *phase = tx.phase == TX_KEYED ? "KEYED" : tx.phase == TX_ARMED ? "ARMED" : "IDLE";
+        char reason[32], swr[16], po[8];
+        if (tx.swr_valid) {
+            snprintf(swr, sizeof(swr), "%u.%02u", tx.swr / 100, tx.swr % 100);
+        } else {
+            strcpy(swr, "null");
+        }
+        if (tx.po_valid) {
+            snprintf(po, sizeof(po), "%u", tx.po_raw);
+        } else {
+            strcpy(po, "null");
+        }
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"tx\":{\"state\":\"%s\",\"owner\":%lu,\"left_s\":%u,\"reason\":\"%s\"}}",
-                      phase, (unsigned long)tx.owner, tx.left_s, tx.reason);
+                      ",\"tx\":{\"state\":\"%s\",\"owner\":%lu,\"left_s\":%u,\"reason\":\"%s\","
+                      "\"audio_rate\":%u,\"underruns\":%u,\"written_bytes\":%u,"
+                      "\"swr\":%s,\"swr_raw\":%u,\"po\":%s,\"po_raw\":%u}}",
+                      phase, (unsigned long)tx.owner, tx.left_s, tx_reason(&tx, reason),
+                      audio.audio_rate, audio.underruns, audio.written_bytes, swr, tx.swr_raw, po, tx.po_raw);
     }
     return send_json(req, json, n, sizeof(json));
 }
@@ -841,6 +866,8 @@ typedef struct {
     char type[12];
     char pass[APP_CONFIG_PASS_MAX_LEN + 1];
     bool on;
+    tx_tone_t tone;
+    int dbfs;
 } tx_ws_message_t;
 
 static bool parse_tx_password(const char **p, char out[APP_CONFIG_PASS_MAX_LEN + 1])
@@ -875,7 +902,8 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
     if (*p++ != '{') {
         return false;
     }
-    enum { TYPE = 1, PASS = 2, ON = 4 };
+    enum { TYPE = 1, PASS = 2, ON = 4, TONE = 8, DBFS = 16 };
+    msg->dbfs = TX_TONE_DEFAULT_DBFS;
     unsigned fields = 0;
     for (;;) {
         char key[8];
@@ -907,6 +935,31 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
                 return false;
             }
             msg->on = strcmp(token, "true") == 0;
+        } else if (strcmp(key, "tone") == 0) {
+            field = TONE;
+            char tone[8];
+            if (!parse_string(&p, tone, sizeof(tone))) {
+                return false;
+            }
+            if (strcmp(tone, "single") == 0) {
+                msg->tone = TX_TONE_SINGLE;
+            } else if (strcmp(tone, "dual") == 0) {
+                msg->tone = TX_TONE_DUAL;
+            } else if (strcmp(tone, "off") != 0) {
+                return false;
+            }
+        } else if (strcmp(key, "dbfs") == 0) {
+            field = DBFS;
+            char token[5], *end;
+            if (!parse_token(&p, token, sizeof(token)) || token[0] != '-' ||
+                token[1] < '1' || token[1] > '9') {
+                return false;
+            }
+            const long level = strtol(token, &end, 10);
+            if (*end || level < TX_TONE_MIN_DBFS || level > TX_TONE_MAX_DBFS) {
+                return false;
+            }
+            msg->dbfs = (int)level;
         } else {
             return false;
         }
@@ -925,7 +978,8 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
     }
     skip_ws(&p);
     return *p == '\0' && ((fields == (TYPE | PASS) && strcmp(msg->type, "tx_auth") == 0) ||
-                          (fields == (TYPE | ON) && strcmp(msg->type, "ptt") == 0) ||
+                          ((fields & ~(TONE | DBFS)) == (TYPE | ON) &&
+                           (!(fields & (TONE | DBFS)) || (msg->on && (fields & TONE))) && strcmp(msg->type, "ptt") == 0) ||
                           (fields == TYPE && (strcmp(msg->type, "hb") == 0 || strcmp(msg->type, "status") == 0)));
 }
 
@@ -990,7 +1044,7 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
         tx_release(session->owner, "PTT released");
     } else if (!tx_acquire(session->owner)) {
         error = "TX busy or unavailable";
-    } else if (!tx_key(session->owner)) {
+    } else if (!tx_key_tone(session->owner, msg.tone, msg.dbfs)) {
         const tx_state_t refused = tx_get_state();
         error = refused.reason[0] ? refused.reason : "PTT unavailable";
     }
@@ -1001,13 +1055,14 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     const char *tx_vfo = cat.tx_vfo == CAT_TX_VFO_MAIN ? "main" :
                          cat.tx_vfo == CAT_TX_VFO_SUB ? "sub" : "";
     const char *phase = state.phase == TX_KEYED ? "KEYED" : state.phase == TX_ARMED ? "ARMED" : "IDLE";
-    char json[384];
+    char json[512], reason[32];
     const int n = snprintf(json, sizeof(json),
                            "{\"t\":\"tx\",\"state\":\"%s\",\"left_s\":%u,\"reason\":\"%s\","
-                           "\"on_air\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\"}",
-                           phase, state.left_s, state.reason, state.on_air ? "true" : "false", tx_vfo,
-                           session ? "true" : "false",
-                           session && state.owner == session->owner ? "true" : "false", error);
+                           "\"on_air\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\","
+                           "\"swr_x100\":%u,\"swr_raw\":%u,\"po_raw\":%u,\"po_valid\":%s}",
+                           phase, state.left_s, tx_reason(&state, reason), state.on_air ? "true" : "false", tx_vfo,
+                           session ? "true" : "false", session && state.owner == session->owner ? "true" : "false",
+                           error, state.swr, state.swr_raw, state.po_raw, state.po_valid ? "true" : "false");
     if (n < 0 || (size_t)n >= sizeof(json)) {
         return ESP_FAIL;
     }

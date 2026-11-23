@@ -1539,8 +1539,17 @@
   <section id="txPanel" hidden aria-label="Transmit">
     <label>TX password <input id="txPass" type="password" minlength="6" maxlength="64" autocomplete="off"></label>
     <button id="txConnect" type="button">Authorize TX</button>
+    <label>TX audio
+      <select id="txTone">
+        <option value="off">PTT only</option>
+        <option value="single">Test tone 1,000 Hz</option>
+        <option value="dual">Two-tone 700 + 1,900 Hz</option>
+      </select>
+    </label>
+    <label>Level <input id="txLevel" type="number" value="-24" min="-60" max="-6" step="1"> dBFS</label>
     <button id="txPtt" type="button" disabled aria-pressed="false">Hold to talk</button>
     <span id="txInfo" role="status"></span>
+    <output id="txMeters"></output>
   </section>
 
   <details class="sq-section" id="catLogSection">
@@ -3754,6 +3763,9 @@ const txPass = document.getElementById('txPass');
 const txConnect = document.getElementById('txConnect');
 const ptt = document.getElementById('txPtt');
 const txInfo = document.getElementById('txInfo');
+const txTone = document.getElementById('txTone');
+const txLevel = document.getElementById('txLevel');
+const txMeters = document.getElementById('txMeters');
 let txSocket = null;
 let txAuthenticated = false;
 let txHeld = false;
@@ -3778,9 +3790,13 @@ function releasePtt() {
 
 function pressPtt() {
   if (!txAuthenticated || txHeld || !document.hasFocus() || document.hidden) return;
+  if (txTone.value !== 'off' && (!txLevel.value || !txLevel.validity.valid)) {
+    txInfo.textContent = 'Enter a level from −60 to −6 dBFS';
+    return;
+  }
   txHeld = true;
   ptt.setAttribute('aria-pressed', 'true');
-  sendTx({t: 'ptt', on: true});
+  sendTx({t: 'ptt', on: true, tone: txTone.value, dbfs: txTone.value === 'off' ? -24 : txLevel.valueAsNumber});
 }
 
 txConnect.addEventListener('click', () => {
@@ -3803,6 +3819,10 @@ txConnect.addEventListener('click', () => {
     txAuthenticated = state.auth;
     ptt.disabled = !state.auth;
     showTransmitState(state.on_air === true, state.tx_vfo);
+    txTone.disabled = txLevel.disabled = state.state === 'KEYED';
+    txMeters.textContent = state.state === 'KEYED' || state.po_raw || state.swr_raw
+      ? `SWR ${state.swr_x100 ? (state.swr_x100 / 100).toFixed(2) + ':1' : '—'} · RM6 ${state.swr_raw} · PO ${state.po_raw}`
+      : '';
     txInfo.textContent = state.error || state.reason || (state.state === 'KEYED'
       ? `${state.left_s} s left` : state.auth ? 'Ready' : 'TX authorization required');
     if (!state.auth) {
@@ -3820,6 +3840,8 @@ txConnect.addEventListener('click', () => {
     txAuthenticated = false;
     releasePtt();
     showTransmitState(false);
+    txTone.disabled = txLevel.disabled = false;
+    txMeters.textContent = '';
     ptt.disabled = true;
     txConnect.disabled = false;
     if (txInfo.textContent === 'Connecting…') txInfo.textContent = 'TX connection failed';

@@ -105,6 +105,7 @@ static SemaphoreHandle_t s_ptt_lock;  // serializes PTT writes with closing the 
 static cdc_acm_dev_hdl_t s_ptt_port;
 static bool s_ptt_ready;
 static int64_t s_swr_status_us;
+static cat_tx_meters_t s_tx_meters;
 static int64_t s_tx_vfo_status_us;
 static int64_t s_mode_status_us[2];
 static char s_reported_mode[2];
@@ -392,7 +393,8 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         }
         return rig->can_tx && (pl == 0 || (pl == 1 && p[0] == '1' && app_config_tx_enabled()));
     case CAT_TWO('R', 'M'):         // meter (read): the S meter item of this radio only
-        return rig->meter_side != 0 && pl == 1 && p[0] == rig->meter_side;
+        return pl == 1 && ((rig->meter_side && p[0] == rig->meter_side) ||
+                           (rig->can_tx && (p[0] == '5' || p[0] == '6')));
     case CAT_TWO('P', 'S'):         // power
         return ctl && pl == 1 && is_side(p[0]);
     case CAT_TWO('F', 'A'):         // frequency, read or set within the radio's range
@@ -626,6 +628,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_state.tx = false;
         s_last_tx_status_us = 0;
         s_swr_status_us = 0;
+        s_tx_meters = (cat_tx_meters_t){0};
         s_tx_vfo_status_us = 0;
         memset(s_mode_status_us, 0, sizeof(s_mode_status_us));
         s_state.tx_vfo = CAT_TX_VFO_UNKNOWN;
@@ -958,6 +961,25 @@ static void handle_cat_packet(const char *pkt)
         return;
     }
 
+    // Both manuals use RM + item + three digits + reserved 000 + semicolon.
+    if (s_rig->can_tx && strlen(pkt) == 10 && strncmp(pkt, "RM", 2) == 0 &&
+        (pkt[2] == '5' || pkt[2] == '6') && all_digits(pkt + 3, 3) &&
+        memcmp(pkt + 6, "000;", 4) == 0) {
+        const unsigned raw = digits_value(pkt + 3, 3);
+        if (raw <= 255 && xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+            s_tx_meters.rig = s_rig->rig;
+            if (pkt[2] == '5') {
+                s_tx_meters.po = raw;
+                s_tx_meters.po_us = now_pkt_us;
+            } else {
+                s_tx_meters.swr = raw;
+                s_tx_meters.swr_us = now_pkt_us;
+            }
+            xSemaphoreGive(s_lock);
+        }
+        return;
+    }
+
     int sm_main = 0, sm_sub = 0;
     if (parse_rm(pkt, &sm_main, &sm_sub)) {
         // Meter ballistics: the S meter is polled every 100 ms but the page reads it every 400 ms. The FTDX10
@@ -1075,6 +1097,9 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
 
         // 2. Poll the S meter every 100 ms
         send_poll(dev, rig->poll_fast);
+        if (rig->can_tx && cat_tx_requested()) {
+            send_poll(dev, "RM5;RM6;");
+        }
 
         // 3. Poll BUSY / TX every 500 ms (every 5 iterations)
         if ((poll_count % 5) == 0) {
@@ -1267,6 +1292,14 @@ void cat_get_state(cat_state_t *state)
     }
     state->age_ms = s_state.connected ? (uint32_t)((esp_timer_get_time() - s_last_answer_us) / 1000) : 0;
     xSemaphoreGive(s_lock);
+}
+
+cat_tx_meters_t cat_get_tx_meters(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const cat_tx_meters_t meters = s_tx_meters;
+    xSemaphoreGive(s_lock);
+    return meters;
 }
 
 bool cat_radio_rx_after(int64_t after_us)

@@ -13,6 +13,7 @@
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "sdkconfig.h"
+#include "tx_tone.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,6 +41,15 @@ typedef struct {
 
 /** Copy the output descriptor summary. Returns true while the interface is open. */
 bool usb_audio_get_output_format(usb_audio_output_format_t *fmt);
+
+typedef struct {
+    unsigned audio_rate, underruns, written_bytes;
+} usb_tx_stats_t;
+
+bool usb_audio_tx_available(void);
+bool usb_audio_tx_idle(void);
+void usb_audio_tx_request(tx_tone_t tone, int dbfs);
+usb_tx_stats_t usb_audio_tx_stats(void);
 
 /**
  * @brief Install USB Host Library and UAC class driver

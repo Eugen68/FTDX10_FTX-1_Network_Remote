@@ -201,6 +201,22 @@ int main(void) {
     CHECK(cat_set_mode_char(false, '5') == ESP_OK, "queue an AM mode change");
     CHECK(cat_ptt_mode_error() != NULL, "optimistic mode change cannot authorize PTT");
 
+    use("0761");
+    CHECK(ok("RM5;") && ok("RM6;") && !ok("RM60;") && !ok("RM7;"), "PO/SWR are read-only");
+    handle_cat_packet("RM5022000;");
+    handle_cat_packet("RM6126000;");
+    handle_cat_packet("RM6256000;");
+    handle_cat_packet("RM6111111;");
+    cat_tx_meters_t meters = cat_get_tx_meters();
+    CHECK(meters.rig == CAT_RIG_FTDX10 && meters.po == 22 && meters.swr == 126, "FTDX10 meters");
+    use("0840");
+    CHECK(ok("RM5;") && ok("RM6;"), "FTX-1 PO/SWR");
+    handle_cat_packet("RM6089000;");
+    meters = cat_get_tx_meters();
+    CHECK(meters.rig == CAT_RIG_FTX1 && meters.swr == 89, "FTX-1 SWR");
+    use("9999");
+    CHECK(!ok("RM5;") && !ok("RM6;"), "unknown radio blocks transmit meters");
+
     // CAT log: blocked commands are logged as BLOCKED and never reach the port; reads come back oldest first
     use("0840");
     g_sent[0] = '\0';

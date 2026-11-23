@@ -15,6 +15,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -118,6 +119,13 @@ void cat_get_state(cat_state_t *state);
 
 /** True only when a recent CAT status report confirmed the radio is not transmitting. */
 bool cat_radio_rx_confirmed(void);
+typedef struct {
+    cat_rig_t rig;
+    unsigned po, swr;
+    int64_t po_us, swr_us;
+} cat_tx_meters_t;
+
+cat_tx_meters_t cat_get_tx_meters(void);
 bool cat_radio_rx_after(int64_t after_us);
 bool cat_radio_tx(void);
 esp_err_t cat_ptt(bool on);

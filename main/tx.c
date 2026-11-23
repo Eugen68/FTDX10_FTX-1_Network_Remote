@@ -7,6 +7,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "usb_audio.h"
+#include "tx_swr.h"
 
 #define HEARTBEAT_US 1500000LL
 #define CONFIRM_US 1500000LL
@@ -17,6 +18,10 @@ static esp_timer_handle_t s_timer;
 static tx_state_t s_state = {.reason = ""};
 static int64_t s_heartbeat, s_keyed_at, s_deadline, s_off_sent;
 static bool s_stopping, s_inhibited;
+static tx_swr_guard_t s_swr_guard;
+static unsigned s_swr_max;
+static tx_tone_t s_tone;
+
 
 static void finish_stop(void)
 {
@@ -40,6 +45,7 @@ static void stop_locked(const char *reason)
     }
 
     s_stopping = true;
+    usb_audio_tx_request(TX_TONE_OFF, 0);
     if (s_off_sent && cat_radio_rx_after(s_off_sent)) {
         finish_stop();
     } else if (!s_off_sent || esp_timer_get_time() - s_off_sent >= CONFIRM_US) {
@@ -63,6 +69,15 @@ bool tx_acquire(uint32_t owner)
 
 bool tx_key(uint32_t owner)
 {
+    return tx_key_tone(owner, TX_TONE_OFF, TX_TONE_DEFAULT_DBFS);
+}
+
+bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
+{
+    if (tone < TX_TONE_OFF || tone > TX_TONE_DUAL || dbfs < TX_TONE_MIN_DBFS || dbfs > TX_TONE_MAX_DBFS) {
+        tx_release(owner, "Invalid TX audio settings");
+        return false;
+    }
     app_config_t cfg;
     app_config_get(&cfg);
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -71,13 +86,23 @@ bool tx_key(uint32_t owner)
     if (s_state.phase == TX_ARMED && s_state.owner == owner && !s_inhibited &&
         usb_audio_get_format(NULL) && cat_radio_rx_after(0)) {
         const char *mode_error = cat_ptt_mode_error();
-        if (mode_error) {
+        if (!usb_audio_tx_idle()) {
+            refusal = "Waiting for USB TX audio to stop";
+        } else if (tone != TX_TONE_OFF && !usb_audio_tx_available()) {
+            refusal = "USB TX audio unavailable";
+        } else if (mode_error) {
             refusal = mode_error;
         } else {
             s_keyed_at = esp_timer_get_time();
             s_deadline = s_keyed_at + (int64_t)cfg.tx_max_seconds * 1000000;
             s_state.phase = TX_KEYED;  // even a failed write may have reached the radio
+            s_tone = tone;
+            s_swr_max = cfg.swr_max * 10;
+            s_swr_guard = (tx_swr_guard_t){0};
             keyed = cat_ptt(true) == ESP_OK;
+            if (keyed && tone != TX_TONE_OFF) {
+                usb_audio_tx_request(tone, dbfs);
+            }
         }
     }
     if (!keyed && s_state.owner == owner) {
@@ -127,12 +152,22 @@ static void watchdog_tick(void)
         } else if (s_state.phase == TX_KEYED) {
             if (now >= s_deadline) {
                 stop_locked("TX time limit");
-            } else if (!usb_audio_get_format(NULL)) {
+            } else if (!usb_audio_get_format(NULL) || (s_tone != TX_TONE_OFF && !usb_audio_tx_available())) {
                 stop_locked("USB audio lost");
             } else {
                 const char *reason = cat_ptt_fault(s_keyed_at, CONFIRM_US);
                 if (!reason) {
                     reason = cat_ptt_mode_error();
+                }
+                if (!reason) {
+                    const cat_tx_meters_t meters = cat_get_tx_meters();
+                    const tx_swr_result_t result = tx_swr_check(&s_swr_guard, &meters, s_keyed_at, now, s_swr_max);
+                    if (result == TX_SWR_STALE) {
+                        reason = "SWR or power readings unavailable";
+                    } else if (result == TX_SWR_LIMIT || result == TX_SWR_RISE) {
+                        s_state.stop_swr = tx_swr_value(meters.rig, meters.swr);
+                        reason = result == TX_SWR_RISE ? "rise" : "limit";
+                    }
                 }
                 if (reason) {
                     stop_locked(reason);
@@ -147,10 +182,20 @@ tx_state_t tx_get_state(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     tx_state_t result = s_state;
-    const int64_t remaining = s_deadline - esp_timer_get_time();
+    const int64_t now = esp_timer_get_time();
+    const int64_t remaining = s_deadline - now;
     result.left_s = s_state.phase == TX_KEYED && !s_stopping && remaining > 0
                     ? (unsigned)((remaining + 999999) / 1000000) : 0;
     result.on_air = s_state.phase == TX_KEYED && cat_radio_tx();
+    const cat_tx_meters_t meters = cat_get_tx_meters();
+    if (s_keyed_at > 0) {
+        result.po_valid = meters.po_us >= s_keyed_at && now - meters.po_us <= TX_METER_MAX_AGE_US;
+        result.swr_valid = result.po_valid && meters.po >= TX_PO_MIN_RAW &&
+                           meters.swr_us >= s_keyed_at && now - meters.swr_us <= TX_METER_MAX_AGE_US;
+        result.swr = result.swr_valid ? tx_swr_value(meters.rig, meters.swr) : 0;
+        result.swr_raw = meters.swr_us >= s_keyed_at ? meters.swr : 0;
+        result.po_raw = meters.po_us >= s_keyed_at ? meters.po : 0;
+    }
     xSemaphoreGive(s_lock);
     return result;
 }
