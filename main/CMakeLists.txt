@@ -49,6 +49,8 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         vRingbufferDelete=ftx_uac_ring_delete
         usb_host_transfer_submit=ftx_uac_transfer_submit)
 
+    # Temporary TLS diagnostics for the repeated handshakes. Remove these
+    # wrappers and their implementations once the cause is confirmed.
     foreach(symbol httpd_sess_close_lru httpd_sess_close_lru_direct httpd_queue_work httpd_sess_set_recv_override)
         target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=${symbol}")
     endforeach()

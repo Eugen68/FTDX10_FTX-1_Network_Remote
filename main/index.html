@@ -1575,7 +1575,7 @@ let devicePoll = Promise.resolve();
 
 function pollDeviceJson(uri) {
   const request = devicePoll.then(async () => {
-    const res = await fetch(uri, { cache: 'no-store' });
+    const res = await fetch(uri, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
   });
@@ -2646,12 +2646,15 @@ async function waitForReboot(previousBoot) {
   while (performance.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 1000));
     try {
-      if (await rebootStatus() !== previousBoot) return;
+      const currentBoot = await rebootStatus();
+      if (previousBoot === null || currentBoot !== previousBoot) return;
     } catch (e) {
       // The interface can be unreachable until Wi-Fi and HTTPS are ready.
     }
   }
-  throw new Error('Device did not report a new boot within 45 seconds');
+  throw new Error(previousBoot === null
+    ? 'Device status did not return within 45 seconds'
+    : 'Device did not report a new boot within 45 seconds');
 }
 
 const btnReboot = document.getElementById('btnReboot');
@@ -2665,7 +2668,7 @@ if (btnReboot) {
     try {
       if (abort) stop();
       accManage();
-      const previousBoot = await rebootStatus();
+      const previousBoot = await rebootStatus().catch(() => null);
       const response = await fetch('/reboot', {
         method: 'POST',
         headers: CAT_POST_HEADERS,
