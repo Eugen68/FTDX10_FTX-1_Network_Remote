@@ -98,6 +98,26 @@ int main(void) {
     handle_cat_packet("RM0010020;");
     CHECK(s_state.s_main == 10 && s_state.s_sub == 20, "ftx1 meter");
 
+    // CAT log: blocked commands are logged as BLOCKED and never reach the port; reads come back oldest first
+    use("0840");
+    g_sent[0] = '\0';
+    cat_log_entry_t le[200];
+    const size_t before = cat_log_read(0, le, 200);
+    const uint32_t mark = before ? le[before - 1].seq : 0;
+    cat_tx((void *)1, "FA;FB;");
+    cat_tx((void *)1, "TX1;");
+    handle_cat_packet("FA014074000;");   // not logged by handle_cat_packet (rx_cb logs), so log it here
+    size_t n = cat_log_read(mark, le, 200);
+    CHECK(n == 3 && strcmp(le[0].text, "FA;") == 0 && le[0].kind == CAT_LOG_CMD && le[0].dir == 'T' &&
+          strcmp(le[1].text, "FB;") == 0 && strcmp(le[2].text, "TX1;") == 0 && le[2].kind == CAT_LOG_BLOCKED,
+          "log entries %zu", n);
+    CHECK(strstr(g_sent, "TX1") == NULL, "blocked command reached the port: %s", g_sent);
+    for (int i = 0; i < 300; i++) cat_tx((void *)1, "FA;");
+    n = cat_log_read(0, le, 200);
+    CHECK(n == 160 && le[159].seq == le[0].seq + 159, "log ring keeps 160, got %zu", n);
+    n = cat_log_read(le[159].seq, le, 200);
+    CHECK(n == 0, "nothing newer");
+
     printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     return fails != 0;
 }

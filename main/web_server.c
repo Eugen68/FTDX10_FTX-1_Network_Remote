@@ -955,6 +955,50 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     return httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"Request rejected\"}", HTTPD_RESP_USE_STRLEN);
 }
 
+// GET /catlog?since=N: the CAT traffic newer than entry N, oldest first, at most CATLOG_MAX per answer.
+// {"seq":<last entry sent>,"now":<ms since boot>,"e":[[seq,ms,"T"|"R",kind,"text"],...]}
+#define CATLOG_MAX 64
+static esp_err_t catlog_handler(httpd_req_t *req)
+{
+    note_session(req);
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
+        return ESP_OK;
+    }
+    uint32_t since = 0;
+    char query[32], value[12];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+        httpd_query_key_value(query, "since", value, sizeof(value)) == ESP_OK) {
+        since = (uint32_t)strtoul(value, NULL, 10);
+    }
+    const size_t cap = 64 + CATLOG_MAX * (48 + 2 * CAT_LOG_TEXT_LEN);
+    cat_log_entry_t *entries = heap_caps_malloc(CATLOG_MAX * sizeof(cat_log_entry_t), MALLOC_CAP_8BIT);
+    char *json = heap_caps_malloc(cap, MALLOC_CAP_8BIT);
+    if (entries == NULL || json == NULL) {
+        free(entries);
+        free(json);
+        web_auth_set_common_headers(req);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+    }
+    const size_t n = cat_log_read(since, entries, CATLOG_MAX);
+    const uint32_t last = n ? entries[n - 1].seq : since;
+    int len = snprintf(json, cap, "{\"seq\":%lu,\"now\":%lu,\"e\":[", (unsigned long)last,
+                       (unsigned long)(esp_timer_get_time() / 1000));
+    for (size_t i = 0; i < n && len > 0 && (size_t)len < cap; i++) {
+        char text[2 * CAT_LOG_TEXT_LEN + 1];
+        json_escape(entries[i].text, text, sizeof(text));   // bytes echoed by the radio
+        len += snprintf(json + len, cap - len, "%s[%lu,%lu,\"%c\",%u,\"%s\"]", i ? "," : "",
+                        (unsigned long)entries[i].seq, (unsigned long)entries[i].ms,
+                        entries[i].dir == 'R' ? 'R' : 'T', (unsigned)entries[i].kind, text);
+    }
+    if (len > 0 && (size_t)len < cap) {
+        len += snprintf(json + len, cap - len, "]}");
+    }
+    const esp_err_t err = send_json(req, json, len, cap);
+    free(entries);
+    free(json);
+    return err;
+}
+
 static esp_err_t reboot_handler(httpd_req_t *req)
 {
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, true)) {
@@ -1016,6 +1060,7 @@ esp_err_t web_server_start(void)
         {.uri = "/cat",        .method = HTTP_GET,  .handler = cat_handler},
         {.uri = "/cat",        .method = HTTP_POST, .handler = cat_post_handler},
         {.uri = "/reboot",     .method = HTTP_POST, .handler = reboot_handler},
+        {.uri = "/catlog",     .method = HTTP_GET,  .handler = catlog_handler},
         {.uri = "/stream.pcm", .method = HTTP_GET,  .handler = pcm_handler},
         {.uri = "/stream.wav", .method = HTTP_GET,  .handler = wav_handler},
     };

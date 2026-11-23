@@ -241,6 +241,8 @@ static void diag_counts(uint8_t devices, uint8_t cp210x, uint8_t answered)
 }
 
 static void handle_cat_packet(const char *pkt);
+static void log_add(char dir, uint8_t kind, const char *text, size_t len);
+static bool is_poll_answer(const char *pkt);
 
 static bool rx_cb(const uint8_t *data, size_t len, void *arg)
 {
@@ -255,6 +257,7 @@ static bool rx_cb(const uint8_t *data, size_t len, void *arg)
         s_rx[s_rx_len++] = c;
         if (c == ';') {
             s_rx[s_rx_len] = '\0';
+            log_add('R', is_poll_answer(s_rx) ? CAT_LOG_POLL : CAT_LOG_ANSWER, s_rx, s_rx_len);
             memcpy(s_answer, s_rx, s_rx_len + 1);
             handle_cat_packet(s_rx);
             s_rx_len = 0;
@@ -445,14 +448,84 @@ static bool cat_cmds_allowed(const char *s, size_t max_cmds)
     return start == total && count > 0 && count <= max_cmds;
 }
 
+// ---- CAT traffic log (shown in the page's CAT LOG panel through GET /catlog) ---------------------------
+#define CAT_LOG_LEN 160
+static cat_log_entry_t s_log[CAT_LOG_LEN];
+static uint32_t s_log_seq;
+static portMUX_TYPE s_log_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void log_add(char dir, uint8_t kind, const char *text, size_t len)
+{
+    cat_log_entry_t e = {.dir = dir, .kind = kind, .ms = (uint32_t)(esp_timer_get_time() / 1000)};
+    if (len > CAT_LOG_TEXT_LEN - 1) {
+        len = CAT_LOG_TEXT_LEN - 1;
+    }
+    for (size_t i = 0; i < len; i++) {
+        const char c = text[i];
+        e.text[i] = (c >= 0x20 && c < 0x7f) ? c : '.';
+    }
+    taskENTER_CRITICAL(&s_log_mux);
+    e.seq = ++s_log_seq;
+    s_log[e.seq % CAT_LOG_LEN] = e;
+    taskEXIT_CRITICAL(&s_log_mux);
+}
+
+/** Log every command of a string of commands ("FA;FB;MD0;") as its own entry */
+static void log_cmds(char dir, uint8_t kind, const char *cmds)
+{
+    size_t start = 0;
+    for (size_t i = 0; cmds[i] != '\0'; i++) {
+        if (cmds[i] == ';') {
+            log_add(dir, kind, cmds + start, i - start + 1);
+            start = i + 1;
+        }
+    }
+    if (cmds[start] != '\0') {
+        log_add(dir, kind, cmds + start, strlen(cmds + start));
+    }
+}
+
+/** A periodic status answer: logged as a poll so the page can hide it */
+static bool is_poll_answer(const char *pkt)
+{
+    return strncmp(pkt, "RM", 2) == 0 || strncmp(pkt, "RI", 2) == 0 || strncmp(pkt, "BY", 2) == 0 ||
+           strncmp(pkt, "TX", 2) == 0;
+}
+
+size_t cat_log_read(uint32_t since_seq, cat_log_entry_t *out, size_t max)
+{
+    size_t n = 0;
+    taskENTER_CRITICAL(&s_log_mux);
+    const uint32_t last = s_log_seq;
+    uint32_t first = (last > CAT_LOG_LEN) ? last - CAT_LOG_LEN + 1 : 1;
+    if (since_seq + 1 > first) {
+        first = since_seq + 1;
+    }
+    for (uint32_t q = first; q <= last && n < max; q++) {
+        out[n++] = s_log[q % CAT_LOG_LEN];
+    }
+    taskEXIT_CRITICAL(&s_log_mux);
+    return n;
+}
+
 /** The only place that writes to the radio */
-static esp_err_t cat_tx(cdc_acm_dev_hdl_t dev, const char *cmds)
+static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_kind_t kind)
 {
     if (!cat_cmds_allowed(cmds, CAT_TX_MAX_CMDS)) {
         ESP_LOGE(TAG, "Blocked a CAT command that is not on the allow-list");
+        if (cmds != NULL) {
+            log_cmds('T', CAT_LOG_BLOCKED, cmds);
+        }
         return ESP_ERR_INVALID_ARG;
     }
-    return cdc_acm_host_data_tx_blocking(dev, (const uint8_t *)cmds, strlen(cmds), TX_TIMEOUT_MS);
+    const esp_err_t err = cdc_acm_host_data_tx_blocking(dev, (const uint8_t *)cmds, strlen(cmds), TX_TIMEOUT_MS);
+    log_cmds('T', err == ESP_OK ? kind : CAT_LOG_ERROR, cmds);
+    return err;
+}
+
+static esp_err_t cat_tx(cdc_acm_dev_hdl_t dev, const char *cmds)
+{
+    return cat_tx_kind(dev, cmds, CAT_LOG_CMD);
 }
 
 /** Send a command and wait for the answer that starts with the same two letters */
@@ -864,7 +937,7 @@ static bool data_usb_active(void)
 static void send_poll(cdc_acm_dev_hdl_t dev, const char *cmds)
 {
     if (cmds != NULL) {
-        cat_tx(dev, cmds);
+        cat_tx_kind(dev, cmds, CAT_LOG_POLL);
     }
 }
 
