@@ -55,3 +55,7 @@ CONFIG_UAC_NUM_PACKETS_PER_URB=8
 # UAC driver buffer between the USB host and the stream's reader: 32 KB = about 170 ms of 48 kHz stereo
 # (it is allocated in internal RAM by the driver, so not larger)
 CONFIG_AUDIO_RING_BUFFER_SIZE=32768
+# Configuration descriptors up to 2 KB: the FTDX10's USB audio codec has one larger than the default 256
+# bytes ("Configuration descriptor larger than control transfer max length", its hub port then disabled).
+# Each attached device gets a control buffer of this size (5 devices: 10 KB).
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048
