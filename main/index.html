@@ -623,6 +623,8 @@
   .acc-info { font-size: .58rem; color: #fbbf24; font-weight: bold; white-space: nowrap; }
   .scope-container.acc-on .scope-spans [data-span], .scope-container.acc-on .scope-span-label { display: none; }
   .scope-container.acc-on .scope-canvas { cursor: crosshair; height: 210px; }
+  #latencySel { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .58rem; padding: 0 .2rem; margin-right: .4rem; }
+  .latency-text { color: #fbbf24; margin-right: .4rem; }
   #streamRateSel { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .58rem; padding: 0 .2rem; margin-right: .4rem; }
   .catlog-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; padding: .4rem .6rem; font-size: .7rem; color: #94a3b8; }
   .catlog-legend span { margin-right: .5rem; }
@@ -1258,6 +1260,14 @@
             <option value="48000">48 kHz (full)</option>
           </select>
         </label>
+        <label title="Delay between the radio and your speakers. Low: less delay, short gaps if the link stutters. Normal: the default. Safe: for a shaky link (mobile data, VPN)">LATENCY
+          <select id="latencySel">
+            <option value="low">Low</option>
+            <option value="normal" selected>Normal</option>
+            <option value="safe">Safe</option>
+          </select>
+        </label>
+        <span id="latencyText" class="latency-text" title="Audio delay now: what is scheduled ahead in the browser plus the sound card's own delay"></span>
         <span id="scopeRateText">48.0 kHz AUDIO</span>
       </div>
 
@@ -1550,14 +1560,22 @@ const PREBUFFER_SEC = 0.25;
 // each underrun (a Wi-Fi stall), and shrinks back slowly while the network is steady. Audio that
 // arrives in a burst after a stall is played a little faster (CATCHUP_RATE) to get back to the target,
 // and whatever is far beyond it is dropped instead of being played late.
-// 0.5 s from the start: on the bench Wi-Fi a 0.25 s start still gave one or two gaps before it grew
-const TARGET_MIN = 0.5, TARGET_MAX = 1.2, TARGET_STEP = 0.15;
+// The range comes from the LATENCY selector (see LATENCY_PROFILES): Normal starts at 0.5 s (on the bench
+// Wi-Fi a 0.25 s start still gave one or two gaps before it grew), Low trades gaps for less delay (voice,
+// a steady link), Safe gives a shaky link (mobile data over a VPN) up to 2 s.
+const LATENCY_PROFILES = {
+  low:    { min: 0.25, max: 0.6, step: 0.10, drop: 0.25, enter: 0.12 },
+  normal: { min: 0.50, max: 1.2, step: 0.15, drop: 0.35, enter: 0.20 },
+  safe:   { min: 1.00, max: 2.0, step: 0.25, drop: 0.60, enter: 0.30 },
+};
+let LAT = LATENCY_PROFILES.normal;
 const TARGET_DECAY_MS = 30000, TARGET_DECAY = 0.05;
+let playLead = null;       // seconds of audio scheduled ahead of now (for the delay readout), null = idle
 // Catch-up: 2 % faster, entered only well above the target and left only back at it. A single threshold
 // made the rate flip on every other block with the normal arrival jitter, which was heard as a warble.
 const CATCHUP_RATE = 1.02;
-const CATCHUP_ENTER = 0.20, CATCHUP_EXIT = 0.02;   // seconds above the target
-const DROP_ABOVE = 0.35;   // seconds beyond the target: later than this, a block is skipped
+const CATCHUP_EXIT = 0.02;   // seconds above the target where catching up stops (it starts at LAT.enter)
+// LAT.drop: seconds beyond the target; later than this, a block is skipped
 
 let abort = null;
 let ctx = null;
@@ -2350,6 +2368,22 @@ document.addEventListener('visibilitychange', () => {
 // Keep the lock-screen title on the current frequency
 setInterval(() => { if ((abort || bgMode) && BG_AUDIO) mediaSessionUpdate(true); }, 5000);
 
+// Latency profile (see LATENCY_PROFILES), remembered in this browser
+const latencySel = document.getElementById('latencySel');
+try { const v = localStorage.getItem('ftx1.latency'); if (v && LATENCY_PROFILES[v]) latencySel.value = v; } catch (e) {}
+LAT = LATENCY_PROFILES[latencySel.value] || LATENCY_PROFILES.normal;
+latencySel.addEventListener('change', () => {
+  LAT = LATENCY_PROFILES[latencySel.value] || LATENCY_PROFILES.normal;
+  try { localStorage.setItem('ftx1.latency', latencySel.value); } catch (e) {}
+  if (abort) { stop(); start(); }   // start over with the new delay right away (a short gap)
+});
+setInterval(() => {
+  const el = document.getElementById('latencyText');
+  if (!ctx || !abort || playLead === null) { el.textContent = ''; return; }
+  const out = (ctx.outputLatency || 0) + (ctx.baseLatency || 0);
+  el.textContent = 'delay ' + Math.max(0, playLead + out).toFixed(2) + ' s';
+}, 500);
+
 // Stream rate asked from the device (it low-pass filters and decimates the radio's 48 kHz)
 const STREAM_RATE_KEY = 'ftx1.streamRate';
 const streamRateSel = document.getElementById('streamRateSel');
@@ -2431,11 +2465,11 @@ async function start() {
     const reader = res.body.getReader();
 
     // Diagnostics (console: audioDiag): tells a server/network stall (maxReadMs) from a browser stall (maxProcMs)
-    const diag = window.audioDiag = { underruns: 0, maxReadMs: 0, maxProcMs: 0, slowReads: 0, chunks: 0, dropped: 0, target: TARGET_MIN, catchups: 0, hz: 0, playPpm: 0 };
+    const diag = window.audioDiag = { underruns: 0, maxReadMs: 0, maxProcMs: 0, slowReads: 0, chunks: 0, dropped: 0, target: LAT.min, catchups: 0, hz: 0, playPpm: 0 };
     // Measured stream rate (frames received per second of wall time, from the first frame): if it is
     // below the nominal rate, samples are lost before the browser and the playout delay drains slowly.
     let rxFrames = 0, rxT0 = 0, rxCtx0 = 0;
-    let target = TARGET_MIN;
+    let target = LAT.min;
     let lastUnderrun = performance.now();
     let catchingUp = false;
     let diagLog = performance.now();
@@ -2480,26 +2514,27 @@ async function start() {
       });
 
       const now = ctx.currentTime;
+      target = Math.min(LAT.max, Math.max(LAT.min, target));   // the LATENCY selector may have changed
       if (nextTime < now) {
         // Underrun: the network stalled longer than the cushion. Grow the cushion and restart from it.
         diag.underruns++;
-        target = Math.min(TARGET_MAX, target + TARGET_STEP);
+        target = Math.min(LAT.max, target + LAT.step);
         lastUnderrun = tGot;
         nextTime = now + target;
-      } else if (tGot - lastUnderrun > TARGET_DECAY_MS && target > TARGET_MIN) {
-        target = Math.max(TARGET_MIN, target - TARGET_DECAY);   // steady network: shorten the delay again
+      } else if (tGot - lastUnderrun > TARGET_DECAY_MS && target > LAT.min) {
+        target = Math.max(LAT.min, target - TARGET_DECAY);   // steady network: shorten the delay again
         lastUnderrun = tGot;
       }
       diag.target = target;
 
       const ahead = nextTime - now;
-      if (ahead > target + DROP_ABOVE) {
+      if (ahead > target + LAT.drop) {
         // A burst after a long stall: far too late to play. Skip this block (the decoders above have it).
         diag.dropped++;
         continue;
       }
       // Well behind the target after a burst: play a little faster until back at it (with hysteresis)
-      if (!catchingUp && ahead > target + CATCHUP_ENTER) { catchingUp = true; diag.catchups++; }
+      if (!catchingUp && ahead > target + LAT.enter) { catchingUp = true; diag.catchups++; }
       else if (catchingUp && ahead <= target + CATCHUP_EXIT) catchingUp = false;
       const playRate = catchingUp ? CATCHUP_RATE : 1;
 
@@ -2511,6 +2546,7 @@ async function start() {
       src.connect(mix);
       src.start(nextTime);
       nextTime += d.frames / rate / playRate;
+      playLead = nextTime - ctx.currentTime;
 
       const procMs = performance.now() - tGot;
       if (procMs > diag.maxProcMs) diag.maxProcMs = procMs;
@@ -2549,6 +2585,7 @@ function stop() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (abort) { abort.abort(); abort = null; }
   if (ctx) { ctx.close(); ctx = null; scopeAnalysers = [null, null]; speakerGains = [null, null]; }
+  playLead = null;
   mediaSessionUpdate(false);
   btnPlay.textContent = 'POWER / PLAY';
   btnPlay.classList.remove('running');
