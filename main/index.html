@@ -11,6 +11,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FTX-1 Companion</title>
 <style>
+  /* Phones: do not let the browser enlarge text by itself ("font boosting" in Chrome on Android) */
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,500;0,700;1,500&family=JetBrains+Mono:wght@700;800&family=Rajdhani:wght@600;700&family=Share+Tech+Mono&display=swap');
 
   :root {
@@ -615,6 +617,14 @@
     gap: .25rem;
   }
   #streamRateSel { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .58rem; padding: 0 .2rem; margin-right: .4rem; }
+  .catlog-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; padding: .4rem .6rem; font-size: .7rem; color: #94a3b8; }
+  .catlog-legend span { margin-right: .5rem; }
+  #catLogInfo { margin-left: auto; }
+  .catlog-list { height: 220px; overflow-y: auto; margin: 0 .6rem .6rem; padding: .3rem .5rem; background: #020617;
+                 border: 1px solid #1e293b; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .72rem; line-height: 1.35; }
+  .catlog-row { white-space: pre; }
+  .catlog-row .t { color: #64748b; }
+  .k0 { color: #38bdf8; } .k1 { color: #64748b; } .k2 { color: #34d399; } .k3 { color: #f87171; font-weight: bold; } .k4 { color: #fb923c; }
   .ft8-dtcorr-label { font-size: .6rem; color: #94a3b8; margin-right: .3rem; white-space: nowrap; }
   .ft8-btn {
     font-size: .6rem;
@@ -794,6 +804,7 @@
   }
   .direct-input {
     flex: 1;
+    min-width: 0;          /* may shrink, so the SET button stays on screen */
     background: #0f172a;
     border: 1px solid #334155;
     border-radius: 3px;
@@ -954,10 +965,40 @@
     .screen-meters, .vfo-display-grid, .sq-grid, .scope-pair {
       grid-template-columns: 1fr;
     }
+    /* Phone layout: everything fits the screen width, nothing scrolls sideways */
+    .rig-chassis { padding: .4rem; }
+    .rig-header { flex-wrap: wrap; gap: .4rem; }
+    .brand-logo { flex: 1 1 100%; }
+    .header-controls { flex: 1 1 100%; flex-wrap: wrap; justify-content: space-between; gap: .4rem; }
+    .led-group { flex: 1 1 100%; justify-content: flex-start; }
+    .header-controls button { flex: 1 1 0; min-height: 2.4rem; padding: .3rem .4rem; }
+    .tft-screen, .control-card { min-width: 0; }
+    .vfo-ops-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: .3rem; }
+    .vfo-op-btn { white-space: nowrap; font-size: .68rem; padding: .45rem .2rem; min-height: 2.4rem; }
+    .vfo-op-btn .vfo-op-icon { display: none; }
+    .vfo-font-select-wrap { grid-column: 1 / -1; }
+    .vfd-bezel .freq-readout, .vfd-bezel[class*="font-"] .freq-readout { font-size: clamp(1.3rem, 8.5vw, 1.85rem); letter-spacing: .5px; }
+    .scope-header { flex-wrap: wrap; row-gap: .25rem; }
+    .scope-spans { flex-wrap: wrap; row-gap: .25rem; }
+    .scope-span-btn { min-height: 1.9rem; min-width: 2.2rem; }
+    .scope-vol { width: 90px; height: 18px; }
+    .scope-rate-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .3rem; }
+    .ft8-header { flex-wrap: wrap; row-gap: .3rem; }
+    .ft8-ctrls { flex-wrap: wrap; }
+    .ft8-list-container { overflow-x: auto; }
+    .rig-btn { min-height: 2rem; }
+    .catlog-bar { gap: .4rem; }
+    .catlog-legend { display: none; }
+    .direct-input-row .rig-btn { flex: 0 0 auto; padding-left: .8rem; padding-right: .8rem; }
+    .sq-summary { flex-wrap: wrap; gap: .2rem; }
   }
 </style>
 </head>
 <body>
+
+<!-- Phones: the audio is played through this element so the browser treats the page as media playback
+     and keeps it playing in the background and with the screen off (see BG_AUDIO in the script) -->
+<audio id="bgAudio" playsinline hidden></audio>
 
 <div class="rig-chassis">
   <!-- Header -->
@@ -1130,13 +1171,13 @@
       <!-- VFO Operations Bar (Swap / Copy / Font Selector) -->
       <div class="vfo-ops-bar">
         <button type="button" class="vfo-op-btn" id="btnSwapVfo" title="Swap frequency and mode between MAIN and SUB (SV;)">
-          <span class="vfo-op-icon">⇄</span> SWAP (A ⇄ B)
+          <span class="vfo-op-icon">&#8596;</span> SWAP (A &#8596; B)
         </button>
         <button type="button" class="vfo-op-btn" id="btnCopyAtoB" title="Copy MAIN to SUB (AB;)">
-          <span class="vfo-op-icon">➔</span> A ➔ B (A=B)
+          <span class="vfo-op-icon">&#8594;</span> A &#8594; B (A=B)
         </button>
         <button type="button" class="vfo-op-btn" id="btnCopyBtoA" title="Copy SUB to MAIN (BA;)">
-          <span class="vfo-op-icon">🠔</span> A 🠔 B (B=A)
+          <span class="vfo-op-icon">&#8592;</span> A &#8592; B (B=A)
         </button>
         <div class="vfo-font-select-wrap" title="VFO frequency display font (saved in this browser)">
           <label for="vfoFontSelect" class="vfo-font-label">FONT</label>
@@ -1159,7 +1200,7 @@
             <div class="scope-spans" data-scope="Main">
               <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecMain" title="Save the last 30 s of MAIN as WAV">REC</button>
               <button type="button" class="scope-span-btn scope-mute-btn" id="btnMuteMain" aria-pressed="false" title="Mute MAIN audio (scope and FT8 keep running)">MUTE</button>
-              <input type="range" class="scope-vol" id="volMain" min="0" max="200" step="5" value="100" title="MAIN volume on this PC (the radio, the scope and FT8 are not affected)" aria-label="MAIN volume on this PC">
+              <input type="range" class="scope-vol" id="volMain" min="0" max="400" step="5" value="100" title="MAIN volume on this PC (the radio, the scope and FT8 are not affected)" aria-label="MAIN volume on this PC">
               <span class="scope-span-label">SPAN:</span>
               <button type="button" class="scope-span-btn" data-span="1000" title="Narrow span for CW">1k</button>
               <button type="button" class="scope-span-btn active" data-span="3500">3.5k</button>
@@ -1179,7 +1220,7 @@
             <div class="scope-spans" data-scope="Sub">
               <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecSub" title="Save the last 30 s of SUB as WAV">REC</button>
               <button type="button" class="scope-span-btn scope-mute-btn" id="btnMuteSub" aria-pressed="false" title="Mute SUB audio (scope and FT8 keep running)">MUTE</button>
-              <input type="range" class="scope-vol" id="volSub" min="0" max="200" step="5" value="100" title="SUB volume on this PC (the radio, the scope and FT8 are not affected)" aria-label="SUB volume on this PC">
+              <input type="range" class="scope-vol" id="volSub" min="0" max="400" step="5" value="100" title="SUB volume on this PC (the radio, the scope and FT8 are not affected)" aria-label="SUB volume on this PC">
               <span class="scope-span-label">SPAN:</span>
               <button type="button" class="scope-span-btn" data-span="1000" title="Narrow span for CW">1k</button>
               <button type="button" class="scope-span-btn active" data-span="3500">3.5k</button>
@@ -1458,6 +1499,22 @@
       <label><input type="checkbox" id="sqBusyBypass"> Suspend the DSP squelch while CAT reports BUSY (rig squelch open) (MAIN/SUB)</label>
     </div>
   </details>
+
+  <!-- CAT traffic log (Collapsible): what the device sends to the radio and what the radio answers -->
+  <details class="sq-section" id="catLogSection">
+    <summary class="card-title sq-summary">
+      <span>CAT LOG</span>
+      <span class="sq-summary-hint">&#9660; commands sent to the radio and its answers</span>
+    </summary>
+    <div class="catlog-bar">
+      <label><input type="checkbox" id="catLogPolls"> show periodic polls (S meter, BUSY, 5 s sync)</label>
+      <label><input type="checkbox" id="catLogPause"> pause</label>
+      <button type="button" class="ft8-btn" id="catLogClear">CLEAR</button>
+      <span class="catlog-legend"><span class="k0">&#8594; sent</span> <span class="k2">&#8592; received</span> <span class="k3">blocked (not sent)</span> <span class="k4">write error</span></span>
+      <span id="catLogInfo"></span>
+    </div>
+    <div class="catlog-list" id="catLogList"></div>
+  </details>
 </div>
 
 <script>
@@ -1492,7 +1549,7 @@ let ctx = null;
 let scopeAnalysers = [null, null]; // [MAIN(left), SUB(right)]
 let speakerGains = [null, null];   // per-channel speaker gain nodes (mute switches)
 const speakerMuted = [false, false];
-const speakerVolume = [1, 1];        // PC playback volume per channel, 0 - 2 (the sliders)
+const speakerVolume = [1, 1];        // PC playback volume per channel, 0 - 4 (the sliders; a limiter stops clipping)
 const SPEAKER_VOL_KEYS = ['ftx1.volMain', 'ftx1.volSub'];
 
 function applySpeakerMute(i) {
@@ -1501,7 +1558,7 @@ function applySpeakerMute(i) {
 
 ['Main', 'Sub'].forEach((name, i) => {
   const slider = document.getElementById('vol' + name);
-  try { const v = parseInt(localStorage.getItem(SPEAKER_VOL_KEYS[i]), 10); if (v >= 0 && v <= 200) slider.value = v; } catch (e) {}
+  try { const v = parseInt(localStorage.getItem(SPEAKER_VOL_KEYS[i]), 10); if (v >= 0 && v <= 400) slider.value = v; } catch (e) {}
   const set = () => {
     speakerVolume[i] = slider.value / 100;
     slider.title = (i ? 'SUB' : 'MAIN') + ' volume on this PC: ' + slider.value + ' %';
@@ -1942,6 +1999,90 @@ requestAnimationFrame(renderScope);
 let isUserStopped = true;
 let reconnectTimer = null;
 
+// ---- Background playback on phones (screen off, other app in front) ----
+// Phones stop page audio (and the media elements fed from it) when the page goes to the background. What
+// they keep playing is an ordinary audio stream from a server, like internet radio. So on a phone, when the
+// page is hidden, the page's own stream is closed and the device's /stream.wav is played by an <audio>
+// element instead; when the page is visible again it switches back. The scope and FT8 pause meanwhile.
+const BG_AUDIO = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+                 (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));   // iPadOS
+const bgAudio = document.getElementById('bgAudio');
+let bgMode = false;          // the <audio> element is playing /stream.wav instead of the page
+let bgRetryTimer = null;
+
+function mediaSessionUpdate(playing) {
+  if (!('mediaSession' in navigator)) return;
+  try {
+    const rig = rigProfileKey ? rigProfileKey.split('|')[0] : 'Radio';
+    const mode = (typeof modeBadgeMain !== 'undefined' && modeBadgeMain) ? modeBadgeMain.textContent : '';
+    const mhz = curFreqMain ? (curFreqMain / 1e6).toFixed(3) + ' MHz' : '';
+    navigator.mediaSession.metadata = new MediaMetadata({ title: [mhz, mode].filter(Boolean).join(' ') || rig,
+                                                           artist: rig + ' Companion' });
+    navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+  } catch (e) {}
+}
+
+function bgPlay() {
+  if (!bgMode) return;
+  // A new URL each time: the device serves one stream at a time and must see the old one closed first
+  bgAudio.src = '/stream.wav?rate=' + encodeURIComponent(streamRateSel.value) + '&t=' + Date.now();
+  bgAudio.play().catch((e) => console.warn('Background stream did not start:', e));
+  mediaSessionUpdate(true);
+}
+bgAudio.addEventListener('error', () => {
+  // Usually "another client is streaming" for a moment after the switch: try again shortly
+  if (!bgMode || bgRetryTimer) return;
+  bgRetryTimer = setTimeout(() => { bgRetryTimer = null; bgPlay(); }, 800);
+});
+bgAudio.addEventListener('ended', () => { if (bgMode) bgPlay(); });
+
+function enterBackground() {
+  if (!BG_AUDIO || bgMode || !abort) return;   // only while the page is playing
+  stop();                                       // closes the page's stream and its AudioContext
+  bgMode = true;
+  btnPlay.textContent = 'PWR OFF / STOP';       // still on air, from the <audio> element
+  btnPlay.classList.add('running');
+  setTimeout(bgPlay, 300);                      // let the device notice the closed stream
+}
+
+function leaveBackground() {
+  if (!bgMode) return;
+  bgMode = false;
+  if (bgRetryTimer) { clearTimeout(bgRetryTimer); bgRetryTimer = null; }
+  bgAudio.pause();
+  bgAudio.removeAttribute('src');
+  bgAudio.load();                               // closes the HTTP stream
+  setTimeout(start, 300);                       // start() retries by itself if the device is still busy
+}
+
+if ('mediaSession' in navigator) {
+  try {
+    navigator.mediaSession.setActionHandler('play', () => {
+      if (document.visibilityState === 'hidden' && BG_AUDIO) { bgMode = true; bgPlay(); }
+      else if (!abort) start();
+    });
+    const pause = () => {
+      if (bgMode) {
+        bgMode = false;
+        bgAudio.pause(); bgAudio.removeAttribute('src'); bgAudio.load();
+        btnPlay.textContent = 'POWER / PLAY'; btnPlay.classList.remove('running');
+        mediaSessionUpdate(false);
+      } else if (abort) stop();
+    };
+    navigator.mediaSession.setActionHandler('pause', pause);
+    navigator.mediaSession.setActionHandler('stop', pause);
+  } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') enterBackground();
+  else {
+    leaveBackground();
+    if (abort && ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+  }
+});
+// Keep the lock-screen title on the current frequency
+setInterval(() => { if ((abort || bgMode) && BG_AUDIO) mediaSessionUpdate(true); }, 5000);
+
 // Stream rate asked from the device (it low-pass filters and decimates the radio's 48 kHz)
 const STREAM_RATE_KEY = 'ftx1.streamRate';
 const streamRateSel = document.getElementById('streamRateSel');
@@ -1987,7 +2128,17 @@ async function start() {
     const splitter = ctx.createChannelSplitter(2);
     mix.connect(splitter);
     const merger = ctx.createChannelMerger(2);
-    merger.connect(ctx.destination);
+    // Limiter before the speakers: the volume sliders go up to 400 %, and loud peaks are held just below
+    // full scale instead of clipping. Below -3 dBFS it does nothing.
+    const limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -3;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.002;
+    limiter.release.value = 0.15;
+    merger.connect(limiter);
+    limiter.connect(ctx.destination);
+    mediaSessionUpdate(true);
     speakerGains = [0, 1].map((i) => {
       const g = ctx.createGain();
       splitter.connect(g, ch >= 2 ? i : 0);
@@ -2131,6 +2282,7 @@ function stop() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (abort) { abort.abort(); abort = null; }
   if (ctx) { ctx.close(); ctx = null; scopeAnalysers = [null, null]; speakerGains = [null, null]; }
+  mediaSessionUpdate(false);
   btnPlay.textContent = 'POWER / PLAY';
   btnPlay.classList.remove('running');
   ledRx.classList.remove('on-green');
@@ -2183,6 +2335,7 @@ if (btnRigOff) {
 const SM_S9_RAW = 120;
 const SM_S9_FRAC = 0.6;
 const SM_ARC_DEG = 28.7;
+const SM_TAU_UP = 0.1, SM_TAU_DOWN = 0.45;   // needle time constants, seconds
 const SM_CX = 150, SM_CY = 286, SM_R = 250;   // pivot sits far below the face, like a real moving-coil meter
 const SM_NEEDLE = SM_R + 6;
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -2335,23 +2488,29 @@ function makeSMeter(host, title) {
     reading.textContent = raw === null ? '--' : smText(raw);
     reading.setAttribute('fill', INK);
   };
-  m.draw = () => {
-    m.cur += (m.target - m.cur) * (m.target > m.cur ? 0.4 : 0.08);
+  let lastT = 0;
+  m.draw = (t) => {
+    // Time-based ballistics (independent of the screen's frame rate): rises in about 0.1 s, falls in about
+    // 0.45 s. The device already holds the recent peak between the page's reads.
+    const dt = lastT ? Math.min(0.1, (t - lastT) / 1000) : 0.016;
+    lastT = t;
+    const tau = m.target > m.cur ? SM_TAU_UP : SM_TAU_DOWN;
+    m.cur += (m.target - m.cur) * (1 - Math.exp(-dt / tau));
     if (Math.abs(m.target - m.cur) < 0.0005) m.cur = m.target;
     if (m.cur !== m.shown) {
       needle.setAttribute('transform', 'rotate(' + n2((m.cur * 2 - 1) * SM_ARC_DEG) + ' ' + SM_CX + ' ' + SM_CY + ')');
       m.shown = m.cur;
     }
   };
-  m.draw();
+  m.draw(performance.now());
   return m;
 }
 
 const smHost = document.getElementById('smeters');
 const smMeters = [makeSMeter(smHost, 'MAIN'), makeSMeter(smHost, 'SUB')];
 
-(function smAnimate() {
-  smMeters.forEach((m) => m.draw());
+(function smAnimate(t) {
+  smMeters.forEach((m) => m.draw(t || performance.now()));
   requestAnimationFrame(smAnimate);
 })();
 
@@ -3196,6 +3355,74 @@ freqMainInput.addEventListener('focus', () => { isUserEditingMain = true; });
 freqMainInput.addEventListener('blur', () => { isUserEditingMain = false; });
 freqSubInput.addEventListener('focus', () => { isUserEditingSub = true; });
 freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
+
+// ---- CAT LOG panel: polls GET /catlog once a second while the panel is open ----
+(function catLog() {
+  const section = document.getElementById('catLogSection');
+  const list = document.getElementById('catLogList');
+  const showPolls = document.getElementById('catLogPolls');
+  const pause = document.getElementById('catLogPause');
+  const info = document.getElementById('catLogInfo');
+  const KIND = ['cmd', 'poll', 'answer', 'BLOCKED', 'WRITE ERROR'];
+  const MAX_ROWS = 600;
+  let seq = 0, busy = false, firstLoad = true;
+  try { showPolls.checked = localStorage.getItem('ftx1.catLogPolls') === '1'; } catch (e) {}
+
+  function fmt(ms) {
+    const s = ms / 1000;
+    const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, sec = (s % 60).toFixed(3).padStart(6, '0');
+    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + sec;
+  }
+  function applyFilter() {
+    for (const row of list.children) row.style.display = (!showPolls.checked && row.dataset.k === '1') ? 'none' : '';
+  }
+  function add(e) {
+    const [s, ms, dir, kind, text] = e;
+    const row = document.createElement('div');
+    row.className = 'catlog-row k' + kind;
+    row.dataset.k = String(kind);
+    const t = document.createElement('span');
+    t.className = 't';
+    t.textContent = fmt(ms) + '  ';
+    row.appendChild(t);
+    row.appendChild(document.createTextNode((dir === 'R' ? '\u2190 ' : '\u2192 ') + text +
+      (kind === 3 || kind === 4 ? '   [' + KIND[kind] + ']' : '')));
+    if (!showPolls.checked && kind === 1) row.style.display = 'none';
+    list.appendChild(row);
+  }
+  async function poll() {
+    if (busy || !section.open || pause.checked) return;
+    busy = true;
+    try {
+      const nearBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 20;
+      for (let i = 0; i < 4; i++) {   // catch up after a pause, 64 entries per answer
+        const res = await fetch('/catlog?since=' + seq, { cache: 'no-store' });
+        if (!res.ok) break;
+        const d = await res.json();
+        if (d.seq < seq) { list.textContent = ''; }          // the device rebooted: start over
+        d.e.forEach(add);
+        seq = d.seq;
+        if (d.e.length < 64) break;
+      }
+      while (list.children.length > MAX_ROWS) list.removeChild(list.firstChild);
+      if (nearBottom || firstLoad) list.scrollTop = list.scrollHeight;
+      firstLoad = false;
+      info.textContent = list.children.length + ' entries (time = device uptime)';
+    } catch (e) {
+      info.textContent = 'log unavailable';
+    } finally {
+      busy = false;
+    }
+  }
+  showPolls.addEventListener('change', () => {
+    try { localStorage.setItem('ftx1.catLogPolls', showPolls.checked ? '1' : '0'); } catch (e) {}
+    applyFilter();
+    list.scrollTop = list.scrollHeight;
+  });
+  document.getElementById('catLogClear').addEventListener('click', () => { list.textContent = ''; });
+  section.addEventListener('toggle', () => { if (section.open) poll(); });
+  setInterval(poll, 1000);
+})();
 
 // ---- Radio profile (from GET /cat): FTX-1 (two receivers) or FTDX10 (one receiver, VFO-A / VFO-B) ----
 // Applied once per change of the reported radio. Nothing here is a safety check: the firmware enforces

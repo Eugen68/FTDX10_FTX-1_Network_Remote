@@ -23,6 +23,7 @@ extern "C" {
  *  - GET /stream.pcm  Raw little-endian PCM (format in X-* response headers). ?rate=24000 or ?rate=16000
  *                     streams at a lower rate (low-pass filtered), for a weak Wi-Fi link
  *  - GET /stream.wav  WAV container with open-ended length
+ *  - GET /catlog      The recent CAT traffic (?since=N), for the page's CAT LOG panel
  *
  * Only one stream client is served at a time.
  */

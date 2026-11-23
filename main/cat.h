@@ -68,6 +68,32 @@ typedef struct {
     char last_error[80];    /*!< Last scan problem, "" if none */
 } cat_state_t;
 
+/** @brief Kind of a CAT log entry */
+typedef enum {
+    CAT_LOG_CMD = 0,      /*!< A command sent on request (from the page, the menu item, the port search) */
+    CAT_LOG_POLL,         /*!< A periodic query or its answer (S meter, BUSY, the 5 s sync) */
+    CAT_LOG_ANSWER,       /*!< Anything else the radio sent (answers, auto information) */
+    CAT_LOG_BLOCKED,      /*!< A command the allow-list refused: it was NOT sent */
+    CAT_LOG_ERROR,        /*!< A command that could not be written to the port */
+} cat_log_kind_t;
+
+#define CAT_LOG_TEXT_LEN 24
+
+/** @brief One entry of the CAT traffic log */
+typedef struct {
+    uint32_t seq;                   /*!< Increases by one per entry, never 0 */
+    uint32_t ms;                    /*!< Time since boot, ms */
+    char dir;                       /*!< 'T' sent to the radio (or refused), 'R' received from it */
+    uint8_t kind;                   /*!< cat_log_kind_t */
+    char text[CAT_LOG_TEXT_LEN];    /*!< The command with its ';', printable ASCII only */
+} cat_log_entry_t;
+
+/**
+ * @brief Copy the log entries newer than since_seq, oldest first
+ * @return Number of entries copied (at most max). The log keeps the last 160 entries.
+ */
+size_t cat_log_read(uint32_t since_seq, cat_log_entry_t *out, size_t max);
+
 /**
  * @brief Start the CAT client. Requires usb_audio_init() (it installs the USB Host Library) first.
  *

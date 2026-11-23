@@ -52,6 +52,8 @@ The firmware recognises the radio from its answer to the CAT command `ID;` and l
 | BUSY / TX state | `RI0;` | `BY;` and the read form `TX;` |
 | S-meter | `RM0;` (MAIN and SUB) | `RM1;` |
 | Menu item written in DATA-USB | `EX010411` USB OUT LEVEL = 100 | `EX010413` DATA OUT LEVEL = 100 |
+| USB audio (measured) | UAC 1.0, 48 kHz / 44.1 kHz, 2 ch, 16 bit; L = MAIN, R = SUB | UAC 1.0, 18 formats from 8 to 48 kHz, 1 or 2 ch, 8 or 16 bit; 48 kHz 2 ch 16 bit is used |
+| USB descriptor | fits the default 256-byte control buffer | larger: needs `CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048` (set in `sdkconfig.defaults`) |
 
 Both radios connect the same way: one USB cable carries the two CP210x serial ports (the CAT one is found automatically) and the USB audio codec. The browser page adapts to the radio it reports: on the FTDX10 the SUB receiver controls, the SUB scope and the SUB FT8 decoder are hidden, and the 2 m / 70 cm band buttons and the C4FM modes are not shown.
 
@@ -396,6 +398,7 @@ All of them require Basic authentication (see "Security notes" below).
 | `/stream.pcm` | Raw PCM (little endian). The format is reported in the `X-Sample-Rate` / `X-Channels` / `X-Bytes-Per-Sample` headers |
 | `/stream.wav` | With a WAV header (indefinite length). For external players |
 | `POST /ota` | Firmware update (Basic authentication; see "OTA update" below) |
+| `http://…` (port 80) | Redirects every request to the same host over `https://` (so typing just the IP or `ftx-1c.local` works). Serves nothing else and asks for no login |
 
 Example with an external player (48 kHz / 16 bit / mono):
 
@@ -581,7 +584,7 @@ So that the radio cannot be put into transmit over the network, the CAT commands
 - Only one audio input device is used (a second and later ones are ignored).
 - Only UAC 1.0 devices are supported.
 - Browser playback has a delay of a few hundred milliseconds.
-- Smartphone browsers are not supported. The UI is designed for the browser of a PC / Mac.
+- Phones: the page has a one-column phone layout. On Android / iOS, when the page goes to the background (screen off, another app in front) it closes its own stream and plays `/stream.wav` through an `<audio>` element, which phones keep playing like internet radio; it switches back when the page is visible again. The scope and FT8 pause while it is in the background. Lock-screen controls through Media Session. Whether a given phone keeps it running is up to its power settings; Wi-Fi power saving with the screen off can add gaps.
 
 ## Troubleshooting
 
