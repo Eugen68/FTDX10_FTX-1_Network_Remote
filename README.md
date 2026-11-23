@@ -66,7 +66,7 @@ A radio that answers `ID;` with a model the firmware does not know gets a read-o
 | Item | Requirement |
 | --- | --- |
 | Board | ESP32-S3 (tested with the **ESP32-S3-DevKitC-1**; see "Recommended board" below) |
-| Flash | **4 MB or more** (two OTA slots use 3.4 MB; the default configuration assumes **16 MB**) |
+| Flash | **16 MB** for the partition table in [`partitions.csv`](partitions.csv) (two 4 MB OTA slots and a data partition). For a smaller flash, see [Changing the flash size](#changing-the-flash-size) |
 | PSRAM | Not required. Used when present (for example an **ESP32-S3-N16R8** board with 8 MB octal PSRAM): large buffers (TLS, Wi-Fi) then go to PSRAM and leave internal RAM free |
 | Network | A LAN with Wi-Fi (2.4 GHz) |
 
@@ -233,7 +233,7 @@ If your module is different, change the following.
    idf.py fullclean && idf.py build
    ```
 
-> The partition layout (ota_0 / ota_1, 1700 KB each) does not need changing for 4 MB or more.
+> The partition table is [`partitions.csv`](partitions.csv): two 4 MB app slots and an 8 MB data partition for a 16 MB flash. For an 8 MB flash, make both app slots 0x300000 (3 MB) and shrink or drop `storage`; for 4 MB, go back to two 0x1A9000 slots and drop `storage` (the app must stay below that size).
 
 ## First-time setup and flashing
 
@@ -539,7 +539,8 @@ The `X-Requested-With: ftx1` header is required as CSRF protection (without it t
 - Set the password with `4` in the serial menu (stored in NVS, at least 12 characters). Reading it with `read -rs` as above keeps it out of the command history. Keep `ota:` plus the password to 95 characters or fewer.
 - Authentication is HTTP Basic and is sent over HTTPS only. The comparison is constant-time, and a failure is delayed by 1 second.
 - The received image is validated by `esp_ota_end()` (magic, chip, checksum, SHA-256). A broken image is rejected with 400 and does not affect the running version.
-- There are two 1700K OTA slots (`ota_0` / `ota_1`, no factory app). The update is written to the other slot, then the device switches to it and restarts.
+- There are two 4 MB OTA slots (`ota_0` / `ota_1`, no factory app; see [`partitions.csv`](partitions.csv)). The update is written to the other slot, then the device switches to it and restarts.
+- OTA cannot change the partition table. Moving a board from the old table (two 1700 KB slots) to this one needs one write over the cable: `tools/scrie_firmware.bat` option 3 writes the bootloader, the table, otadata and the app and leaves NVS (0x9000) alone, so the Wi-Fi and passwords stay.
 - Rollback is enabled. A new version is marked "confirmed" once Wi-Fi is connected and the web server has started.
   A version that keeps failing to boot is restarted without being confirmed, and the bootloader goes back to the previous version.
 - A second `POST /ota` during an update returns 409.

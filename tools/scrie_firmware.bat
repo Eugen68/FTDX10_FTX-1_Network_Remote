@@ -70,10 +70,12 @@ rem --- Ce scriem -------------------------------------------------------------
 echo.
 echo  1 = Actualizare, PASTREAZA Wi-Fi-ul si parolele (recomandat)
 echo  2 = Placa noua / resetare completa (STERGE setarile, apoi meniul serial)
+echo  3 = Partitii noi (o singura data, la trecerea pe sloturile de 4 MB), PASTREAZA setarile
 set "MODE=1"
-set /p "MODE=Alege 1 sau 2 (Enter = 1): "
+set /p "MODE=Alege 1, 2 sau 3 (Enter = 1): "
 
 if "%MODE%"=="2" goto :full
+if "%MODE%"=="3" goto :parts
 
 if not exist "ftx1_companion_ota.bin" (
     echo [EROARE] Lipseste ftx1_companion_ota.bin in acest folder.
@@ -86,6 +88,18 @@ if not exist "ota_data_initial.bin" (
 echo.
 echo Scriu aplicatia pe %PORT% (setarile raman)...
 %PY% -m esptool --chip esp32s3 -p %PORT% -b 460800 write-flash 0xf000 ota_data_initial.bin 0x20000 ftx1_companion_ota.bin
+goto :result
+
+:parts
+for %%F in (bootloader.bin partition-table.bin ota_data_initial.bin ftx1_companion_ota.bin) do (
+    if not exist "%%F" (
+        echo [EROARE] Lipseste %%F in acest folder.
+        goto :end
+    )
+)
+echo.
+echo Scriu bootloader, tabela de partitii, otadata si aplicatia pe %PORT% (setarile din NVS raman)...
+%PY% -m esptool --chip esp32s3 -p %PORT% -b 460800 write-flash 0x0 bootloader.bin 0x8000 partition-table.bin 0xf000 ota_data_initial.bin 0x20000 ftx1_companion_ota.bin
 goto :result
 
 :full
