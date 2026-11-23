@@ -1285,7 +1285,10 @@ void cat_get_state(cat_state_t *state)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *state = s_state;
-    state->tx_radio = s_state.tx;
+    const int64_t now = esp_timer_get_time();
+    state->tx_radio_known = s_state.connected && !s_disconnected && s_last_tx_status_us > 0 &&
+                            now - s_last_tx_status_us <= RADIO_STATUS_MAX_AGE_US;
+    state->tx_radio = state->tx_radio_known && s_state.tx;
     if (!s_state.connected || s_disconnected || s_tx_vfo_status_us == 0 ||
         esp_timer_get_time() - s_tx_vfo_status_us > RADIO_STATUS_MAX_AGE_US) {
         state->tx_vfo = CAT_TX_VFO_UNKNOWN;
@@ -1352,7 +1355,9 @@ esp_err_t cat_ptt(bool on)
     if (!s_ptt_lock) {
         return ESP_ERR_INVALID_STATE;
     }
-    xSemaphoreTake(s_ptt_lock, portMAX_DELAY);
+    if (xSemaphoreTake(s_ptt_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
     const esp_err_t err = s_ptt_port && !s_disconnected && (!on || s_ptt_ready)
                           ? cat_tx(s_ptt_port, on ? "TX1;" : "TX0;") : ESP_ERR_INVALID_STATE;
     if (err == ESP_OK) {

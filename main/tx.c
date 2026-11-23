@@ -3,6 +3,7 @@
 #include "app_config.h"
 #include "cat.h"
 #include "esp_timer.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -28,6 +29,7 @@ static void finish_stop(void)
     s_state.phase = TX_IDLE;
     s_state.owner = 0;
     s_stopping = false;
+    s_state.stopping = false;
     s_off_sent = 0;
 }
 
@@ -38,6 +40,7 @@ static void stop_locked(const char *reason)
     }
     if (!s_stopping) {
         s_state.reason = reason;
+        ESP_LOGI("tx", "PTT stop requested: %s", reason);
     }
     if (s_state.phase == TX_ARMED) {
         finish_stop();
@@ -45,12 +48,20 @@ static void stop_locked(const char *reason)
     }
 
     s_stopping = true;
+    s_state.stopping = true;
     usb_audio_tx_request(TX_TONE_OFF, 0);
     if (s_off_sent && cat_radio_rx_after(s_off_sent)) {
+        ESP_LOGI("tx", "RX confirmed after %u TX0 attempt(s)", s_state.off_attempts);
         finish_stop();
     } else if (!s_off_sent || esp_timer_get_time() - s_off_sent >= CONFIRM_US) {
-        if (cat_ptt(false) == ESP_OK) {
+        const esp_err_t previous = s_state.off_error;
+        s_state.off_attempts++;
+        s_state.off_error = cat_ptt(false);
+        if (s_state.off_error == ESP_OK) {
             s_off_sent = esp_timer_get_time();
+            ESP_LOGI("tx", "TX0 written; waiting for fresh RX confirmation");
+        } else if (s_state.off_attempts == 1 || previous != s_state.off_error) {
+            ESP_LOGW("tx", "TX0 write failed: %s", esp_err_to_name(s_state.off_error));
         }
     }
 }
@@ -249,7 +260,7 @@ static void watchdog_alarm(void *arg)
 esp_err_t tx_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
-    if (!s_lock || xTaskCreate(watchdog_task, "tx_watchdog", 4096, NULL, 8, &s_watchdog_task) != pdPASS) {
+    if (!s_lock || xTaskCreatePinnedToCore(watchdog_task, "tx_watchdog", 4096, NULL, 8, &s_watchdog_task, 0) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     const esp_timer_create_args_t args = {.callback = watchdog_alarm, .name = "tx_watchdog"};

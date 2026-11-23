@@ -74,7 +74,7 @@ static atomic_uint s_tx_request;               // generation, waveform and dBFS
 static atomic_uint s_tx_rate, s_tx_underruns, s_tx_written_bytes;
 static uac_host_dev_alt_param_t *s_output_formats;
 static usb_audio_format_t s_fmt;
-static bool s_streaming;
+static atomic_bool s_streaming;
 
 static bool alt_supports_freq(const uac_host_dev_alt_param_t *p, uint32_t freq)
 {
@@ -569,10 +569,13 @@ esp_err_t usb_audio_init(void)
 
 bool usb_audio_get_format(usb_audio_format_t *fmt)
 {
-    bool streaming;
+    // The TX watchdog checks only presence. Never queue it behind a blocking PCM read.
+    if (!fmt) {
+        return atomic_load(&s_streaming);
+    }
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    streaming = s_streaming;
-    if (streaming && fmt) {
+    const bool streaming = atomic_load(&s_streaming);
+    if (streaming) {
         *fmt = s_fmt;
     }
     xSemaphoreGive(s_lock);

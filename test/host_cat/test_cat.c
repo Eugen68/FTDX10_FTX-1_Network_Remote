@@ -217,6 +217,15 @@ int main(void) {
     use("9999");
     CHECK(!ok("RM5;") && !ok("RM6;"), "unknown radio blocks transmit meters");
 
+    use("0761");
+    handle_cat_packet("TX1;");
+    cat_get_state(&reported);
+    CHECK(reported.tx_radio_known && reported.tx_radio, "fresh CAT TX report");
+    g_now_us += RADIO_STATUS_MAX_AGE_US + 1;
+    handle_cat_packet("FA014074000;");
+    cat_get_state(&reported);
+    CHECK(!reported.tx_radio_known && !reported.tx_radio, "other CAT replies do not refresh TX state");
+
     // CAT log: blocked commands are logged as BLOCKED and never reach the port; reads come back oldest first
     use("0840");
     g_sent[0] = '\0';

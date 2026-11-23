@@ -724,9 +724,11 @@ static esp_err_t status_handler(httpd_req_t *req)
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"tx\":{\"state\":\"%s\",\"owner\":%lu,\"left_s\":%u,\"reason\":\"%s\","
+                      "\"stopping\":%s,\"off_attempts\":%u,\"off_error\":%d,"
                       "\"audio_rate\":%u,\"underruns\":%u,\"written_bytes\":%u,"
                       "\"swr\":%s,\"swr_raw\":%u,\"po\":%s,\"po_raw\":%u}}",
                       phase, (unsigned long)tx.owner, tx.left_s, tx_reason(&tx, reason),
+                      tx.stopping ? "true" : "false", tx.off_attempts, tx.off_error,
                       audio.audio_rate, audio.underruns, audio.written_bytes, swr, tx.swr_raw, po, tx.po_raw);
     }
     return send_json(req, json, n, sizeof(json));
@@ -776,9 +778,10 @@ static esp_err_t cat_handler(httpd_req_t *req)
     if (n > 0 && (size_t)n < sizeof(json)) {
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s}",
+                      ",\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s}",
                       app_config_tx_enabled() ? "true" : "false",
-                      st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false");
+                      st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
+                      st.tx_radio_known ? "true" : "false");
     }
     return send_json(req, json, n, sizeof(json));
 }

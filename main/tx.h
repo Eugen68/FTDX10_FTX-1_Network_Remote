@@ -14,6 +14,9 @@ typedef struct {
     unsigned left_s;
     const char *reason;
     bool on_air;
+    bool stopping;
+    unsigned off_attempts;
+    esp_err_t off_error;
     unsigned swr, swr_raw, po_raw, stop_swr;
     bool swr_valid, po_valid;
 } tx_state_t;

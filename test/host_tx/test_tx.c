@@ -94,21 +94,24 @@ int main(void)
     g_now_us += HEARTBEAT_US;
     watchdog_tick();
     assert(off_writes == 1 && tx_get_state().phase == TX_KEYED);
+    assert(tx_get_state().stopping && tx_get_state().off_attempts == 1 && tx_get_state().off_error == ESP_OK);
     assert(!tx_begin_usb_recovery()); // TX0 sent, RX not confirmed
     tx_unkey("duplicate");
     assert(off_writes == 1);
     confirm_rx();
     assert(tx_get_state().reason[0] == 'H');
+    assert(!tx_get_state().stopping && tx_get_state().off_attempts == 1);
     assert(on_writes == 1);
 
     key();
     cat_available = false;
     watchdog_tick();
     assert(!tx_begin_usb_recovery()); // TX0 cannot reach the radio
+    assert(tx_get_state().off_error == ESP_ERR_INVALID_STATE);
     assert(off_writes == 1);
     cat_available = true;
     assert(!tx_begin_usb_recovery()); // TX0 can now be sent
-    assert(off_writes == 2);
+    assert(off_writes == 2 && tx_get_state().off_attempts >= 2 && tx_get_state().off_error == ESP_OK);
     confirm_rx();
     assert(tx_begin_usb_recovery());
     tx_resume();

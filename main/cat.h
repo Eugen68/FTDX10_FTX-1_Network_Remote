@@ -54,6 +54,7 @@ typedef struct {
     cat_tx_vfo_t tx_vfo;    /*!< Transmitter selected by the radio, from FT; */
     bool tx_cat;
     bool tx_radio;
+    bool tx_radio_known;
     bool tx;                /*!< The radio is transmitting (RI P4 = 1) */
     uint8_t s_main;         /*!< S meter, MAIN side, 0-255 */
     uint8_t s_sub;          /*!< S meter, SUB side, 0-255 */
