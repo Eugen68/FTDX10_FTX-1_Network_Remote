@@ -31,7 +31,7 @@ typedef struct {
     uint8_t bit_resolution; /*!< Significant bits per sample */
 } usb_audio_format_t;
 
-/** First advertised output format. A continuous range has rate_count == 0. */
+/** Selected output alternate setting. A continuous range has rate_count == 0. */
 typedef struct {
     uint32_t rates[CONFIG_UAC_FREQ_NUM_MAX];
     uint32_t rate_min;
@@ -39,6 +39,7 @@ typedef struct {
     uint8_t rate_count;
     uint8_t channels;
     uint8_t bits;
+    uint16_t mps;  /*!< Endpoint maximum packet size in bytes */
 } usb_audio_output_format_t;
 
 /** Copy the output descriptor summary. Returns true while the interface is open. */

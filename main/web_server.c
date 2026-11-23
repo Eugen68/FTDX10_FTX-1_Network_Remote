@@ -703,8 +703,8 @@ static esp_err_t status_handler(httpd_req_t *req)
                      (unsigned long)output.rate_min, (unsigned long)output.rate_max);
         }
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"tx_audio\":{\"present\":%s,\"rates\":[%s],\"channels\":%u,\"bits\":%u%s}}",
-                      present ? "true" : "false", rates, output.channels, output.bits, range);
+                      ",\"tx_audio\":{\"present\":%s,\"rates\":[%s],\"channels\":%u,\"bits\":%u,\"mps\":%u%s}}",
+                      present ? "true" : "false", rates, output.channels, output.bits, output.mps, range);
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const tx_state_t tx = tx_get_state();
