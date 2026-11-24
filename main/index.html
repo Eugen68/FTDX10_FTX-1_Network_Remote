@@ -628,7 +628,7 @@
   }
   .acc-only { display: none; }
   body.has-acc .acc-only { display: inline-flex; }
-  .acc-src-wrap { align-items: center; gap: .35rem; margin: 0 .4rem; }
+  .scope-source-controls { display: inline-flex; align-items: center; gap: .35rem; margin: 0 .4rem; }
   .wf-source { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .6rem; padding: 0 .2rem; }
   .acc-info { font-size: .58rem; color: #fbbf24; font-weight: bold; white-space: nowrap; }
   .scope-container.acc-on .scope-spans [data-span], .scope-container.acc-on .scope-span-label { display: none; }
@@ -1217,13 +1217,16 @@
         <div class="scope-container">
           <div class="scope-header">
             <span class="scope-title main-tag">MAIN SCOPE</span>
-            <span class="acc-only acc-src-wrap" title="Waterfall source. Auto: the radio's own scope from the ACC socket when its data arrives (FTDX10), otherwise the audio scope. Audio: always the audio scope. ACC: always the radio's scope">
-              <select id="wfSource" class="wf-source">
-                <option value="auto">Auto</option>
-                <option value="audio">Audio</option>
-                <option value="acc">ACC</option>
-              </select>
-              <span id="accInfo" class="acc-info"></span>
+            <span class="scope-source-controls">
+              <span class="acc-only" title="Waterfall source. Auto: the radio's own scope from the ACC socket when its data arrives (FTDX10), otherwise the audio scope. Audio: always the audio scope. ACC: always the radio's scope">
+                <select id="wfSource" class="wf-source" aria-label="Waterfall source">
+                  <option value="auto">Auto</option>
+                  <option value="audio">Audio</option>
+                  <option value="acc">ACC</option>
+                </select>
+              </span>
+              <button type="button" class="scope-span-btn" id="btnScopePeak" aria-pressed="false" title="Hold peaks on the spectrum trace with a slow decay (P)">Peak</button>
+              <span id="accInfo" class="acc-only acc-info"></span>
             </span>
             <div class="scope-spans" data-scope="Main">
               <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecMain" title="Save the last 30 s of MAIN as WAV">REC</button>
@@ -1847,6 +1850,11 @@ function decode(bytes, ch, width) {
 // Spectrum Scope & Waterfall renderer (one per channel: left = MAIN, right = SUB)
 let currentAudioRate = 48000;
 
+const PEAK_FALL_PER_MS = 5 / 1000; // 5 levels per second, independent of the display's refresh rate.
+const SCOPE_PEAK_KEY = 'ftx1.scopePeak';
+let scopePeakEnabled = false;
+try { scopePeakEnabled = localStorage.getItem(SCOPE_PEAK_KEY) === '1'; } catch (e) {}
+
 // Manual notch position per receiver, drawn over the scope: { on, hz } (hz = audio frequency, 0 = unknown)
 const notchMarks = [{ on: false, hz: 0 }, { on: false, hz: 0 }];
 
@@ -1890,7 +1898,8 @@ function wfColour(val) {
 
 function accOnRecord(dv, off, points) {
   const rec = {
-    placement: dv.getUint8(off + 2), seq: dv.getUint32(off + 4, true), vfo: dv.getUint32(off + 8, true),
+    placement: dv.getUint8(off + 2), mode: dv.getUint8(off + 3),
+    seq: dv.getUint32(off + 4, true), vfo: dv.getUint32(off + 8, true),
     center: dv.getUint32(off + 12, true), span: dv.getUint32(off + 16, true), marker: dv.getUint32(off + 20, true),
   };
   const lv = new Uint8Array(dv.buffer, dv.byteOffset + off + 28, points).slice();
@@ -2006,6 +2015,33 @@ function makeScope(name, idx) {
     wfCtx.clearRect(0, 0, wfCanvas.width, wfCanvas.height);
   };
 
+  let peakLevels = null, peakKey = null, peakAt = 0;
+  sc.clearPeak = function () {
+    peakLevels = null;
+  };
+
+  function drawPeak(levels, lastBin, width, height, floor, range, key, now) {
+    if (!scopePeakEnabled) return;
+    if (!peakLevels || peakKey !== key || peakLevels.length !== lastBin + 1) {
+      peakLevels = Float32Array.from(levels.subarray(0, lastBin + 1));
+      peakKey = key;
+    }
+    const fall = Math.max(0, now - peakAt) * PEAK_FALL_PER_MS;
+    peakAt = now;
+    sctx.beginPath();
+    for (let i = 0; i <= lastBin; ++i) {
+      peakLevels[i] = Math.max(levels[i], peakLevels[i] - fall);
+      const level = Math.max(0, Math.min(1, (peakLevels[i] - floor) / range));
+      const x = i * width / lastBin;
+      const y = height - level * (height - 4);
+      if (i === 0) sctx.moveTo(x, y);
+      else sctx.lineTo(x, y);
+    }
+    sctx.strokeStyle = 'rgba(226, 232, 240, 0.65)';
+    sctx.lineWidth = 1;
+    sctx.stroke();
+  }
+
   // ---- ACC (the radio's own scope) on the MAIN canvas ----
   // While the ACC source is shown the canvas gets the scope's resolution (850 points) and more height;
   // it goes back to the audio scope's size when the source changes back.
@@ -2014,6 +2050,7 @@ function makeScope(name, idx) {
   sc.setSource = function (src) {
     if (src === sc.source) return;
     sc.source = src;
+    sc.clearPeak();
     const acc = src === 'acc';
     canvas.width = acc ? ACC_POINTS : AUDIO_W;
     canvas.height = acc ? ACC_CANVAS_H : AUDIO_H;
@@ -2022,7 +2059,7 @@ function makeScope(name, idx) {
     wfCtx.clearRect(0, 0, wfCanvas.width, wfCanvas.height);
     canvas.closest('.scope-container').classList.toggle('acc-on', acc);
   };
-  sc.renderAcc = function () {
+  sc.renderAcc = function (now) {
     const w = canvas.width, h = canvas.height;
     const BAR_H = 16, specH = Math.round(h * 0.42), wfH = h - specH - BAR_H;
     const r = accState.row;
@@ -2049,6 +2086,8 @@ function makeScope(name, idx) {
     }
     // trace (refined levels)
     const lv = accState.refined;
+    drawPeak(lv, ACC_POINTS - 1, w, specH, lo, range,
+             `acc:${r.placement}:${r.mode}:${r.center}:${r.span}`, now);
     sctx.beginPath();
     sctx.moveTo(0, specH);
     for (let i = 0; i < ACC_POINTS; i++) {
@@ -2120,10 +2159,10 @@ function makeScope(name, idx) {
     }
   };
 
-  sc.render = function () {
+  sc.render = function (now) {
     if (idx === 0) {
       sc.setSource(accShouldDraw() ? 'acc' : 'audio');
-      if (sc.source === 'acc') { sc.renderAcc(); return; }
+      if (sc.source === 'acc') { sc.renderAcc(now); return; }
     }
     const w = canvas.width;
     const h = canvas.height;
@@ -2133,6 +2172,7 @@ function makeScope(name, idx) {
     const an = scopeAnalysers[idx];
 
     if (!an) {
+      sc.clearPeak();
       sctx.fillStyle = '#020617';
       sctx.fillRect(0, 0, w, h);
       return;
@@ -2176,6 +2216,8 @@ function makeScope(name, idx) {
       sctx.stroke();
     }
     freqLines(0, specH, 'rgba(71, 85, 105, 0.8)');
+    drawPeak(fData, maxBin, w, specH, 0, 255,
+             `audio:${currentAudioRate}:${sc.spanHz}:${sc.lastMode}:${idx ? curFreqSub : curFreqMain}`, now);
 
     sctx.beginPath();
     sctx.moveTo(0, specH);
@@ -2294,6 +2336,25 @@ function makeScope(name, idx) {
 }
 
 const scopes = [makeScope('Main', 0), makeScope('Sub', 1)];
+const scopePeakButton = document.getElementById('btnScopePeak');
+
+function updateScopePeakButton() {
+  scopePeakButton.setAttribute('aria-pressed', String(scopePeakEnabled));
+  scopePeakButton.classList.toggle('active', scopePeakEnabled);
+}
+scopePeakButton.addEventListener('click', () => {
+  scopePeakEnabled = !scopePeakEnabled;
+  scopes.forEach(scope => scope.clearPeak());
+  updateScopePeakButton();
+  try { localStorage.setItem(SCOPE_PEAK_KEY, scopePeakEnabled ? '1' : '0'); } catch (e) {}
+});
+updateScopePeakButton();
+document.addEventListener('keydown', e => {
+  if (e.defaultPrevented || e.repeat || e.ctrlKey || e.metaKey || e.altKey ||
+      !['p', 'P'].includes(e.key) ||
+      e.target.closest?.('input, textarea, select, button, [contenteditable="true"]')) return;
+  scopePeakButton.click();
+});
 
 // ACC: click (or tap) on the MAIN scope tunes MAIN to that frequency; the mouse shows where
 (function accPointer() {
@@ -2313,9 +2374,9 @@ const scopes = [makeScope('Main', 0), makeScope('Sub', 1)];
   });
 })();
 
-function renderScope() {
+function renderScope(now) {
   followModeSpan();
-  scopes.forEach(s => s.render());
+  scopes.forEach(s => s.render(now));
   requestAnimationFrame(renderScope);
 }
 requestAnimationFrame(renderScope);
