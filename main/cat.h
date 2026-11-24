@@ -138,12 +138,11 @@ typedef struct {
 } cat_write_timing_t;
 
 typedef struct {
-    cat_write_timing_t all, keyed, meters, usb_test;
+    cat_write_timing_t all, keyed, meters;
     unsigned budget_ms, keyed_poll_budget_ms;
 } cat_write_stats_t;
 
 cat_write_stats_t cat_get_write_stats(void);
-void cat_set_usb_test(bool active);
 bool cat_radio_rx_after(int64_t after_us);
 bool cat_radio_tx(void);
 esp_err_t cat_ptt(bool on);

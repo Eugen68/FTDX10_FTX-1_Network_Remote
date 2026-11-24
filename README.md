@@ -640,13 +640,19 @@ the TX state remains stopping until the USB audio output finishes cleanup.
 The panel and `/status` show both raw meters. SWR conversions use provisional, model-specific
 [FTX-1](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftx1/ftx1.h)
 and [FTDX10](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftdx10.h) Hamlib reference points.
-Check these against the radio and known loads on the bench before relying on the numeric ratio.
+Bench calibration requires raw RM6 (alongside RM5) and a reference SWR reading for each model.
+Relative to a 50 Ω system, resistive 100 Ω and 150 Ω loads correspond to 2:1 and 3:1 if the loads
+present those impedances at the test frequency. Use RF-rated loads, minimum power and short
+transmissions with the tuner bypassed. Record frequency, reference SWR, and several paired RM5/RM6
+samples from CAT LOG. Mark samples taken before any cutoff and include the cutoff reason if one
+occurs.
 In `/status`, the TX audio counters show the output sample rate, missed audio task deadlines and
 bytes accepted by the USB driver. The 16 KiB TX staging ring uses PSRAM, with its control block in internal RAM.
 The UAC driver allocates USB transfer buffers when the output stream starts.
 
 `/status.cat_write` reports write counts, timeouts, maximum elapsed microseconds and calls exceeding the
-200 ms driver budget. It reports these since boot for all writes, writes while keyed, and RM5/RM6 batches.
+applicable driver budget (200 ms for normal CAT, 1.2 s for keyed telemetry). It reports these since
+boot for all writes, writes while keyed, and RM5/RM6 batches.
 Failed queued commands are visible in the page and CAT LOG. Compare `int_min` after identical runs with
 ACC enabled, because it tracks the lowest free internal memory since boot.
 
