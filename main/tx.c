@@ -53,6 +53,9 @@ static void stop_locked(const char *reason)
     usb_audio_tx_request(TX_TONE_OFF, 0);
     if (s_off_sent && cat_radio_rx_after(s_off_sent)) {
         ESP_LOGI("tx", "RX confirmed after %u TX0 attempt(s)", s_state.off_attempts);
+        if (s_tone != TX_TONE_OFF) {
+            usb_audio_tx_finished();
+        }
         finish_stop();
     } else if (!s_off_sent || esp_timer_get_time() - s_off_sent >= CONFIRM_US) {
         const esp_err_t previous = s_state.off_error;
@@ -84,6 +87,14 @@ bool tx_key(uint32_t owner)
     return tx_key_tone(owner, TX_TONE_OFF, TX_TONE_DEFAULT_DBFS);
 }
 
+static esp_err_t prepare_tone_audio(void)
+{
+    cat_state_t radio;
+    cat_get_state(&radio);
+    // The FTX-1 can exhaust channels even with a single OUT endpoint.
+    return usb_audio_tx_prepare(radio.rig == CAT_RIG_FTX1);
+}
+
 bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
 {
     if (tone < TX_TONE_OFF || tone > TX_TONE_DUAL || dbfs < TX_TONE_MIN_DBFS || dbfs > TX_TONE_MAX_DBFS) {
@@ -104,6 +115,14 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
             refusal = "USB TX audio unavailable";
         } else if (mode_error) {
             refusal = mode_error;
+        } else if (tone != TX_TONE_OFF && prepare_tone_audio() != ESP_OK) {
+            refusal = "USB TX audio start failed";
+        } else if (tone != TX_TONE_OFF &&
+                   (esp_timer_get_time() - s_heartbeat >= HEARTBEAT_US ||
+                    !usb_audio_tx_available() || !usb_audio_get_format(NULL) ||
+                    !cat_radio_rx_after(0) || cat_ptt_mode_error())) {
+            usb_audio_tx_finished();
+            refusal = "PTT conditions changed during USB audio setup";
         } else {
             s_keyed_at = esp_timer_get_time();
             s_deadline = s_keyed_at + (int64_t)cfg.tx_max_seconds * 1000000;

@@ -102,6 +102,7 @@ typedef struct {
     size_t fill;
     uint32_t frame_bytes;
     uint32_t bytes_per_ms;
+    uint32_t sample_rate;
     SemaphoreHandle_t lock;
     TaskHandle_t sender;
     volatile bool stop;          // set by the sender: the reader must finish
@@ -262,11 +263,33 @@ static size_t fifo_read(audio_fifo_t *f, uint8_t *dst, size_t max)
 static void usb_reader_task(void *arg)
 {
     audio_fifo_t *f = (audio_fifo_t *)arg;
+    bool paused = false;
     while (!f->stop) {
         uint32_t n = 0;
         const esp_err_t r = usb_audio_read(s_usb_read_buf, sizeof(s_usb_read_buf), &n, STREAM_READ_TIMEOUT);
+        if (r == ESP_ERR_NOT_FINISHED) {
+            if (!paused) {
+                xSemaphoreTake(f->lock, portMAX_DELAY);
+                f->tail = f->head;
+                f->fill = 0;
+                xSemaphoreGive(f->lock);
+                paused = true;
+            }
+            // Keep browser time moving at the output rate, without counting
+            // synthetic silence as USB input or running it through the FIR.
+            const size_t silence_bytes = (f->sample_rate / 100) * f->frame_bytes;
+            const size_t bytes = silence_bytes < sizeof(s_usb_read_buf) ? silence_bytes :
+                                 sizeof(s_usb_read_buf) / f->frame_bytes * f->frame_bytes;
+            memset(s_usb_read_buf, 0, bytes);
+            fifo_write(f, s_usb_read_buf, bytes);
+            xTaskNotifyGive(f->sender);
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
         if (r == ESP_ERR_TIMEOUT) {
-            s_st_usb_timeouts++;
+            if (!paused) {
+                s_st_usb_timeouts++;
+            }
             continue;
         }
         if (r != ESP_OK) {
@@ -279,8 +302,10 @@ static void usb_reader_task(void *arg)
         if (n > 0) {
             const int64_t now_us = esp_timer_get_time();
             portENTER_CRITICAL(&s_usb_rate_lock);
-            if (s_usb_rate.first_us == 0) {
+            if (paused || s_usb_rate.first_us == 0) {
+                s_usb_rate.bytes = 0;
                 s_usb_rate.first_us = now_us;
+                paused = false;
             } else {
                 s_usb_rate.bytes += n;     // the first read only marks the start
             }
@@ -408,6 +433,7 @@ static void stream_task(void *arg)
         f->head = f->tail = f->fill = 0;
         f->frame_bytes = frame_bytes;
         f->bytes_per_ms = bytes_per_ms;
+        f->sample_rate = ctx->out_rate;
         f->sender = xTaskGetCurrentTaskHandle();
         f->stop = false;
         f->reader_done = false;
@@ -642,7 +668,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       "\"conn_opened\":%u,\"conn_closed\":%u,\"conn_lru_purges\":%u,\"tls_handshake_errors\":%u,"
                       "\"stream\":{\"active\":%s,\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
                       "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu,"
-                      "\"usb_bus_resets\":%lu},"
+                      "\"usb_bus_resets\":%lu,\"rx_paused\":%s},"
                       "\"acc\":{\"enabled\":%s,\"fps\":%lu,\"frames\":%lu,\"accepted\":%lu,\"rejected\":%lu,"
                       "\"age_ms\":%ld,\"last_len\":%lu,\"last_reject\":\"%s\","
                       "\"rej\":{\"length\":%lu,\"not_ftdx10\":%lu,\"vfo_copies\":%lu,\"vfo_range\":%lu,"
@@ -662,7 +688,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)s_st_max_send_ms,
                       (unsigned long)s_st_buf_ms, (unsigned long)s_st_buf_max_ms, (unsigned long)s_st_overflows,
                       (unsigned long)s_st_rate, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10),
-                      (unsigned long)usb_audio_bus_resets(),
+                      (unsigned long)usb_audio_bus_resets(), usb_audio_rx_paused() ? "true" : "false",
                       acc.enabled ? "true" : "false", (unsigned long)acc.fps, (unsigned long)acc.frames,
                       (unsigned long)acc.accepted, (unsigned long)acc.rejected,
                       acc.age_ms == UINT32_MAX ? -1L : (long)acc.age_ms, (unsigned long)acc.last_len, acc_reason,

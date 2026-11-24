@@ -39,6 +39,7 @@ typedef struct {
     uint8_t rate_count;
     uint8_t channels;
     uint8_t bits;
+    uint8_t endpoints, attributes;
     uint16_t mps;  /*!< Endpoint maximum packet size in bytes */
 } usb_audio_output_format_t;
 
@@ -58,6 +59,9 @@ void usb_audio_tx_reset_transfer_stats(void);
 usb_tx_transfer_stats_t usb_audio_tx_transfer_stats(void);
 bool usb_audio_tx_available(void);
 bool usb_audio_tx_idle(void);
+esp_err_t usb_audio_tx_prepare(bool share_rx_channel);
+void usb_audio_tx_finished(void);
+bool usb_audio_rx_paused(void);
 void usb_audio_tx_request(tx_tone_t tone, int dbfs);
 usb_tx_stats_t usb_audio_tx_stats(void);
 
@@ -78,6 +82,7 @@ bool usb_audio_get_format(usb_audio_format_t *fmt);
 
 /**
  * @brief Read PCM data captured from the USB audio device
+ *        ESP_ERR_NOT_FINISHED indicates an intentional RX pause for USB TX.
  *
  * @param[out] buf        Destination buffer
  * @param[in]  size       Bytes requested

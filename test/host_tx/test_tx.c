@@ -28,6 +28,9 @@ static bool cat_available = true;
 static bool usb_available = true;
 static bool output_available = true;
 static bool output_idle = true;
+static cat_rig_t radio_model = CAT_RIG_FTDX10;
+static bool prepare_fails, prepare_changes_mode, prepare_shared;
+static unsigned preparations, cleanups;
 static tx_tone_t audio_request;
 static unsigned po_raw, swr_raw;
 static bool meters_missing;
@@ -44,6 +47,22 @@ bool usb_audio_get_format(usb_audio_format_t *fmt) { return usb_available; }
 bool usb_audio_tx_available(void) { return output_available; }
 bool usb_audio_tx_idle(void) { return output_idle; }
 void usb_audio_tx_request(tx_tone_t tone, int dbfs) { audio_request = tone; }
+void cat_get_state(cat_state_t *state) { *state = (cat_state_t){.rig = radio_model}; }
+esp_err_t usb_audio_tx_prepare(bool shared)
+{
+    assert(!radio_on && output_idle);
+    ++preparations;
+    prepare_shared = shared;
+    if (prepare_changes_mode) {
+        mode_error = "Mode changed";
+    }
+    return prepare_fails ? ESP_ERR_INVALID_STATE : ESP_OK;
+}
+void usb_audio_tx_finished(void)
+{
+    assert(!radio_on && audio_request == TX_TONE_OFF);
+    ++cleanups;
+}
 cat_tx_meters_t cat_get_tx_meters(void)
 {
     if (meters_missing) {
@@ -210,14 +229,16 @@ int main(void)
     output_idle = true;
     assert(tx_acquire(1));
     assert(tx_key_tone(1, TX_TONE_SINGLE, -24));
-    assert(audio_request == TX_TONE_SINGLE);
+    assert(audio_request == TX_TONE_SINGLE && preparations == 1 && !prepare_shared);
     po_raw = 10;
     swr_raw = 126;
     g_now_us += 100000;
     watchdog_tick();
     assert(audio_request == TX_TONE_OFF && off_writes == 9);
     assert(tx_get_state().stop_swr == 300);
+    assert(cleanups == 0);
     confirm_rx();
+    assert(cleanups == 1);
     meters_missing = true;
     warnings[0] = '\0';
     key();
@@ -233,5 +254,27 @@ int main(void)
     assert(strstr(warnings, "swr_po_us=0") && strstr(warnings, "RM5;"));
     confirm_rx();
     assert(stale_diagnostics_reads == 1);
+    radio_model = CAT_RIG_FTX1;
+    meters_missing = false;
+    const unsigned on_before = on_writes;
+    rx_us = g_now_us;
+    prepare_fails = true;
+    assert(tx_acquire(1));
+    assert(!tx_key_tone(1, TX_TONE_SINGLE, -24));
+    assert(preparations == 2 && prepare_shared && on_writes == on_before && cleanups == 1);
+    prepare_fails = false;
+    prepare_changes_mode = true;
+    assert(tx_acquire(1));
+    assert(!tx_key_tone(1, TX_TONE_SINGLE, -24));
+    assert(preparations == 3 && on_writes == on_before && cleanups == 2);
+    mode_error = NULL;
+    prepare_changes_mode = false;
+    assert(tx_acquire(1));
+    assert(tx_key_tone(1, TX_TONE_SINGLE, -24));
+    assert(preparations == 4 && prepare_shared && on_writes == on_before + 1);
+    tx_release(1, "Released");
+    assert(audio_request == TX_TONE_OFF && cleanups == 2);
+    confirm_rx();
+    assert(cleanups == 3);
     puts("all TX state tests passed");
 }
