@@ -40,6 +40,7 @@ esp_err_t app_config_load(app_config_t *cfg)
     if (!cfg) return ESP_ERR_INVALID_ARG;
     memset(cfg, 0, sizeof(*cfg));
     cfg->tx_max_seconds = TX_DEFAULT_SECONDS;
+    cfg->swr_max = TX_SWR_DEFAULT;
 
     nvs_handle_t handle;
     esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
@@ -64,6 +65,11 @@ esp_err_t app_config_load(app_config_t *cfg)
         uint16_t tx_seconds = 0;
         nvs_get_u8(handle, "tx_enabled", &tx_enabled);
         nvs_get_u16(handle, "tx_max_seconds", &tx_seconds);
+        uint8_t swr = 0;
+        nvs_get_u8(handle, "swr_max", &swr);
+        if (swr >= TX_SWR_MIN && swr <= TX_SWR_MAX) {
+            cfg->swr_max = swr;
+        }
         cfg->tx_enabled = tx_enabled == 1;
         if (tx_seconds >= TX_MIN_SECONDS && tx_seconds <= TX_MAX_SECONDS) {
             cfg->tx_max_seconds = tx_seconds;
@@ -110,6 +116,7 @@ esp_err_t app_config_save(const app_config_t *cfg)
     if (err == ESP_OK) err = nvs_set_u8(handle, "tx_enabled", cfg->tx_enabled);
     if (err == ESP_OK) err = nvs_set_str(handle, "tx_pass", cfg->tx_pass);
     if (err == ESP_OK) err = nvs_set_u16(handle, "tx_max_seconds", cfg->tx_max_seconds);
+    if (err == ESP_OK) err = nvs_set_u8(handle, "swr_max", cfg->swr_max);
 
     if (err == ESP_OK) {
         err = nvs_commit(handle);

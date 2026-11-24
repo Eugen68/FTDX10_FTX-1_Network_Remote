@@ -628,7 +628,7 @@
   }
   .acc-only { display: none; }
   body.has-acc .acc-only { display: inline-flex; }
-  .acc-src-wrap { align-items: center; gap: .35rem; margin: 0 .4rem; }
+  .scope-source-controls { display: inline-flex; align-items: center; gap: .35rem; margin: 0 .4rem; }
   .wf-source { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .6rem; padding: 0 .2rem; }
   .acc-info { font-size: .58rem; color: #fbbf24; font-weight: bold; white-space: nowrap; }
   .scope-container.acc-on .scope-spans [data-span], .scope-container.acc-on .scope-span-label { display: none; }
@@ -1026,6 +1026,7 @@
       <div class="brand-title" id="brandTitle">FTX-1 Companion</div>
       <div class="brand-build" id="buildInfo" title="Firmware build time"></div>
     </div>
+    <span id="catCommandError" role="status" hidden></span>
     <div class="header-controls">
       <div class="led-group">
         <div class="led-item"><div class="led" id="ledCat"></div>CAT</div>
@@ -1216,13 +1217,16 @@
         <div class="scope-container">
           <div class="scope-header">
             <span class="scope-title main-tag">MAIN SCOPE</span>
-            <span class="acc-only acc-src-wrap" title="Waterfall source. Auto: the radio's own scope from the ACC socket when its data arrives (FTDX10), otherwise the audio scope. Audio: always the audio scope. ACC: always the radio's scope">
-              <select id="wfSource" class="wf-source">
-                <option value="auto">Auto</option>
-                <option value="audio">Audio</option>
-                <option value="acc">ACC</option>
-              </select>
-              <span id="accInfo" class="acc-info"></span>
+            <span class="scope-source-controls">
+              <span class="acc-only" title="Waterfall source. Auto: the radio's own scope from the ACC socket when its data arrives (FTDX10), otherwise the audio scope. Audio: always the audio scope. ACC: always the radio's scope">
+                <select id="wfSource" class="wf-source" aria-label="Waterfall source">
+                  <option value="auto">Auto</option>
+                  <option value="audio">Audio</option>
+                  <option value="acc">ACC</option>
+                </select>
+              </span>
+              <button type="button" class="scope-span-btn" id="btnScopePeak" aria-pressed="false" title="Hold peaks on the spectrum trace with a slow decay (P)">Peak</button>
+              <span id="accInfo" class="acc-only acc-info"></span>
             </span>
             <div class="scope-spans" data-scope="Main">
               <button type="button" class="scope-span-btn scope-rec-btn" id="btnRecMain" title="Save the last 30 s of MAIN as WAV">REC</button>
@@ -1539,8 +1543,17 @@
   <section id="txPanel" hidden aria-label="Transmit">
     <label>TX password <input id="txPass" type="password" minlength="6" maxlength="64" autocomplete="off"></label>
     <button id="txConnect" type="button">Authorize TX</button>
+    <label>TX audio
+      <select id="txTone">
+        <option value="off">PTT only</option>
+        <option value="single">Test tone 1,000 Hz</option>
+        <option value="dual">Two-tone 700 + 1,900 Hz</option>
+      </select>
+    </label>
+    <label>Level <input id="txLevel" type="number" value="-24" min="-60" max="-6" step="1"> dBFS</label>
     <button id="txPtt" type="button" disabled aria-pressed="false">Hold to talk</button>
     <span id="txInfo" role="status"></span>
+    <output id="txMeters"></output>
   </section>
 
   <details class="sq-section" id="catLogSection">
@@ -1560,6 +1573,18 @@
 </div>
 
 <script>
+let rebooting = false;
+let devicePoll = Promise.resolve();
+
+function pollDeviceJson(uri) {
+  const request = devicePoll.then(async () => {
+    const res = await fetch(uri, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  });
+  devicePoll = request.catch(() => {});
+  return request;
+}
 // Headers for every state changing request. The firmware refuses POST /cat without the marker header:
 // a browser adds a custom header to a cross-site request only after a CORS preflight, which the
 // firmware never allows, so other web sites cannot drive the radio through this page's login.
@@ -1825,6 +1850,11 @@ function decode(bytes, ch, width) {
 // Spectrum Scope & Waterfall renderer (one per channel: left = MAIN, right = SUB)
 let currentAudioRate = 48000;
 
+const PEAK_FALL_PER_MS = 5 / 1000; // 5 levels per second, independent of the display's refresh rate.
+const SCOPE_PEAK_KEY = 'ftx1.scopePeak';
+let scopePeakEnabled = false;
+try { scopePeakEnabled = localStorage.getItem(SCOPE_PEAK_KEY) === '1'; } catch (e) {}
+
 // Manual notch position per receiver, drawn over the scope: { on, hz } (hz = audio frequency, 0 = unknown)
 const notchMarks = [{ on: false, hz: 0 }, { on: false, hz: 0 }];
 
@@ -1846,7 +1876,7 @@ wfSourceSel.addEventListener('change', () => {
 });
 
 function accAvailable() { return document.body.classList.contains('has-acc'); }
-function accWanted() { return accAvailable() && wfSourceSel.value !== 'audio' && document.visibilityState === 'visible'; }
+function accWanted() { return !rebooting && accAvailable() && wfSourceSel.value !== 'audio' && document.visibilityState === 'visible'; }
 function accFresh() { return accState.row && performance.now() - accState.lastMs < 2000; }
 function accShouldDraw() {
   if (!accAvailable()) return false;
@@ -1868,7 +1898,8 @@ function wfColour(val) {
 
 function accOnRecord(dv, off, points) {
   const rec = {
-    placement: dv.getUint8(off + 2), seq: dv.getUint32(off + 4, true), vfo: dv.getUint32(off + 8, true),
+    placement: dv.getUint8(off + 2), mode: dv.getUint8(off + 3),
+    seq: dv.getUint32(off + 4, true), vfo: dv.getUint32(off + 8, true),
     center: dv.getUint32(off + 12, true), span: dv.getUint32(off + 16, true), marker: dv.getUint32(off + 20, true),
   };
   const lv = new Uint8Array(dv.buffer, dv.byteOffset + off + 28, points).slice();
@@ -1984,6 +2015,33 @@ function makeScope(name, idx) {
     wfCtx.clearRect(0, 0, wfCanvas.width, wfCanvas.height);
   };
 
+  let peakLevels = null, peakKey = null, peakAt = 0;
+  sc.clearPeak = function () {
+    peakLevels = null;
+  };
+
+  function drawPeak(levels, lastBin, width, height, floor, range, key, now) {
+    if (!scopePeakEnabled) return;
+    if (!peakLevels || peakKey !== key || peakLevels.length !== lastBin + 1) {
+      peakLevels = Float32Array.from(levels.subarray(0, lastBin + 1));
+      peakKey = key;
+    }
+    const fall = Math.max(0, now - peakAt) * PEAK_FALL_PER_MS;
+    peakAt = now;
+    sctx.beginPath();
+    for (let i = 0; i <= lastBin; ++i) {
+      peakLevels[i] = Math.max(levels[i], peakLevels[i] - fall);
+      const level = Math.max(0, Math.min(1, (peakLevels[i] - floor) / range));
+      const x = i * width / lastBin;
+      const y = height - level * (height - 4);
+      if (i === 0) sctx.moveTo(x, y);
+      else sctx.lineTo(x, y);
+    }
+    sctx.strokeStyle = 'rgba(226, 232, 240, 0.65)';
+    sctx.lineWidth = 1;
+    sctx.stroke();
+  }
+
   // ---- ACC (the radio's own scope) on the MAIN canvas ----
   // While the ACC source is shown the canvas gets the scope's resolution (850 points) and more height;
   // it goes back to the audio scope's size when the source changes back.
@@ -1992,6 +2050,7 @@ function makeScope(name, idx) {
   sc.setSource = function (src) {
     if (src === sc.source) return;
     sc.source = src;
+    sc.clearPeak();
     const acc = src === 'acc';
     canvas.width = acc ? ACC_POINTS : AUDIO_W;
     canvas.height = acc ? ACC_CANVAS_H : AUDIO_H;
@@ -2000,7 +2059,7 @@ function makeScope(name, idx) {
     wfCtx.clearRect(0, 0, wfCanvas.width, wfCanvas.height);
     canvas.closest('.scope-container').classList.toggle('acc-on', acc);
   };
-  sc.renderAcc = function () {
+  sc.renderAcc = function (now) {
     const w = canvas.width, h = canvas.height;
     const BAR_H = 16, specH = Math.round(h * 0.42), wfH = h - specH - BAR_H;
     const r = accState.row;
@@ -2027,6 +2086,8 @@ function makeScope(name, idx) {
     }
     // trace (refined levels)
     const lv = accState.refined;
+    drawPeak(lv, ACC_POINTS - 1, w, specH, lo, range,
+             `acc:${r.placement}:${r.mode}:${r.center}:${r.span}`, now);
     sctx.beginPath();
     sctx.moveTo(0, specH);
     for (let i = 0; i < ACC_POINTS; i++) {
@@ -2098,10 +2159,10 @@ function makeScope(name, idx) {
     }
   };
 
-  sc.render = function () {
+  sc.render = function (now) {
     if (idx === 0) {
       sc.setSource(accShouldDraw() ? 'acc' : 'audio');
-      if (sc.source === 'acc') { sc.renderAcc(); return; }
+      if (sc.source === 'acc') { sc.renderAcc(now); return; }
     }
     const w = canvas.width;
     const h = canvas.height;
@@ -2111,6 +2172,7 @@ function makeScope(name, idx) {
     const an = scopeAnalysers[idx];
 
     if (!an) {
+      sc.clearPeak();
       sctx.fillStyle = '#020617';
       sctx.fillRect(0, 0, w, h);
       return;
@@ -2154,6 +2216,8 @@ function makeScope(name, idx) {
       sctx.stroke();
     }
     freqLines(0, specH, 'rgba(71, 85, 105, 0.8)');
+    drawPeak(fData, maxBin, w, specH, 0, 255,
+             `audio:${currentAudioRate}:${sc.spanHz}:${sc.lastMode}:${idx ? curFreqSub : curFreqMain}`, now);
 
     sctx.beginPath();
     sctx.moveTo(0, specH);
@@ -2272,6 +2336,25 @@ function makeScope(name, idx) {
 }
 
 const scopes = [makeScope('Main', 0), makeScope('Sub', 1)];
+const scopePeakButton = document.getElementById('btnScopePeak');
+
+function updateScopePeakButton() {
+  scopePeakButton.setAttribute('aria-pressed', String(scopePeakEnabled));
+  scopePeakButton.classList.toggle('active', scopePeakEnabled);
+}
+scopePeakButton.addEventListener('click', () => {
+  scopePeakEnabled = !scopePeakEnabled;
+  scopes.forEach(scope => scope.clearPeak());
+  updateScopePeakButton();
+  try { localStorage.setItem(SCOPE_PEAK_KEY, scopePeakEnabled ? '1' : '0'); } catch (e) {}
+});
+updateScopePeakButton();
+document.addEventListener('keydown', e => {
+  if (e.defaultPrevented || e.repeat || e.ctrlKey || e.metaKey || e.altKey ||
+      !['p', 'P'].includes(e.key) ||
+      e.target.closest?.('input, textarea, select, button, [contenteditable="true"]')) return;
+  scopePeakButton.click();
+});
 
 // ACC: click (or tap) on the MAIN scope tunes MAIN to that frequency; the mouse shows where
 (function accPointer() {
@@ -2291,9 +2374,9 @@ const scopes = [makeScope('Main', 0), makeScope('Sub', 1)];
   });
 })();
 
-function renderScope() {
+function renderScope(now) {
   followModeSpan();
-  scopes.forEach(s => s.render());
+  scopes.forEach(s => s.render(now));
   requestAnimationFrame(renderScope);
 }
 requestAnimationFrame(renderScope);
@@ -2611,24 +2694,59 @@ function stop() {
 
 btnPlay.addEventListener('click', () => { if (abort) stop(); else start(); });
 
+async function rebootStatus() {
+  const res = await fetch('/status', { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+  if (!res.ok) throw new Error('Status HTTP ' + res.status);
+  const status = await res.json();
+  if (!Number.isInteger(status.boot_id)) throw new Error('Boot ID unavailable');
+  return status.boot_id;
+}
+
+async function waitForReboot(previousBoot) {
+  const deadline = performance.now() + 45000;
+  while (performance.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      const currentBoot = await rebootStatus();
+      if (previousBoot === null || currentBoot !== previousBoot) return;
+    } catch (e) {
+      // The interface can be unreachable until Wi-Fi and HTTPS are ready.
+    }
+  }
+  throw new Error(previousBoot === null
+    ? 'Device status did not return within 45 seconds'
+    : 'Device did not report a new boot within 45 seconds');
+}
+
 const btnReboot = document.getElementById('btnReboot');
 if (btnReboot) {
   btnReboot.addEventListener('click', async () => {
-    if (confirm("Reboot the ESP32-S3 device?\n(Audio streaming and connection will restart in a few seconds)")) {
-      try {
-        if (abort) stop();
-        btnReboot.disabled = true;
-        btnReboot.textContent = 'REBOOTING...';
-        await fetch('/reboot', {
-          method: 'POST',
-          headers: CAT_POST_HEADERS
-        });
-      } catch (e) {
-        // Network error is expected as device reboots immediately
+    if (rebooting || !confirm('Reboot the ESP32-S3 device?')) return;
+    rebooting = true;
+    btnReboot.disabled = true;
+    btnReboot.textContent = 'REBOOTING...';
+    btnReboot.title = 'Waiting for the device to restart';
+    try {
+      if (abort) stop();
+      accManage();
+      const previousBoot = await rebootStatus().catch(() => null);
+      const response = await fetch('/reboot', {
+        method: 'POST',
+        headers: CAT_POST_HEADERS,
+        signal: AbortSignal.timeout(7500)
+      }).catch(() => null);     // The restart can interrupt the response.
+      if (response && !response.ok) {
+        throw new Error(await response.text() || 'Reboot HTTP ' + response.status);
       }
-      setTimeout(() => {
-        location.reload();
-      }, 3500);
+      await waitForReboot(previousBoot);
+      location.reload();
+    } catch (e) {
+      rebooting = false;
+      btnReboot.disabled = false;
+      btnReboot.textContent = 'RETRY REBOOT';
+      btnReboot.title = e.message;
+      alert(e.message);
+      accManage();
     }
   });
 }
@@ -3061,13 +3179,18 @@ async function processCatQueue() {
   if (!payloadToSend) return;
 
   catBusy = true;
+  const feedback = document.getElementById('catCommandError');
   try {
-    await fetch('/cat', {
+    const response = await fetch('/cat', {
       method: 'POST',
       headers: CAT_POST_HEADERS,
       body: JSON.stringify(payloadToSend)
     });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    feedback.hidden = true;
   } catch (e) {
+    feedback.textContent = 'CAT command failed: ' + e.message;
+    feedback.hidden = false;
     console.error('CAT command error:', e);
   } finally {
     catBusy = false;
@@ -3712,14 +3835,13 @@ freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
     list.appendChild(row);
   }
   async function poll() {
-    if (busy || !section.open || pause.checked) return;
+    if (rebooting || busy || !section.open || pause.checked) return;
     busy = true;
     try {
       const nearBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 20;
       for (let i = 0; i < 4; i++) {   // catch up after a pause, 64 entries per answer
-        const res = await fetch('/catlog?since=' + seq, { cache: 'no-store' });
-        if (!res.ok) break;
-        const d = await res.json();
+        if (rebooting) return;
+        const d = await pollDeviceJson('/catlog?since=' + seq);
         if (d.seq < seq) { list.textContent = ''; }          // the device rebooted: start over
         d.e.forEach(add);
         seq = d.seq;
@@ -3730,7 +3852,7 @@ freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
       firstLoad = false;
       info.textContent = list.children.length + ' entries (time = device uptime)';
     } catch (e) {
-      info.textContent = 'log unavailable';
+      info.textContent = 'CAT log unavailable: ' + e.message;
     } finally {
       busy = false;
     }
@@ -3754,6 +3876,9 @@ const txPass = document.getElementById('txPass');
 const txConnect = document.getElementById('txConnect');
 const ptt = document.getElementById('txPtt');
 const txInfo = document.getElementById('txInfo');
+const txTone = document.getElementById('txTone');
+const txLevel = document.getElementById('txLevel');
+const txMeters = document.getElementById('txMeters');
 let txSocket = null;
 let txAuthenticated = false;
 let txHeld = false;
@@ -3777,10 +3902,14 @@ function releasePtt() {
 }
 
 function pressPtt() {
-  if (!txAuthenticated || txHeld || !document.hasFocus() || document.hidden) return;
+  if (!txAuthenticated || ptt.disabled || txHeld || !document.hasFocus() || document.hidden) return;
+  if (txTone.value !== 'off' && (!txLevel.value || !txLevel.validity.valid)) {
+    txInfo.textContent = 'Enter a level from −60 to −6 dBFS';
+    return;
+  }
   txHeld = true;
   ptt.setAttribute('aria-pressed', 'true');
-  sendTx({t: 'ptt', on: true});
+  sendTx({t: 'ptt', on: true, tone: txTone.value, dbfs: txTone.value === 'off' ? -24 : txLevel.valueAsNumber});
 }
 
 txConnect.addEventListener('click', () => {
@@ -3794,6 +3923,7 @@ txConnect.addEventListener('click', () => {
   let pass = txPass.value;
   txPass.value = '';
   socket.addEventListener('open', () => {
+    txInfo.textContent = 'Authorizing TX…';
     sendTx({t: 'tx_auth', pass});
     pass = '';
   });
@@ -3801,8 +3931,12 @@ txConnect.addEventListener('click', () => {
     const state = JSON.parse(event.data);
     if (state.t !== 'tx') return;
     txAuthenticated = state.auth;
-    ptt.disabled = !state.auth;
+    ptt.disabled = !state.auth || state.stopping === true;
     showTransmitState(state.on_air === true, state.tx_vfo);
+    txTone.disabled = txLevel.disabled = state.state === 'KEYED';
+    txMeters.textContent = state.state === 'KEYED' || state.po_raw || state.swr_raw
+      ? `SWR ${state.swr_x100 ? (state.swr_x100 / 100).toFixed(2) + ':1' : '—'} · RM6 ${state.swr_raw} · PO ${state.po_raw}`
+      : '';
     txInfo.textContent = state.error || state.reason || (state.state === 'KEYED'
       ? `${state.left_s} s left` : state.auth ? 'Ready' : 'TX authorization required');
     if (!state.auth) {
@@ -3810,7 +3944,7 @@ txConnect.addEventListener('click', () => {
     } else if (!txHeartbeat) {
       txHeartbeat = setInterval(() => sendTx({t: txHeld && !document.hidden && document.hasFocus() ? 'hb' : 'status'}), 250);
     }
-    if (state.error) releasePtt();
+    if (state.error || state.stopping) releasePtt();
   });
   socket.addEventListener('close', () => {
     clearInterval(txHeartbeat);
@@ -3820,9 +3954,12 @@ txConnect.addEventListener('click', () => {
     txAuthenticated = false;
     releasePtt();
     showTransmitState(false);
+    txTone.disabled = txLevel.disabled = false;
+    txMeters.textContent = '';
     ptt.disabled = true;
     txConnect.disabled = false;
     if (txInfo.textContent === 'Connecting…') txInfo.textContent = 'TX connection failed';
+    else if (txInfo.textContent === 'Authorizing TX…') txInfo.textContent = 'TX authorization connection closed';
     else if (txInfo.textContent !== 'TX authorization refused') txInfo.textContent = 'TX disconnected';
   });
 });
@@ -3902,13 +4039,25 @@ function applyRigProfile(d) {
 }
 
 const SM_POLL_MS = 400;
+let lastCatWriteError = 0;
 
 async function smPoll() {
+  if (rebooting) {
+    setTimeout(smPoll, SM_POLL_MS);
+    return;
+  }
   try {
-    const res = await fetch('/cat', { cache: 'no-store' });
-    const d = await res.json();
+    const d = await pollDeviceJson('/cat');
     const now = Date.now();
     applyRigProfile(d);
+    if (Number.isInteger(d.write_error_seq) && d.write_error_seq !== lastCatWriteError) {
+      lastCatWriteError = d.write_error_seq;
+      if (d.write_error) {
+        const feedback = document.getElementById('catCommandError');
+        feedback.textContent = 'CAT write failed: ' + d.write_error;
+        feedback.hidden = false;
+      }
+    }
     if (d.connected) {
       ledCat.classList.add('on-green');
       radioBusy = !!d.busy;
@@ -4187,8 +4336,7 @@ function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
 }
 
 // ---- Firmware build time (shown in the rig header) ----
-fetch('/status', { cache: 'no-store' })
-  .then((r) => r.json())
+pollDeviceJson('/status')
   .then((s) => {
     if (typeof s.build === 'string' && /^[A-Za-z0-9 :]{1,32}$/.test(s.build)) {
       const ver = typeof s.version === 'string' && /^[0-9.]{1,12}$/.test(s.version) ? 'V' + s.version + '  ' : '';

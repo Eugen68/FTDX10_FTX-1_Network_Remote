@@ -15,6 +15,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -53,6 +54,7 @@ typedef struct {
     cat_tx_vfo_t tx_vfo;    /*!< Transmitter selected by the radio, from FT; */
     bool tx_cat;
     bool tx_radio;
+    bool tx_radio_known;
     bool tx;                /*!< The radio is transmitting (RI P4 = 1) */
     uint8_t s_main;         /*!< S meter, MAIN side, 0-255 */
     uint8_t s_sub;          /*!< S meter, SUB side, 0-255 */
@@ -74,6 +76,8 @@ typedef struct {
     uint8_t devices;        /*!< USB devices seen on the last scan (hubs included) */
     uint8_t cp210x;         /*!< Of those, CP210x (VID 0x10C4) devices opened */
     uint8_t answered;       /*!< Of those, devices that answered ID; */
+    uint32_t write_error_seq;
+    char write_error[80];   /*!< Last failed queued CAT write */
     char last_error[80];    /*!< Last scan problem, "" if none */
 } cat_state_t;
 
@@ -103,6 +107,9 @@ typedef struct {
  */
 size_t cat_log_read(uint32_t since_seq, cat_log_entry_t *out, size_t max);
 
+/** Copy the latest RM5/RM6 entries through the given uptime, newest first. */
+size_t cat_log_recent_tx_meters(uint32_t through_ms, cat_log_entry_t *out, size_t max);
+
 /**
  * @brief Start the CAT client. Requires usb_audio_init() (it installs the USB Host Library) first.
  *
@@ -118,11 +125,30 @@ void cat_get_state(cat_state_t *state);
 
 /** True only when a recent CAT status report confirmed the radio is not transmitting. */
 bool cat_radio_rx_confirmed(void);
+typedef struct {
+    cat_rig_t rig;
+    unsigned po, swr, swr_po;
+    int64_t po_us, swr_us, swr_po_us;
+} cat_tx_meters_t;
+
+cat_tx_meters_t cat_get_tx_meters(void);
+
+typedef struct {
+    unsigned calls, timeouts, over_budget, max_us;
+} cat_write_timing_t;
+
+typedef struct {
+    cat_write_timing_t all, keyed, meters, usb_test;
+    unsigned budget_ms, keyed_poll_budget_ms;
+} cat_write_stats_t;
+
+cat_write_stats_t cat_get_write_stats(void);
+void cat_set_usb_test(bool active);
 bool cat_radio_rx_after(int64_t after_us);
 bool cat_radio_tx(void);
 esp_err_t cat_ptt(bool on);
 const char *cat_ptt_fault(int64_t started, int64_t grace_us);
-const char *cat_ptt_mode_error(void);
+const char *cat_ptt_mode_error(int64_t keyed_at);
 
 /*
  * There is deliberately no function that sends a free-form CAT string. Every command is built here from

@@ -16,6 +16,7 @@
  */
 
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <inttypes.h>
 #include "freertos/FreeRTOS.h"
@@ -24,7 +25,9 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "soc/usb_dwc_struct.h"
 #include "usb/usb_host.h"
+#include "usb/usb_helpers.h"
 #include "usb/uac_host.h"
 #include "esp_timer.h"
 #include "tx.h"
@@ -39,7 +42,28 @@
 #define USB_CORE                1        // away from the Wi-Fi driver and LwIP on core 0
 #define PREFERRED_BITS          16
 #define MAX_LOCK_WAIT_MS        500
-#define OUTPUT_PROBE_BUFFER     256      // uac_host_device_open() requires a nonempty ring buffer
+_Static_assert(CONFIG_AUDIO_RING_BUFFER_SIZE != USB_AUDIO_TX_RING_BYTES,
+               "RX and TX rings must have distinct sizes for the UAC allocator");
+
+// ESP32-S3 reports 200 FIFO lines in GHWCFG3.DFIFODEPTH. Use that budget
+// rather than the 256 lines used to calculate the driver's default bias ratios.
+// Experiment: increase bulk OUT FIFO while retaining room for stereo audio IN.
+#define USB_FIFO_LINES          200
+#define USB_NPTX_FIFO_LINES      64
+#define USB_PTX_FIFO_LINES       64
+#define USB_RX_FIFO_LINES       (USB_FIFO_LINES - USB_NPTX_FIFO_LINES - USB_PTX_FIFO_LINES)
+
+// Match usb_dwc_hal_get_mps_limits(): RX reserves two status lines.
+#define USB_RX_MPS_LIMIT        ((USB_RX_FIFO_LINES - 2) * 4)
+#define USB_BULK_OUT_MPS_LIMIT  (USB_NPTX_FIFO_LINES * 4)
+#define USB_ISOC_OUT_MPS_LIMIT  (USB_PTX_FIFO_LINES * 4)
+_Static_assert(USB_RX_MPS_LIMIT >= 192 && USB_RX_MPS_LIMIT >= 64 &&
+               USB_BULK_OUT_MPS_LIMIT >= 64 && USB_ISOC_OUT_MPS_LIMIT >= 192,
+               "FIFO must fit 48 kHz stereo UAC and full-speed CDC endpoints");
+
+#define TX_TASK_PRIORITY        18
+#define TX_BLOCK_MS             10
+#define TX_PREFILL_BLOCKS       4
 
 typedef enum {
     EVT_RX_CONNECTED,
@@ -59,10 +83,23 @@ static const char *TAG = "usb_audio";
 static QueueHandle_t s_evt_queue;
 static SemaphoreHandle_t s_lock;               // protects input state and output descriptors
 static uac_host_device_handle_t s_mic_handle;
+static uac_host_stream_config_t s_rx_format;
+static atomic_bool s_rx_paused;                // logical RX stream retained while its pipe is released
+static SemaphoreHandle_t s_output_lock;        // keeps handle open across UAC output operations
 static uac_host_device_handle_t s_output_handle;
-static uac_host_dev_alt_param_t *s_output_formats;
+static uac_host_stream_config_t s_tx_format;
+static uint32_t s_tx_play_rate;
+static bool s_output_prepared;                 // protected by s_output_lock
+static atomic_bool s_tx_finish;
+static TaskHandle_t s_tx_task;
+static atomic_bool s_tx_available;
+static atomic_bool s_tx_clean = true;
+static atomic_bool s_tx_transfer_error;
+static atomic_uint s_tx_request;               // generation, waveform and dBFS
+static atomic_uint s_tx_rate, s_tx_underruns, s_tx_written_bytes;
+static usb_audio_output_format_t s_output_format;
 static usb_audio_format_t s_fmt;
-static bool s_streaming;
+static atomic_bool s_streaming;
 
 static bool alt_supports_freq(const uac_host_dev_alt_param_t *p, uint32_t freq)
 {
@@ -124,6 +161,9 @@ static void uac_device_cb(uac_host_device_handle_t handle, const uac_host_device
         post_event(EVT_DISCONNECTED, 0, 0, handle);
         break;
     case UAC_HOST_DEVICE_EVENT_TRANSFER_ERROR:
+        if (arg != NULL) {
+            atomic_store(&s_tx_transfer_error, true);
+        }
         ESP_LOGE(TAG, "Transfer error");
         break;
     default:
@@ -165,15 +205,21 @@ static void handle_rx_connected(uint8_t addr, uint8_t iface_num)
 
     uac_host_stream_config_t stream_cfg = {0};
     uint8_t subframe_size = 0;
-    if (pick_stream_config(handle, &stream_cfg, &subframe_size) != ESP_OK ||
-            uac_host_device_start(handle, &stream_cfg) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start audio input");
+    if (pick_stream_config(handle, &stream_cfg, &subframe_size) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to select audio input format");
         uac_host_device_close(handle);
         return;
     }
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (!s_rx_paused && uac_host_device_start(handle, &stream_cfg) != ESP_OK) {
+        xSemaphoreGive(s_lock);
+        ESP_LOGE(TAG, "Failed to start audio input");
+        uac_host_device_close(handle);
+        return;
+    }
     s_mic_handle = handle;
+    s_rx_format = stream_cfg;
     s_fmt = (usb_audio_format_t) {
         .sample_rate = stream_cfg.sample_freq,
         .channels = stream_cfg.channels,
@@ -187,6 +233,124 @@ static void handle_rx_connected(uint8_t addr, uint8_t iface_num)
              s_fmt.sample_rate, s_fmt.channels, s_fmt.bit_resolution, s_fmt.subframe_size);
 }
 
+static void descriptor_client_event(const usb_host_client_event_msg_t *event, void *arg)
+{
+    // The probe issues no transfers and does not use asynchronous events.
+}
+
+static uint16_t output_alt_mps(const usb_config_desc_t *config, uint8_t iface_num, unsigned alt_index,
+                               uint8_t *endpoints, uint8_t *attributes)
+{
+    int offset;
+    const usb_intf_desc_t *iface = usb_parse_interface_descriptor(config, iface_num, 0, &offset);
+    for (unsigned i = 0; iface != NULL && i < alt_index; ++i) {
+        iface = (const usb_intf_desc_t *)usb_parse_next_descriptor_of_type(
+            (const usb_standard_desc_t *)iface, config->wTotalLength, USB_B_DESCRIPTOR_TYPE_INTERFACE, &offset);
+        if (iface != NULL && iface->bInterfaceNumber != iface_num) {
+            return 0;
+        }
+    }
+    // The streaming data endpoint precedes any explicit feedback endpoint.
+    if (iface == NULL || iface->bNumEndpoints == 0) {
+        return 0;
+    }
+    const usb_ep_desc_t *ep = usb_parse_endpoint_descriptor_by_index(iface, 0, config->wTotalLength, &offset);
+    if (ep == NULL || USB_EP_DESC_GET_EP_DIR(ep) ||
+        USB_EP_DESC_GET_XFERTYPE(ep) != USB_TRANSFER_TYPE_ISOCHRONOUS) {
+        return 0;
+    }
+    *endpoints = iface->bNumEndpoints;
+    *attributes = ep->bmAttributes;
+    return USB_EP_DESC_GET_MPS(ep);
+}
+
+static bool pick_output_config(uac_host_device_handle_t handle, const usb_config_desc_t *config,
+                               uint8_t iface_num, uac_host_stream_config_t *stream,
+                               usb_audio_output_format_t *output)
+{
+    uac_host_dev_info_t info;
+    if (uac_host_get_device_info(handle, &info) != ESP_OK) {
+        return false;
+    }
+    const uint32_t rates[] = {48000, 44100, 32000};
+    for (uint8_t channels = 1; channels <= 2; ++channels) {
+        for (size_t r = 0; r < sizeof(rates) / sizeof(rates[0]); ++r) {
+            uac_host_dev_alt_param_t selected = {0};
+            unsigned selected_alt = 0;
+            for (unsigned a = 1; a <= info.iface_alt_num; ++a) {
+                uac_host_dev_alt_param_t fmt;
+                if (uac_host_get_device_alt_param(handle, a, &fmt) != ESP_OK ||
+                    fmt.channels != channels || fmt.bit_resolution != PREFERRED_BITS ||
+                    !alt_supports_freq(&fmt, rates[r])) {
+                    continue;
+                }
+                // Mirror uac_host_device_start(): last discrete match, or stop at a continuous match.
+                selected = fmt;
+                selected_alt = a;
+                if (fmt.sample_freq_type == 0) {
+                    break;
+                }
+            }
+            if (selected_alt == 0 || selected.subframe_size != 2) {
+                continue;
+            }
+            uint8_t endpoints, attributes;
+            const uint16_t mps = output_alt_mps(config, iface_num, selected_alt, &endpoints, &attributes);
+            if (mps < rates[r] * channels * 2 / 1000 || mps > USB_ISOC_OUT_MPS_LIMIT) {
+                continue;
+            }
+            *stream = (uac_host_stream_config_t){
+                .channels = channels,
+                .bit_resolution = PREFERRED_BITS,
+                .sample_freq = rates[r],
+            };
+            *output = (usb_audio_output_format_t){
+                .channels = channels,
+                .bits = PREFERRED_BITS,
+                .mps = mps,
+                .endpoints = endpoints,
+                .attributes = attributes,
+            };
+            if (selected.sample_freq_type == 0) {
+                output->rate_min = selected.sample_freq_lower;
+                output->rate_max = selected.sample_freq_upper;
+            } else {
+                output->rate_count = selected.sample_freq_type < UAC_FREQ_NUM_MAX
+                                   ? selected.sample_freq_type : UAC_FREQ_NUM_MAX;
+                memcpy(output->rates, selected.sample_freq, output->rate_count * sizeof(output->rates[0]));
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool probe_output_config(uac_host_device_handle_t handle, uint8_t addr, uint8_t iface_num,
+                                uac_host_stream_config_t *stream, usb_audio_output_format_t *output)
+{
+    // UAC exposes alternate formats but not wMaxPacketSize. Read the cached
+    // configuration using a short-lived host client without claiming the interface.
+    const usb_host_client_config_t config = {
+        .max_num_event_msg = 1,
+        .async.client_event_callback = descriptor_client_event,
+    };
+    usb_host_client_handle_t client;
+    if (usb_host_client_register(&config, &client) != ESP_OK) {
+        return false;
+    }
+    bool selected = false;
+    usb_device_handle_t device;
+    if (usb_host_device_open(client, addr, &device) == ESP_OK) {
+        const usb_config_desc_t *descriptor;
+        if (usb_host_get_active_config_descriptor(device, &descriptor) == ESP_OK) {
+            selected = pick_output_config(handle, descriptor, iface_num, stream, output);
+        }
+        ESP_ERROR_CHECK_WITHOUT_ABORT(usb_host_device_close(client, device));
+    }
+    ESP_ERROR_CHECK_WITHOUT_ABORT(usb_host_client_deregister(client));
+    return selected;
+}
+
 static void handle_output_connected(uint8_t addr, uint8_t iface_num)
 {
     if (s_output_handle != NULL) {
@@ -197,8 +361,9 @@ static void handle_output_connected(uint8_t addr, uint8_t iface_num)
     const uac_host_device_config_t config = {
         .addr = addr,
         .iface_num = iface_num,
-        .buffer_size = OUTPUT_PROBE_BUFFER,
+        .buffer_size = USB_AUDIO_TX_RING_BYTES,
         .callback = uac_device_cb,
+        .callback_arg = &s_tx_available,  // marks this interface as output
     };
     uac_host_device_handle_t handle = NULL;
     esp_err_t err = uac_host_device_open(&config, &handle);
@@ -210,48 +375,51 @@ static void handle_output_connected(uint8_t addr, uint8_t iface_num)
 
     ESP_LOGI(TAG, "Audio output (addr %u, iface %u), descriptor probe only", addr, iface_num);
     uac_host_printf_device_param(handle);
-    uac_host_dev_info_t info;
-    uac_host_dev_alt_param_t *formats = NULL;
-    if (uac_host_get_device_info(handle, &info) == ESP_OK && info.iface_alt_num > 0) {
-        formats = calloc(info.iface_alt_num, sizeof(*formats));
-        if (formats != NULL) {
-            for (unsigned i = 0; i < info.iface_alt_num; i++) {
-                if (uac_host_get_device_alt_param(handle, i + 1, &formats[i]) != ESP_OK) {
-                    free(formats);
-                    formats = NULL;
-                    break;
-                }
-            }
-        }
-    }
-    if (formats == NULL) {
-        ESP_LOGW(TAG, "Unable to cache audio output formats");
+    uac_host_stream_config_t stream = {0};
+    usb_audio_output_format_t output = {0};
+    const bool selected = probe_output_config(handle, addr, iface_num, &stream, &output);
+    if (selected) {
+        ESP_LOGI(TAG, "Audio output selected: %" PRIu32 " Hz, %u ch, %u bit, endpoint MPS %u B",
+                 stream.sample_freq, output.channels, output.bits, output.mps);
+    } else {
+        ESP_LOGW(TAG, "No supported 16-bit USB audio output format (addr %u, iface %u)", addr, iface_num);
     }
 
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    xSemaphoreTake(s_output_lock, portMAX_DELAY);
+    s_tx_format = stream;
     s_output_handle = handle;
-    s_output_formats = formats;
-    xSemaphoreGive(s_lock);
+    s_output_format = output;
+    atomic_store(&s_tx_available, selected);
+    xSemaphoreGive(s_output_lock);
 }
 
 static void handle_disconnected(uac_host_device_handle_t handle)
 {
-    uac_host_dev_alt_param_t *formats = NULL;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    xSemaphoreTake(s_output_lock, portMAX_DELAY);
     const bool output = handle == s_output_handle;
     if (output) {
+        atomic_store(&s_tx_available, false);
+        if (!s_output_prepared) {
+            atomic_store(&s_tx_clean, true);
+        }
+        s_output_prepared = false;
         s_output_handle = NULL;
-        formats = s_output_formats;
-        s_output_formats = NULL;
-    } else if (handle == s_mic_handle) {
-        s_streaming = false;
-        s_mic_handle = NULL;
+        s_output_format = (usb_audio_output_format_t){0};
+        uac_host_device_close(handle);
     }
-    xSemaphoreGive(s_lock);
-
-    free(formats);
+    xSemaphoreGive(s_output_lock);
+    if (output) {
+        tx_unkey("USB audio output lost");
+    } else {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        if (handle == s_mic_handle) {
+            s_streaming = false;
+            s_mic_handle = NULL;
+        }
+        xSemaphoreGive(s_lock);
+        uac_host_device_close(handle);
+    }
     ESP_LOGI(TAG, "Audio %s disconnected", output ? "output" : "input");
-    uac_host_device_close(handle);
 }
 
 // ---- Recovery when the radio's audio does not come up ----------------------------------------------------
@@ -283,7 +451,7 @@ static void recover_tick(void)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     streaming = s_streaming;
     xSemaphoreGive(s_lock);
-    if (streaming) {
+    if (streaming || s_rx_paused) {
         s_dev_seen_ms = 0;
         s_recover_attempts = 0;
         return;
@@ -355,9 +523,18 @@ static void usb_lib_task(void *arg)
     const usb_host_config_t host_config = {
         .skip_phy_setup = false,
         .intr_flags = ESP_INTR_FLAG_LOWMED,
+        .fifo_settings_custom = {
+            .nptx_fifo_lines = USB_NPTX_FIFO_LINES,
+            .ptx_fifo_lines = USB_PTX_FIFO_LINES,
+            .rx_fifo_lines = USB_RX_FIFO_LINES,
+        },
     };
     ESP_ERROR_CHECK(usb_host_install(&host_config));
-    ESP_LOGI(TAG, "USB Host installed");
+    const unsigned fifo_depth = USB_DWC.ghwcfg3_reg.dfifodepth;
+    ESP_LOGI(TAG, "USB Host installed, FIFO lines: RX %u, NPTX %u, PTX %u, hardware depth %u",
+             USB_RX_FIFO_LINES, USB_NPTX_FIFO_LINES, USB_PTX_FIFO_LINES, fifo_depth);
+    ESP_LOGI(TAG, "FIFO MPS limits: IN %u B, bulk/control OUT %u B, periodic OUT %u B",
+             USB_RX_MPS_LIMIT, USB_BULK_OUT_MPS_LIMIT, USB_ISOC_OUT_MPS_LIMIT);
     xTaskNotifyGive((TaskHandle_t)arg);
 
     while (1) {
@@ -369,11 +546,232 @@ static void usb_lib_task(void *arg)
     }
 }
 
+bool usb_audio_tx_available(void)
+{
+    return atomic_load(&s_tx_available);
+}
+
+bool usb_audio_tx_idle(void)
+{
+    return atomic_load(&s_tx_clean);
+}
+
+static void restore_rx(bool channel_available)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_rx_paused) {
+        const esp_err_t err = !channel_available || !s_mic_handle
+                              ? ESP_ERR_INVALID_STATE : uac_host_device_start(s_mic_handle, &s_rx_format);
+        if (err != ESP_OK) {
+            s_streaming = false;
+            ESP_LOGW(TAG, "USB audio RX restore failed: %s", esp_err_to_name(err));
+        } else {
+            ESP_LOGI(TAG, "USB audio RX restored after TX");
+        }
+        s_rx_paused = false;
+    }
+    xSemaphoreGive(s_lock);
+}
+
+static void finish_audio_tx(void)
+{
+    // Called with s_output_lock. Never reuse a pipe that could not be stopped.
+    const esp_err_t err = !s_output_handle ? ESP_OK : uac_host_device_stop(s_output_handle);
+    if (err != ESP_OK) {
+        atomic_store(&s_tx_available, false);
+        ESP_LOGW(TAG, "USB TX audio stop failed: %s", esp_err_to_name(err));
+    }
+    s_output_prepared = false;
+    atomic_store(&s_tx_rate, 0);
+    restore_rx(err == ESP_OK);
+    atomic_store(&s_tx_clean, err == ESP_OK);
+}
+
+esp_err_t usb_audio_tx_prepare(bool share_rx_channel, uint32_t test_rate)
+{
+    xSemaphoreTake(s_output_lock, portMAX_DELAY);
+    if (!s_tx_clean || !s_tx_available || !s_output_handle) {
+        xSemaphoreGive(s_output_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uac_host_stream_config_t stream = s_tx_format;
+    if (test_rate) {
+        // The FTX-1 stereo alternate advertises both rates on the same endpoint.
+        bool supported = false;
+        for (unsigned i = 0; i < s_output_format.rate_count; ++i) {
+            supported |= s_output_format.rates[i] == test_rate;
+        }
+        if (!supported) {
+            xSemaphoreGive(s_output_lock);
+            return ESP_ERR_NOT_SUPPORTED;
+        }
+        stream.sample_freq = test_rate;
+    }
+
+    const bool pause_rx = share_rx_channel || s_output_format.endpoints > 1;
+    if (pause_rx) {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_rx_paused = true;
+        const esp_err_t err = s_streaming && s_mic_handle
+                              ? uac_host_device_stop(s_mic_handle) : ESP_ERR_INVALID_STATE;
+        if (err != ESP_OK) {
+            s_streaming = false;
+            s_rx_paused = false;
+            xSemaphoreGive(s_lock);
+            xSemaphoreGive(s_output_lock);
+            ESP_LOGW(TAG, "USB audio RX pause failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        xSemaphoreGive(s_lock);
+    }
+
+    atomic_store(&s_tx_clean, false);
+    atomic_store(&s_tx_transfer_error, false);
+    atomic_store(&s_tx_written_bytes, 0);
+    atomic_store(&s_tx_underruns, 0);
+    usb_audio_tx_reset_transfer_stats();
+    ESP_LOGI(TAG, "USB TX start: endpoints=%u bmAttributes=0x%02x sync_type=%u rx_paused=%s",
+             s_output_format.endpoints, s_output_format.attributes,
+             (s_output_format.attributes >> 2) & 3, pause_rx ? "yes" : "no");
+    const esp_err_t err = uac_host_device_start(s_output_handle, &stream);
+    if (err == ESP_OK) {
+        s_tx_play_rate = stream.sample_freq;
+        s_output_prepared = true;
+    } else {
+        ESP_LOGW(TAG, "USB TX audio start failed: %s", esp_err_to_name(err));
+        finish_audio_tx();
+    }
+    xSemaphoreGive(s_output_lock);
+    return err;
+}
+
+bool usb_audio_tx_cleanup_pending(void)
+{
+    return atomic_load(&s_tx_finish);
+}
+
+void usb_audio_tx_finished(void)
+{
+    atomic_store(&s_tx_finish, true);
+    xTaskNotifyGive(s_tx_task);
+}
+
+bool usb_audio_rx_paused(void)
+{
+    return atomic_load(&s_rx_paused);
+}
+
+void usb_audio_tx_request(tx_tone_t tone, int dbfs)
+{
+    static unsigned generation; // calls are serialized by the TX state lock
+    unsigned request = 0;
+    if (tone != TX_TONE_OFF) {
+        generation = (generation + 1) & 0x00ffffffu;
+        request = (generation << 8) | ((unsigned)(-dbfs) << 2) | (unsigned)tone;
+    }
+    atomic_store(&s_tx_request, request);
+    if (s_tx_task) {
+        xTaskNotifyGive(s_tx_task);
+    }
+}
+
+usb_tx_stats_t usb_audio_tx_stats(void)
+{
+    return (usb_tx_stats_t){
+        .audio_rate = atomic_load(&s_tx_rate),
+        .underruns = atomic_load(&s_tx_underruns),
+        .written_bytes = atomic_load(&s_tx_written_bytes),
+    };
+}
+
+static void tx_audio_task(void *arg)
+{
+    int16_t pcm[(48000 / 100) * 2];
+    unsigned active = 0, bytes = 0;
+    TickType_t tick = xTaskGetTickCount();
+    int64_t last_write_us = 0;
+    for (;;) {
+        const unsigned request = atomic_load(&s_tx_request);
+        if (!request && !active && !atomic_load(&s_tx_finish)) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
+        }
+
+        const char *error = NULL;
+        xSemaphoreTake(s_output_lock, portMAX_DELAY);
+        if (atomic_load(&s_tx_finish)) {
+            if (!s_tx_clean) {
+                finish_audio_tx();
+                if (s_tx_clean) {
+                    ESP_LOGI(TAG, "USB TX audio stopped");
+                }
+            }
+            atomic_store(&s_tx_finish, false);
+        }
+        if (active && (active != request || !s_output_prepared || !s_output_handle)) {
+            active = 0;
+            atomic_store(&s_tx_rate, 0);
+        }
+
+        unsigned blocks = 1;
+        if (request && !active && s_output_prepared && s_output_handle &&
+            request == atomic_load(&s_tx_request)) {
+            active = request;
+            tx_tone_fill(pcm, s_tx_play_rate, s_tx_format.channels,
+                         (tx_tone_t)(request & 3), -(int)((request >> 2) & 63));
+            bytes = (s_tx_play_rate / 100) * s_tx_format.channels * sizeof(pcm[0]);
+            atomic_store(&s_tx_rate, s_tx_play_rate);
+            tick = xTaskGetTickCount();
+            last_write_us = 0;
+            blocks = TX_PREFILL_BLOCKS;
+        }
+        if (active) {
+            const esp_err_t submit_error = usb_audio_tx_transfer_stats().submit_error;
+            if (submit_error != ESP_OK) {
+                ESP_LOGW(TAG, "USB TX transfer submit: %s", esp_err_to_name(submit_error));
+                error = "USB TX submit failed";
+            } else if (atomic_exchange(&s_tx_transfer_error, false)) {
+                error = "USB TX transfer failed";
+            }
+        }
+        if (active && !error && active == atomic_load(&s_tx_request)) {
+            const int64_t now = esp_timer_get_time();
+            if (last_write_us && now - last_write_us >= 2 * TX_BLOCK_MS * 1000) {
+                atomic_fetch_add(&s_tx_underruns, 1);
+                tick = xTaskGetTickCount();
+            }
+            last_write_us = now;
+            for (unsigned i = 0; i < blocks && active == atomic_load(&s_tx_request); ++i) {
+                const esp_err_t err = uac_host_device_write(s_output_handle, (uint8_t *)pcm, bytes, 0);
+                if (err != ESP_OK) {
+                    if (err != ESP_ERR_TIMEOUT) {
+                        error = "USB TX audio write failed";
+                    }
+                    break;
+                }
+                atomic_fetch_add(&s_tx_written_bytes, bytes);
+            }
+        }
+        xSemaphoreGive(s_output_lock);
+        if (error) {
+            ESP_LOGW(TAG, "%s", error);
+            if (atomic_load(&s_tx_request) == request) {
+                tx_unkey(error);
+            }
+        }
+        if (active) {
+            xTaskDelayUntil(&tick, pdMS_TO_TICKS(TX_BLOCK_MS));
+        }
+    }
+}
+
 esp_err_t usb_audio_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
+    s_output_lock = xSemaphoreCreateMutex();
     s_evt_queue = xQueueCreate(8, sizeof(evt_t));
-    ESP_RETURN_ON_FALSE(s_lock && s_evt_queue, ESP_ERR_NO_MEM, TAG, "no memory");
+    ESP_RETURN_ON_FALSE(s_lock && s_output_lock && s_evt_queue, ESP_ERR_NO_MEM, TAG, "no memory");
 
     // Everything USB on core 1: usb_host_install() runs in usb_lib_task, so the USB interrupt is allocated
     // on core 1 too. On core 0 the Wi-Fi driver (priority 23) starved the USB tasks and interrupt while the
@@ -394,6 +792,8 @@ esp_err_t usb_audio_init(void)
     };
     ESP_RETURN_ON_ERROR(uac_host_install(&uac_config), TAG, "uac install");
 
+    ok = xTaskCreatePinnedToCore(tx_audio_task, "usb_tx", 4096, NULL, TX_TASK_PRIORITY, &s_tx_task, USB_CORE);
+    ESP_RETURN_ON_FALSE(ok == pdTRUE, ESP_ERR_NO_MEM, TAG, "TX audio task");
     ok = xTaskCreatePinnedToCore(manager_task, "uac_mgr", 4096, NULL, MANAGER_TASK_PRIORITY, NULL, 0);
     ESP_RETURN_ON_FALSE(ok == pdTRUE, ESP_ERR_NO_MEM, TAG, "manager task");
 
@@ -403,10 +803,13 @@ esp_err_t usb_audio_init(void)
 
 bool usb_audio_get_format(usb_audio_format_t *fmt)
 {
-    bool streaming;
+    // The TX watchdog checks only presence. Never queue it behind a blocking PCM read.
+    if (!fmt) {
+        return atomic_load(&s_streaming);
+    }
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    streaming = s_streaming;
-    if (streaming && fmt) {
+    const bool streaming = atomic_load(&s_streaming);
+    if (streaming) {
         *fmt = s_fmt;
     }
     xSemaphoreGive(s_lock);
@@ -415,23 +818,10 @@ bool usb_audio_get_format(usb_audio_format_t *fmt)
 
 bool usb_audio_get_output_format(usb_audio_output_format_t *fmt)
 {
-    *fmt = (usb_audio_output_format_t){0};
-    xSemaphoreTake(s_lock, portMAX_DELAY);
+    xSemaphoreTake(s_output_lock, portMAX_DELAY);
     const bool present = s_output_handle != NULL;
-    if (s_output_formats != NULL) {
-        const uac_host_dev_alt_param_t *alt = &s_output_formats[0];
-        fmt->channels = alt->channels;
-        fmt->bits = alt->bit_resolution;
-        if (alt->sample_freq_type == 0) {
-            fmt->rate_min = alt->sample_freq_lower;
-            fmt->rate_max = alt->sample_freq_upper;
-        } else {
-            fmt->rate_count = alt->sample_freq_type < UAC_FREQ_NUM_MAX
-                            ? alt->sample_freq_type : UAC_FREQ_NUM_MAX;
-            memcpy(fmt->rates, alt->sample_freq, fmt->rate_count * sizeof(fmt->rates[0]));
-        }
-    }
-    xSemaphoreGive(s_lock);
+    *fmt = s_output_format;
+    xSemaphoreGive(s_output_lock);
     return present;
 }
 
@@ -439,10 +829,10 @@ esp_err_t usb_audio_read(uint8_t *buf, uint32_t size, uint32_t *bytes_read, Tick
 {
     esp_err_t ret = ESP_ERR_INVALID_STATE;
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(MAX_LOCK_WAIT_MS)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
+        return s_rx_paused ? ESP_ERR_NOT_FINISHED : ESP_ERR_TIMEOUT;
     }
     if (s_streaming) {
-        ret = uac_host_device_read(s_mic_handle, buf, size, bytes_read, timeout);
+        ret = s_rx_paused ? ESP_ERR_NOT_FINISHED : uac_host_device_read(s_mic_handle, buf, size, bytes_read, timeout);
     }
     xSemaphoreGive(s_lock);
     return ret;

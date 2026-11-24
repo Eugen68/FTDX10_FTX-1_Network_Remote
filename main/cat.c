@@ -83,6 +83,11 @@
 #define RADIO_STATUS_MAX_AGE_US 1500000LL  // BUSY/TX is polled every five iterations
 #define ANSWER_TIMEOUT_MS   300
 #define TX_TIMEOUT_MS       200
+#define KEYED_WRITE_TIMEOUT_MS 1200
+#define FTX1_KEYED_REPLY_TIMEOUT_US 1500000LL
+#define FTDX10_KEYED_REPLY_TIMEOUT_US 300000LL
+#define KEYED_CAT_MAX_AGE_US   3000000LL
+#define FTDX10_HI_SWR_STARTUP_US 300000LL
 #define RX_BUF_BYTES        64
 #define MAX_FAILS           10       // consecutive missing answers before the port is dropped
 #define SCAN_PERIOD_MS      2000
@@ -105,12 +110,19 @@ static SemaphoreHandle_t s_ptt_lock;  // serializes PTT writes with closing the 
 static cdc_acm_dev_hdl_t s_ptt_port;
 static bool s_ptt_ready;
 static int64_t s_swr_status_us;
+static int64_t s_hi_swr_us;
+static int64_t s_normal_swr_us;
+static int64_t s_rm6_reply_us;
+static bool s_unkey_requested;
+static cat_tx_meters_t s_tx_meters;
+static cat_write_stats_t s_write_stats;
+static unsigned s_usb_test_generation;
+static bool s_usb_test_active;
 static int64_t s_tx_vfo_status_us;
 static int64_t s_mode_status_us[2];
 static char s_reported_mode[2];
 static int64_t s_last_ptt_status_us;
 static char s_ptt_mode;
-static bool s_hi_swr;
 static int64_t s_last_answer_us;
 static int64_t s_last_tx_status_us;     // protected by s_lock
 static int64_t s_last_set_main_sq_us;
@@ -380,7 +392,7 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         return ctl && pl == 0;
     case CAT_TWO('A', 'I'):         // auto information ON
         return ctl && pl == 1 && p[0] == '1';
-    case CAT_TWO('R', 'I'):         // radio information (read), FTX-1
+    case CAT_TWO('R', 'I'):         // radio information (read), including Hi-SWR
         return rig->can_tx && pl == 1 && p[0] == '0';
     case CAT_TWO('B', 'Y'):         // busy (read), FTDX10
         return rig->has_by_tx && pl == 0;
@@ -392,7 +404,8 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         }
         return rig->can_tx && (pl == 0 || (pl == 1 && p[0] == '1' && app_config_tx_enabled()));
     case CAT_TWO('R', 'M'):         // meter (read): the S meter item of this radio only
-        return rig->meter_side != 0 && pl == 1 && p[0] == rig->meter_side;
+        return pl == 1 && ((rig->meter_side && p[0] == rig->meter_side) ||
+                           (rig->can_tx && (p[0] == '5' || p[0] == '6')));
     case CAT_TWO('P', 'S'):         // power
         return ctl && pl == 1 && is_side(p[0]);
     case CAT_TWO('F', 'A'):         // frequency, read or set within the radio's range
@@ -528,6 +541,9 @@ size_t cat_log_read(uint32_t since_seq, cat_log_entry_t *out, size_t max)
     size_t n = 0;
     taskENTER_CRITICAL(&s_log_mux);
     const uint32_t last = s_log_seq;
+    if (since_seq > last) {
+        since_seq = 0;  // the browser kept its cursor across a board restart
+    }
     uint32_t first = (last > CAT_LOG_LEN) ? last - CAT_LOG_LEN + 1 : 1;
     if (since_seq + 1 > first) {
         first = since_seq + 1;
@@ -539,8 +555,35 @@ size_t cat_log_read(uint32_t since_seq, cat_log_entry_t *out, size_t max)
     return n;
 }
 
+size_t cat_log_recent_tx_meters(uint32_t through_ms, cat_log_entry_t *out, size_t max)
+{
+    size_t n = 0;
+    taskENTER_CRITICAL(&s_log_mux);
+    const uint32_t last = s_log_seq;
+    const uint32_t available = last < CAT_LOG_LEN ? last : CAT_LOG_LEN;
+    for (uint32_t i = 0; n < max && i < available; ++i) {
+        const cat_log_entry_t *entry = &s_log[(last - i) % CAT_LOG_LEN];
+        if ((int32_t)(entry->ms - through_ms) <= 0 && entry->text[0] == 'R' && entry->text[1] == 'M' &&
+            (entry->text[2] == '5' || entry->text[2] == '6')) {
+            out[n++] = *entry;
+        }
+    }
+    taskEXIT_CRITICAL(&s_log_mux);
+    return n;
+}
+
+static void capture_write_timing(cat_write_timing_t *stats, unsigned us, esp_err_t err, unsigned budget_ms)
+{
+    ++stats->calls;
+    stats->timeouts += err == ESP_ERR_TIMEOUT;
+    stats->over_budget += us > budget_ms * 1000;
+    if (us > stats->max_us) {
+        stats->max_us = us;
+    }
+}
+
 /** The only place that writes to the radio */
-static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_kind_t kind)
+static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_kind_t kind, bool keyed_poll)
 {
     if (!cat_cmds_allowed(cmds, CAT_TX_MAX_CMDS)) {
         ESP_LOGE(TAG, "Blocked a CAT command that is not on the allow-list");
@@ -549,14 +592,38 @@ static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_ki
         }
         return ESP_ERR_INVALID_ARG;
     }
-    const esp_err_t err = cdc_acm_host_data_tx_blocking(dev, (const uint8_t *)cmds, strlen(cmds), TX_TIMEOUT_MS);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const bool keyed = s_state.tx_cat;
+    if ((keyed_poll && (!keyed || s_unkey_requested)) ||
+        (keyed && !keyed_poll && strcmp(cmds, "TX0;") != 0)) {
+        xSemaphoreGive(s_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    const unsigned usb_test = s_usb_test_active ? s_usb_test_generation : 0;
+    xSemaphoreGive(s_lock);
+    const unsigned budget_ms = keyed_poll ? KEYED_WRITE_TIMEOUT_MS : TX_TIMEOUT_MS;
+    const int64_t start = esp_timer_get_time();
+    const esp_err_t err = cdc_acm_host_data_tx_blocking(dev, (const uint8_t *)cmds, strlen(cmds), budget_ms);
+    const unsigned elapsed = (unsigned)(esp_timer_get_time() - start);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    capture_write_timing(&s_write_stats.all, elapsed, err, budget_ms);
+    if (keyed) {
+        capture_write_timing(&s_write_stats.keyed, elapsed, err, budget_ms);
+    }
+    if (usb_test && usb_test == s_usb_test_generation) {
+        capture_write_timing(&s_write_stats.usb_test, elapsed, err, budget_ms);
+    }
+    if (strcmp(cmds, "RM5;RM6;") == 0) {
+        capture_write_timing(&s_write_stats.meters, elapsed, err, budget_ms);
+    }
+    xSemaphoreGive(s_lock);
     log_cmds('T', err == ESP_OK ? kind : CAT_LOG_ERROR, cmds);
     return err;
 }
 
 static esp_err_t cat_tx(cdc_acm_dev_hdl_t dev, const char *cmds)
 {
-    return cat_tx_kind(dev, cmds, CAT_LOG_CMD);
+    return cat_tx_kind(dev, cmds, CAT_LOG_CMD, false);
 }
 
 /** Send a command and wait for the answer that starts with the same two letters */
@@ -626,12 +693,16 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_state.tx = false;
         s_last_tx_status_us = 0;
         s_swr_status_us = 0;
+        s_hi_swr_us = 0;
+        s_normal_swr_us = 0;
+        s_rm6_reply_us = 0;
+        s_unkey_requested = false;
+        s_tx_meters = (cat_tx_meters_t){0};
         s_tx_vfo_status_us = 0;
         memset(s_mode_status_us, 0, sizeof(s_mode_status_us));
         s_state.tx_vfo = CAT_TX_VFO_UNKNOWN;
         s_last_ptt_status_us = 0;
         s_ptt_mode = 0;
-        s_hi_swr = false;
         s_state.tx_cat = false;
         s_state.s_main = 0;
         s_state.s_sub = 0;
@@ -904,8 +975,13 @@ static void handle_cat_packet(const char *pkt)
     if ((s_rig->has_by_tx && strlen(pkt) == 5 && strncmp(pkt, "RI0", 3) == 0 && pkt[4] == ';') ||
         (s_rig->has_ri && strlen(pkt) == RI_LEN && strncmp(pkt, "RI0", 3) == 0 && pkt[RI_LEN - 1] == ';')) {
         if ((pkt[3] == '0' || pkt[3] == '1') && xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
-            s_hi_swr = pkt[3] == '1';
-            s_swr_status_us = esp_timer_get_time();
+            s_swr_status_us = now_pkt_us;
+            s_last_answer_us = now_pkt_us;
+            if (pkt[3] == '1') {
+                s_hi_swr_us = now_pkt_us;
+            } else {
+                s_normal_swr_us = now_pkt_us;
+            }
             xSemaphoreGive(s_lock);
         }
     }
@@ -939,6 +1015,7 @@ static void handle_cat_packet(const char *pkt)
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
             s_state.tx_vfo = pkt[2] == '0' ? CAT_TX_VFO_MAIN : CAT_TX_VFO_SUB;
             s_tx_vfo_status_us = now_pkt_us;
+            s_last_answer_us = now_pkt_us;
             xSemaphoreGive(s_lock);
         }
         return;
@@ -953,6 +1030,33 @@ static void handle_cat_packet(const char *pkt)
             s_last_tx_status_us = s_last_answer_us;
             s_last_ptt_status_us = s_last_answer_us;
             s_ptt_mode = pkt[2];
+            xSemaphoreGive(s_lock);
+        }
+        return;
+    }
+
+    // Both manuals use RM + item + three digits + reserved 000 + semicolon.
+    if (s_rig->can_tx && strlen(pkt) == 10 && strncmp(pkt, "RM", 2) == 0 &&
+        (pkt[2] == '5' || pkt[2] == '6') && all_digits(pkt + 3, 3) &&
+        memcmp(pkt + 6, "000;", 4) == 0) {
+        const unsigned raw = digits_value(pkt + 3, 3);
+        if (raw <= 255 && xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+            s_tx_meters.rig = s_rig->rig;
+            s_last_answer_us = now_pkt_us;
+            if (pkt[2] == '5') {
+                s_tx_meters.po = raw;
+                s_tx_meters.po_us = now_pkt_us;
+            } else {
+                s_rm6_reply_us = now_pkt_us;
+                if (s_tx_meters.po_us > s_tx_meters.swr_po_us &&
+                    now_pkt_us - s_tx_meters.po_us <= 250000) {
+                    // RM5 precedes RM6 in each poll. A later SWR cannot refresh an old PO/SWR pair.
+                    s_tx_meters.swr = raw;
+                    s_tx_meters.swr_us = now_pkt_us;
+                    s_tx_meters.swr_po = s_tx_meters.po;
+                    s_tx_meters.swr_po_us = s_tx_meters.po_us;
+                }
+            }
             xSemaphoreGive(s_lock);
         }
         return;
@@ -1014,7 +1118,7 @@ static bool data_usb_active(void)
 static void send_poll(cdc_acm_dev_hdl_t dev, const char *cmds)
 {
     if (cmds != NULL) {
-        cat_tx_kind(dev, cmds, CAT_LOG_POLL);
+        cat_tx_kind(dev, cmds, CAT_LOG_POLL, false);
     }
 }
 
@@ -1029,10 +1133,73 @@ static void initialize_ptt_port(cdc_acm_dev_hdl_t dev)
     xSemaphoreGive(s_ptt_lock);
 }
 
+static void report_queued_write_failure(const char *cmd, esp_err_t err)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    ++s_state.write_error_seq;
+    snprintf(s_state.write_error, sizeof(s_state.write_error), "%s: %s", cmd, esp_err_to_name(err));
+    xSemaphoreGive(s_lock);
+}
+
+typedef struct {
+    int64_t sent_at;
+    bool status;
+    unsigned meters_until_status;
+} keyed_poll_t;
+
+static bool keyed_poll_answered(const rig_profile_t *rig, const keyed_poll_t *poll)
+{
+    const int64_t sent_at = poll->sent_at;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const bool answered = poll->status
+        ? s_last_ptt_status_us >= sent_at && s_swr_status_us >= sent_at &&
+          s_tx_vfo_status_us >= sent_at && s_mode_status_us[0] >= sent_at &&
+          (!rig->dual_rx || s_mode_status_us[1] >= sent_at)
+        : s_tx_meters.po_us >= sent_at && s_rm6_reply_us >= s_tx_meters.po_us;
+    xSemaphoreGive(s_lock);
+    return answered;
+}
+
+static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_poll_t *poll)
+{
+    const int64_t now = esp_timer_get_time();
+    bool recheck_swr = false;
+    if (poll->sent_at) {
+        const int64_t elapsed = now - poll->sent_at;
+        // On the FTDX10 a missing reply must leave time for another meter poll
+        // before the SWR watchdog reaches its 1.1 s freshness limit.
+        const int64_t reply_timeout = rig->rig == CAT_RIG_FTDX10
+            ? FTDX10_KEYED_REPLY_TIMEOUT_US : FTX1_KEYED_REPLY_TIMEOUT_US;
+        if (elapsed < POLL_PERIOD_MS * 1000 ||
+            (elapsed < reply_timeout && !keyed_poll_answered(rig, poll))) {
+            return;
+        }
+        if (rig->rig == CAT_RIG_FTDX10 && poll->status) {
+            // Check a possible startup spike again without waiting for two meter polls.
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            recheck_swr = s_hi_swr_us >= poll->sent_at && s_normal_swr_us < s_hi_swr_us;
+            xSemaphoreGive(s_lock);
+        }
+    }
+
+    // Record before writing: a reply can arrive before the CDC write returns.
+    poll->sent_at = now;
+    poll->status = recheck_swr || poll->meters_until_status == 0;
+    const char *cmds = "RM5;RM6;";
+    if (poll->status) {
+        cmds = rig->dual_rx ? "RI0;TX;FT;MD0;MD1;" : "TX;RI0;FT;MD0;";
+        poll->meters_until_status = rig->rig == CAT_RIG_FTX1 ? 1 : 2;
+    } else {
+        --poll->meters_until_status;
+    }
+    cat_tx_kind(dev, cmds, CAT_LOG_POLL, true);
+}
+
 static void poll_loop(cdc_acm_dev_hdl_t dev)
 {
     const rig_profile_t *rig = s_rig;
     uint32_t poll_count = 0;
+    keyed_poll_t keyed_poll = {0};
     bool usb_level_applied = false;   // DATA audio output level already set for the current DATA-USB session
 
     // Request the initial state asynchronously (rx_cb parses answers as they arrive). The sync string
@@ -1044,18 +1211,41 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
     send_poll(dev, rig->poll_fast);
 
     while (!s_disconnected) {
+        if (rig->can_tx && cat_tx_requested()) {
+            poll_keyed(dev, rig, &keyed_poll);
+            vTaskDelay(pdMS_TO_TICKS(POLL_PERIOD_MS));
+            continue;
+        }
+        if (keyed_poll.sent_at) {
+            // Refresh radio status immediately after a TX0, before normal polling.
+            send_poll(dev, rig->poll_status);
+            keyed_poll = (keyed_poll_t){0};
+        }
         // 1. Process any pending commands in the queue (already checked against the allow-list when queued)
         cat_cmd_item_t item;
-        while (s_cmd_queue && xQueueReceive(s_cmd_queue, &item, 0) == pdTRUE) {
+        while (s_cmd_queue && !cat_tx_requested() && xQueueReceive(s_cmd_queue, &item, 0) == pdTRUE) {
             ESP_LOGI(TAG, "Sending CAT command: %s", item.cmd);
-            cat_tx(dev, item.cmd);
+            const esp_err_t err = cat_tx(dev, item.cmd);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "CAT write failed (%s): %s", item.cmd, esp_err_to_name(err));
+                report_queued_write_failure(item.cmd, err);
+                break;
+            }
             vTaskDelay(pdMS_TO_TICKS(10));
+            if (strncmp(item.cmd, "MD", 2) == 0 && strlen(item.cmd) == 5) {
+                const char readback[] = {'M', 'D', item.cmd[2], ';', '\0'};
+                send_poll(dev, readback);
+            }
             // SV (swap) / AB / BA (copy) change both VFOs: re-read them so the UI does not
             // show stale values until the next periodic sync
             if (strcmp(item.cmd, "SV;") == 0 || strcmp(item.cmd, "AB;") == 0 || strcmp(item.cmd, "BA;") == 0) {
                 vTaskDelay(pdMS_TO_TICKS(100));
                 send_poll(dev, rig->resync_vfo);
             }
+        }
+
+        if (rig->can_tx && cat_tx_requested()) {
+            continue;
         }
 
         // 1b. Entering DATA-USB (from the web UI or the radio itself): set the DATA audio output level
@@ -1083,10 +1273,7 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             }
             send_poll(dev, rig->poll_status);
             if (rig->can_tx && app_config_tx_enabled()) {
-                send_poll(dev, "FT;MD0;MD1;");
-            }
-            if (rig->has_by_tx && cat_tx_requested()) {
-                send_poll(dev, "RI0;");
+                send_poll(dev, rig->dual_rx ? "FT;MD0;MD1;" : "FT;MD0;");
             }
         }
 
@@ -1260,12 +1447,46 @@ void cat_get_state(cat_state_t *state)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *state = s_state;
-    state->tx_radio = s_state.tx;
+    const int64_t now = esp_timer_get_time();
+    state->tx_radio_known = s_state.connected && !s_disconnected && s_last_tx_status_us > 0 &&
+                            now - s_last_tx_status_us <= RADIO_STATUS_MAX_AGE_US;
+    state->tx_radio = state->tx_radio_known && s_state.tx;
     if (!s_state.connected || s_disconnected || s_tx_vfo_status_us == 0 ||
         esp_timer_get_time() - s_tx_vfo_status_us > RADIO_STATUS_MAX_AGE_US) {
         state->tx_vfo = CAT_TX_VFO_UNKNOWN;
     }
     state->age_ms = s_state.connected ? (uint32_t)((esp_timer_get_time() - s_last_answer_us) / 1000) : 0;
+    xSemaphoreGive(s_lock);
+}
+
+cat_tx_meters_t cat_get_tx_meters(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const cat_tx_meters_t meters = s_tx_meters;
+    xSemaphoreGive(s_lock);
+    return meters;
+}
+
+cat_write_stats_t cat_get_write_stats(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    cat_write_stats_t stats = s_write_stats;
+    xSemaphoreGive(s_lock);
+    stats.budget_ms = TX_TIMEOUT_MS;
+    stats.keyed_poll_budget_ms = KEYED_WRITE_TIMEOUT_MS;
+    return stats;
+}
+
+void cat_set_usb_test(bool active)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (active) {
+        if (++s_usb_test_generation == 0) {
+            ++s_usb_test_generation;
+        }
+        s_write_stats.usb_test = (cat_write_timing_t){0};
+    }
+    s_usb_test_active = active;
     xSemaphoreGive(s_lock);
 }
 
@@ -1300,8 +1521,9 @@ bool cat_radio_tx(void)
         return false;
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
+    const int64_t max_age = s_state.tx_cat ? KEYED_CAT_MAX_AGE_US : RADIO_STATUS_MAX_AGE_US;
     const bool active = s_state.connected && !s_disconnected && s_state.tx &&
-                        esp_timer_get_time() - s_last_tx_status_us <= RADIO_STATUS_MAX_AGE_US;
+                        esp_timer_get_time() - s_last_tx_status_us <= max_age;
     xSemaphoreGive(s_lock);
     return active;
 }
@@ -1319,12 +1541,21 @@ esp_err_t cat_ptt(bool on)
     if (!s_ptt_lock) {
         return ESP_ERR_INVALID_STATE;
     }
-    xSemaphoreTake(s_ptt_lock, portMAX_DELAY);
+    if (!on) {
+        // Stop submitting telemetry while TX0 is waiting for the CDC OUT endpoint.
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_unkey_requested = true;
+        xSemaphoreGive(s_lock);
+    }
+    if (xSemaphoreTake(s_ptt_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
     const esp_err_t err = s_ptt_port && !s_disconnected && (!on || s_ptt_ready)
                           ? cat_tx(s_ptt_port, on ? "TX1;" : "TX0;") : ESP_ERR_INVALID_STATE;
     if (err == ESP_OK) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
         s_state.tx_cat = on;
+        s_unkey_requested = false;
         xSemaphoreGive(s_lock);
     }
     xSemaphoreGive(s_ptt_lock);
@@ -1336,14 +1567,25 @@ const char *cat_ptt_fault(int64_t started, int64_t grace_us)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     const int64_t now = esp_timer_get_time();
     const char *reason = NULL;
-    if (!s_state.connected || s_disconnected || now - s_last_ptt_status_us > RADIO_STATUS_MAX_AGE_US) {
-        reason = "CAT lost";
-    } else if (s_hi_swr && s_swr_status_us >= started) {
+    const int64_t startup_end = started + FTDX10_HI_SWR_STARTUP_US;
+    // An early FTDX10 flag needs a fresh normal report within the startup window.
+    // A missing normal reply is a fault, and a flag after startup always latches.
+    const bool hi_swr = s_hi_swr_us && s_hi_swr_us >= started &&
+        (s_rig->rig != CAT_RIG_FTDX10 || s_hi_swr_us >= startup_end ||
+         (now >= startup_end && !(s_normal_swr_us > s_hi_swr_us && s_normal_swr_us < startup_end)));
+    if (hi_swr) {
         reason = "High SWR";
-    } else if (now - started >= grace_us &&
-               (s_ptt_mode != '1' || s_last_ptt_status_us < started || s_swr_status_us < started ||
-                now - s_swr_status_us > RADIO_STATUS_MAX_AGE_US)) {
+    } else if (s_disconnected || !s_state.connected) {
+        reason = "CAT disconnected";
+    } else if (now - started >= KEYED_CAT_MAX_AGE_US &&
+               now - s_last_answer_us >= KEYED_CAT_MAX_AGE_US) {
+        reason = "CAT lost";
+    } else if (now - started >= grace_us && s_last_ptt_status_us >= started && s_ptt_mode != '1') {
         reason = "Radio TX status unexpected";
+    } else if (now - started >= KEYED_CAT_MAX_AGE_US &&
+               (now - s_last_ptt_status_us >= KEYED_CAT_MAX_AGE_US ||
+                now - s_swr_status_us >= KEYED_CAT_MAX_AGE_US)) {
+        reason = "Radio TX status unavailable";
     }
     xSemaphoreGive(s_lock);
     return reason;
@@ -1355,21 +1597,26 @@ static bool ptt_sideband_mode(char mode)
     return mode == '1' || mode == '2' || mode == '8' || mode == 'C';
 }
 
-const char *cat_ptt_mode_error(void)
+const char *cat_ptt_mode_error(int64_t keyed_at)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     const int64_t now = esp_timer_get_time();
     const char *reason = NULL;
-    if (!s_mode_status_us[0] || now - s_mode_status_us[0] > RADIO_STATUS_MAX_AGE_US ||
+    const int64_t oldest = keyed_at && now - keyed_at < KEYED_CAT_MAX_AGE_US
+        ? keyed_at - RADIO_STATUS_MAX_AGE_US
+        : now - (keyed_at ? KEYED_CAT_MAX_AGE_US : RADIO_STATUS_MAX_AGE_US);
+    if (!s_mode_status_us[0] || s_mode_status_us[0] < oldest ||
         s_state.mode_main_raw != s_reported_mode[0]) {
         reason = "Waiting for MAIN mode confirmation";
     } else if (!ptt_sideband_mode(s_reported_mode[0])) {
         reason = "Set MAIN mode to USB, LSB, DATA-USB or DATA-LSB";
     } else if (s_state.tx_vfo == CAT_TX_VFO_UNKNOWN || !s_tx_vfo_status_us ||
-               now - s_tx_vfo_status_us > RADIO_STATUS_MAX_AGE_US) {
+               s_tx_vfo_status_us < oldest) {
         reason = "Waiting for TX VFO confirmation";
     } else if (s_state.tx_vfo == CAT_TX_VFO_SUB) {
-        if (!s_mode_status_us[1] || now - s_mode_status_us[1] > RADIO_STATUS_MAX_AGE_US ||
+        if (!s_rig->dual_rx) {
+            reason = "Select MAIN for remote PTT";
+        } else if (!s_mode_status_us[1] || s_mode_status_us[1] < oldest ||
             s_state.mode_sub_raw != s_reported_mode[1]) {
             reason = "Waiting for SUB mode confirmation";
         } else if (!ptt_sideband_mode(s_reported_mode[1])) {
@@ -1387,7 +1634,7 @@ static esp_err_t cat_enqueue(const char *cmd)
         ESP_LOGE(TAG, "Refused a CAT command that is not on the allow-list");
         return ESP_ERR_INVALID_ARG;
     }
-    if (!s_cmd_queue) {
+    if (!s_cmd_queue || cat_tx_requested()) {
         return ESP_ERR_INVALID_STATE;
     }
 

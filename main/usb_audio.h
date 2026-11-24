@@ -13,6 +13,9 @@
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "sdkconfig.h"
+#include "tx_tone.h"
+
+#define USB_AUDIO_TX_RING_BYTES (16 * 1024)
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,7 +31,7 @@ typedef struct {
     uint8_t bit_resolution; /*!< Significant bits per sample */
 } usb_audio_format_t;
 
-/** First advertised output format. A continuous range has rate_count == 0. */
+/** Selected output alternate setting. A continuous range has rate_count == 0. */
 typedef struct {
     uint32_t rates[CONFIG_UAC_FREQ_NUM_MAX];
     uint32_t rate_min;
@@ -36,10 +39,32 @@ typedef struct {
     uint8_t rate_count;
     uint8_t channels;
     uint8_t bits;
+    uint8_t endpoints, attributes;
+    uint16_t mps;  /*!< Endpoint maximum packet size in bytes */
 } usb_audio_output_format_t;
 
 /** Copy the output descriptor summary. Returns true while the interface is open. */
 bool usb_audio_get_output_format(usb_audio_output_format_t *fmt);
+
+typedef struct {
+    unsigned audio_rate, underruns, written_bytes;
+} usb_tx_stats_t;
+
+typedef struct {
+    unsigned completed_bytes, completed_packets, failed_packets, pcm_peak;
+    esp_err_t submit_error;
+} usb_tx_transfer_stats_t;
+
+void usb_audio_tx_reset_transfer_stats(void);
+usb_tx_transfer_stats_t usb_audio_tx_transfer_stats(void);
+bool usb_audio_tx_available(void);
+bool usb_audio_tx_idle(void);
+esp_err_t usb_audio_tx_prepare(bool share_rx_channel, uint32_t test_rate);
+bool usb_audio_tx_cleanup_pending(void);
+void usb_audio_tx_finished(void);
+bool usb_audio_rx_paused(void);
+void usb_audio_tx_request(tx_tone_t tone, int dbfs);
+usb_tx_stats_t usb_audio_tx_stats(void);
 
 /**
  * @brief Install USB Host Library and UAC class driver
@@ -58,6 +83,7 @@ bool usb_audio_get_format(usb_audio_format_t *fmt);
 
 /**
  * @brief Read PCM data captured from the USB audio device
+ *        ESP_ERR_NOT_FINISHED indicates an intentional RX pause for USB TX.
  *
  * @param[out] buf        Destination buffer
  * @param[in]  size       Bytes requested

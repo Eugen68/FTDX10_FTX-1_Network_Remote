@@ -603,17 +603,52 @@ option 6 to restart. Clearing the TX password also disables remote PTT. The page
 and the TX password. Five failed TX password attempts from the same IP trigger the 60-second lockout.
 One browser can hold PTT at a time. Hold the button or Space while the page has focus. During confirmed TX, the PTT button and the
 frequency readout for the radio-selected TX VFO turn red.
-This version provides PTT without USB transmit audio. Set MAIN to USB, LSB, DATA-USB or DATA-LSB.
-When the radio selects SUB for transmit, set SUB to one of those modes too. The firmware waits for fresh
-CAT confirmation of the mode and the selected transmitter. Select the modulation source on the radio. The firmware leaves the modulation-source and transmit-gain menus under local control.
+The TX panel offers PTT only, a 1,000 Hz test tone, and a 700 + 1,900 Hz two-tone test. Set MAIN to USB, LSB, DATA-USB or DATA-LSB.
+On FTX-1, when SUB is selected for transmit, set SUB to one of those modes too. On FTDX10, select MAIN
+for remote PTT. The firmware waits for fresh
+CAT confirmation of the mode and the selected transmitter. Select USB modulation on the radio to use the test tones. The firmware leaves the modulation-source and transmit-gain menus under local control.
 
 The device releases PTT on button/key release, a closed connection, 1.5 seconds without the owner's
-heartbeat, the transmit time limit, loss of CAT or USB audio, high SWR, or unexpected transmit status.
+heartbeat, the transmit time limit, loss of CAT or USB audio, high SWR, or missing or unexpected
+transmit status. While keyed, the firmware waits for a CAT poll's replies before issuing the next poll, up to 1.5 seconds on the FTX-1 or 300 ms on
+the FTDX10. Telemetry writes have a 1.2-second budget. A write timeout by itself
+does not indicate CAT loss, which is reported after three seconds without a valid reply.
 It sends TX off when a supported radio is identified, even with remote TX disabled. USB recovery, reboot, and OTA wait for
 confirmed receive after a device-controlled transmission. During idle, automatic USB recovery can run
 without CAT, but defers if a recent CAT report shows a transmission. If CAT is physically unavailable
 while keyed, the firmware retries TX off when the link returns and blocks further PTT and power-cycles in
 the meantime. Use the radio's local controls to stop transmission if the CAT connection stays down.
+
+### USB test tone and SWR protection
+
+The test tone defaults to −24 dBFS, with an adjustable range of −60 to −6 dBFS. The level of the two-tone
+signal is bounded by the combined peak. Select DATA-USB with the radio's modulation source set to USB
+for the phase 2 bench test. The firmware preserves the radio's modulation source and input gain settings.
+Use a dummy load and minimum power.
+
+The serial menu option `s` sets the SWR limit from 1.5:1 to 3.0:1 (default 3.0:1). While keyed, the
+device reads RM5 (power) and RM6 (SWR). When PO reaches 3 on its raw 0–255 scale, the device checks the
+absolute limit and stops on an increase of at least 0.5:1 over a three-sample reference taken after
+one second of steady power. The rise also uses a three-sample average. Stale metering stops TX when
+power is high or cannot be confirmed. The startup grace and maximum meter age are 2 seconds on the
+FTX-1 and 1.1 seconds on the FTDX10. A radio Hi-SWR report requests an immediate stop after startup.
+During the first 300 ms on FTDX10, an early Hi-SWR report is rechecked. A fresh normal report in that
+window clears the transient flag. A persistent flag or missing confirmation stops TX at the end of
+the window. The measured SWR limit and rise detector stay active throughout. After RX is confirmed,
+the TX state remains stopping until the USB audio output finishes cleanup.
+
+The panel and `/status` show both raw meters. SWR conversions use provisional, model-specific
+[FTX-1](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftx1/ftx1.h)
+and [FTDX10](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftdx10.h) Hamlib reference points.
+Check these against the radio and known loads on the bench before relying on the numeric ratio.
+In `/status`, the TX audio counters show the output sample rate, missed audio task deadlines and
+bytes accepted by the USB driver. The 16 KiB TX staging ring uses PSRAM, with its control block in internal RAM.
+The UAC driver allocates USB transfer buffers when the output stream starts.
+
+`/status.cat_write` reports write counts, timeouts, maximum elapsed microseconds and calls exceeding the
+200 ms driver budget. It reports these since boot for all writes, writes while keyed, and RM5/RM6 batches.
+Failed queued commands are visible in the page and CAT LOG. Compare `int_min` after identical runs with
+ACC enabled, because it tracks the lowest free internal memory since boot.
 
 ### USB audio discovery
 

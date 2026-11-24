@@ -1,28 +1,41 @@
 /* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+#include <inttypes.h>
 #include "tx.h"
 #include "app_config.h"
 #include "cat.h"
 #include "esp_timer.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "usb_audio.h"
+#include "tx_swr.h"
 
 #define HEARTBEAT_US 1500000LL
 #define CONFIRM_US 1500000LL
+#define USB_TEST_US 20000000LL
 
 static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_watchdog_task;
 static esp_timer_handle_t s_timer;
 static tx_state_t s_state = {.reason = ""};
 static int64_t s_heartbeat, s_keyed_at, s_deadline, s_off_sent;
-static bool s_stopping, s_inhibited;
+static bool s_stopping, s_inhibited, s_waiting_for_audio_cleanup;
+static tx_swr_guard_t s_swr_guard;
+static unsigned s_swr_max;
+static tx_tone_t s_tone;
+static int64_t s_usb_test_deadline;
+static uint32_t s_usb_test_rate;
+static const char *s_usb_test_reason = "";
+
 
 static void finish_stop(void)
 {
     s_state.phase = TX_IDLE;
     s_state.owner = 0;
     s_stopping = false;
+    s_waiting_for_audio_cleanup = false;
+    s_state.stopping = false;
     s_off_sent = 0;
 }
 
@@ -33,6 +46,7 @@ static void stop_locked(const char *reason)
     }
     if (!s_stopping) {
         s_state.reason = reason;
+        ESP_LOGI("tx", "PTT stop requested: %s", reason);
     }
     if (s_state.phase == TX_ARMED) {
         finish_stop();
@@ -40,11 +54,33 @@ static void stop_locked(const char *reason)
     }
 
     s_stopping = true;
+    s_state.stopping = true;
+    if (s_waiting_for_audio_cleanup) {
+        if (!usb_audio_tx_cleanup_pending()) {
+            finish_stop();
+        }
+        return;
+    }
+
+    usb_audio_tx_request(TX_TONE_OFF, 0);
     if (s_off_sent && cat_radio_rx_after(s_off_sent)) {
-        finish_stop();
+        ESP_LOGI("tx", "RX confirmed after %u TX0 attempt(s)", s_state.off_attempts);
+        if (s_tone != TX_TONE_OFF) {
+            usb_audio_tx_finished();
+            s_waiting_for_audio_cleanup = usb_audio_tx_cleanup_pending();
+        }
+        if (!s_waiting_for_audio_cleanup) {
+            finish_stop();
+        }
     } else if (!s_off_sent || esp_timer_get_time() - s_off_sent >= CONFIRM_US) {
-        if (cat_ptt(false) == ESP_OK) {
+        const esp_err_t previous = s_state.off_error;
+        s_state.off_attempts++;
+        s_state.off_error = cat_ptt(false);
+        if (s_state.off_error == ESP_OK) {
             s_off_sent = esp_timer_get_time();
+            ESP_LOGI("tx", "TX0 written; waiting for fresh RX confirmation");
+        } else if (s_state.off_attempts == 1 || previous != s_state.off_error) {
+            ESP_LOGW("tx", "TX0 write failed: %s", esp_err_to_name(s_state.off_error));
         }
     }
 }
@@ -52,7 +88,7 @@ static void stop_locked(const char *reason)
 bool tx_acquire(uint32_t owner)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    const bool granted = owner && !s_inhibited && app_config_tx_enabled() && s_state.phase == TX_IDLE;
+    const bool granted = owner && !s_inhibited && app_config_tx_enabled() && s_state.phase == TX_IDLE && !s_usb_test_deadline;
     if (granted) {
         s_state = (tx_state_t){.phase = TX_ARMED, .owner = owner, .reason = ""};
         s_heartbeat = esp_timer_get_time();
@@ -63,6 +99,15 @@ bool tx_acquire(uint32_t owner)
 
 bool tx_key(uint32_t owner)
 {
+    return tx_key_tone(owner, TX_TONE_OFF, TX_TONE_DEFAULT_DBFS);
+}
+
+bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
+{
+    if (tone < TX_TONE_OFF || tone > TX_TONE_DUAL || dbfs < TX_TONE_MIN_DBFS || dbfs > TX_TONE_MAX_DBFS) {
+        tx_release(owner, "Invalid TX audio settings");
+        return false;
+    }
     app_config_t cfg;
     app_config_get(&cfg);
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -70,14 +115,35 @@ bool tx_key(uint32_t owner)
     const char *refusal = "PTT unavailable";
     if (s_state.phase == TX_ARMED && s_state.owner == owner && !s_inhibited &&
         usb_audio_get_format(NULL) && cat_radio_rx_after(0)) {
-        const char *mode_error = cat_ptt_mode_error();
-        if (mode_error) {
+        cat_state_t radio;
+        cat_get_state(&radio);
+        const char *mode_error = cat_ptt_mode_error(0);
+        if (tone != TX_TONE_OFF && !usb_audio_tx_available()) {
+            refusal = "USB TX audio unavailable";
+        } else if (!usb_audio_tx_idle()) {
+            refusal = usb_audio_tx_cleanup_pending() ? "Waiting for USB TX audio to stop"
+                                                      : "USB TX audio not ready";
+        } else if (mode_error) {
             refusal = mode_error;
+        } else if (tone != TX_TONE_OFF && usb_audio_tx_prepare(radio.rig == CAT_RIG_FTX1, 0) != ESP_OK) {
+            refusal = "USB TX audio start failed";
+        } else if (tone != TX_TONE_OFF &&
+                   (esp_timer_get_time() - s_heartbeat >= HEARTBEAT_US ||
+                    !usb_audio_tx_available() || !usb_audio_get_format(NULL) ||
+                    !cat_radio_rx_after(0) || cat_ptt_mode_error(0))) {
+            usb_audio_tx_finished();
+            refusal = "PTT conditions changed during USB audio setup";
         } else {
             s_keyed_at = esp_timer_get_time();
             s_deadline = s_keyed_at + (int64_t)cfg.tx_max_seconds * 1000000;
             s_state.phase = TX_KEYED;  // even a failed write may have reached the radio
+            s_tone = tone;
+            s_swr_max = cfg.swr_max * 10;
+            s_swr_guard = (tx_swr_guard_t){.rig = radio.rig};
             keyed = cat_ptt(true) == ESP_OK;
+            if (keyed && tone != TX_TONE_OFF) {
+                usb_audio_tx_request(tone, dbfs);
+            }
         }
     }
     if (!keyed && s_state.owner == owner) {
@@ -106,18 +172,127 @@ void tx_release(uint32_t owner, const char *reason)
     xSemaphoreGive(s_lock);
 }
 
+static void stop_usb_test(const char *reason)
+{
+    usb_audio_tx_request(TX_TONE_OFF, 0);
+    usb_audio_tx_finished();
+    cat_set_usb_test(false);
+    s_usb_test_deadline = 0;
+    s_usb_test_reason = reason;
+    const cat_write_timing_t writes = cat_get_write_stats().usb_test;
+    ESP_LOGI("tx", "USB test ended: %s, CAT calls=%u timeouts=%u over_budget=%u max_us=%u",
+             reason, writes.calls, writes.timeouts, writes.over_budget, writes.max_us);
+}
+
+esp_err_t tx_usb_test_start(uint32_t rate)
+{
+    if (rate != 48000 && rate != 44100) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    cat_state_t radio;
+    cat_get_state(&radio);
+    esp_err_t result = ESP_ERR_INVALID_STATE;
+    if (!s_usb_test_deadline && !s_inhibited && s_state.phase == TX_IDLE && app_config_tx_enabled() &&
+        usb_audio_tx_idle() && usb_audio_tx_available() && usb_audio_get_format(NULL) && cat_radio_rx_after(0)) {
+        if (rate == 44100 && radio.rig != CAT_RIG_FTX1) {
+            result = ESP_ERR_NOT_SUPPORTED;
+        } else {
+            result = usb_audio_tx_prepare(true, rate);
+            if (result == ESP_OK && !cat_radio_rx_after(0)) {
+                usb_audio_tx_finished();
+                result = ESP_ERR_INVALID_STATE;
+            }
+            if (result == ESP_OK) {
+                cat_set_usb_test(true);
+                s_usb_test_deadline = esp_timer_get_time() + USB_TEST_US;
+                s_usb_test_rate = rate;
+                s_usb_test_reason = "Running";
+                usb_audio_tx_request(TX_TONE_SINGLE, TX_TONE_DEFAULT_DBFS);
+                ESP_LOGI("tx", "USB test started: 20 s at %lu Hz (-24 dBFS), CAT polling in RX",
+                         (unsigned long)rate);
+            }
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return result;
+}
+
+tx_usb_test_state_t tx_usb_test_state(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const int64_t remaining = s_usb_test_deadline ? s_usb_test_deadline - esp_timer_get_time() : 0;
+    const tx_usb_test_state_t value = {
+        .active = s_usb_test_deadline != 0,
+        .left_s = remaining > 0 ? (unsigned)((remaining + 999999) / 1000000) : 0,
+        .rate = s_usb_test_rate,
+        .reason = s_usb_test_reason,
+    };
+    xSemaphoreGive(s_lock);
+    return value;
+}
+
 void tx_unkey(const char *reason)
 {
     if (s_lock) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
-        stop_locked(reason);
+        if (s_usb_test_deadline) {
+            stop_usb_test(reason);
+        } else {
+            stop_locked(reason);
+        }
         xSemaphoreGive(s_lock);
+    }
+}
+
+static void log_stale_meters(const cat_tx_meters_t *meters, int64_t keyed_at, int64_t now)
+{
+    const struct {
+        const char *name;
+        int64_t stamp;
+        unsigned raw;
+    } samples[] = {
+        {"po_us", meters->po_us, meters->po},
+        {"swr_us", meters->swr_us, meters->swr},
+        {"swr_po_us", meters->swr_po_us, meters->swr_po},
+    };
+    const cat_write_timing_t writes = cat_get_write_stats().meters;
+    ESP_LOGW("tx", "STALE now_us=%" PRId64 " keyed_at_us=%" PRId64
+             " cat_write.meters calls=%u timeouts=%u max_us=%u",
+             now, keyed_at, writes.calls, writes.timeouts, writes.max_us);
+    for (size_t i = 0; i < sizeof(samples) / sizeof(samples[0]); ++i) {
+        const int64_t stamp = samples[i].stamp;
+        ESP_LOGW("tx", "STALE %s=%" PRId64 " age_us=%" PRId64 " since_keyed_us=%" PRId64 " raw=%u",
+                 samples[i].name, stamp, stamp ? now - stamp : -1,
+                 stamp ? stamp - keyed_at : 0, samples[i].raw);
+    }
+    cat_log_entry_t entries[12];
+    size_t count = cat_log_recent_tx_meters((uint32_t)(now / 1000), entries,
+                                            sizeof(entries) / sizeof(entries[0]));
+    if (!count) {
+        ESP_LOGW("tx", "STALE CAT log: no recent RM5/RM6 entries");
+    }
+    while (count > 0) {
+        const cat_log_entry_t *entry = &entries[--count];
+        ESP_LOGW("tx", "STALE CAT seq=%" PRIu32 " ms=%" PRIu32 " %c kind=%u %s",
+                 entry->seq, entry->ms, entry->dir, entry->kind, entry->text);
     }
 }
 
 static void watchdog_tick(void)
 {
+    cat_tx_meters_t stale_meters;
+    int64_t stale_at = 0, stale_keyed_at = 0;
     xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_usb_test_deadline) {
+        if (cat_radio_tx()) {
+            stop_usb_test("Radio entered TX");
+        } else if (!usb_audio_get_format(NULL) || !usb_audio_tx_available()) {
+            stop_usb_test("USB audio lost");
+        } else if (esp_timer_get_time() >= s_usb_test_deadline) {
+            stop_usb_test("Completed");
+        }
+    }
     if (s_state.phase != TX_IDLE) {
         const int64_t now = esp_timer_get_time();
         if (s_stopping) {
@@ -127,12 +302,26 @@ static void watchdog_tick(void)
         } else if (s_state.phase == TX_KEYED) {
             if (now >= s_deadline) {
                 stop_locked("TX time limit");
-            } else if (!usb_audio_get_format(NULL)) {
+            } else if (!usb_audio_get_format(NULL) || (s_tone != TX_TONE_OFF && !usb_audio_tx_available())) {
                 stop_locked("USB audio lost");
             } else {
                 const char *reason = cat_ptt_fault(s_keyed_at, CONFIRM_US);
                 if (!reason) {
-                    reason = cat_ptt_mode_error();
+                    reason = cat_ptt_mode_error(s_keyed_at);
+                }
+                if (!reason) {
+                    const cat_tx_meters_t meters = cat_get_tx_meters();
+                    const int64_t meter_now = esp_timer_get_time();
+                    const tx_swr_result_t result = tx_swr_check(&s_swr_guard, &meters, s_keyed_at, meter_now, s_swr_max);
+                    if (result == TX_SWR_STALE) {
+                        stale_meters = meters;
+                        stale_at = meter_now;
+                        stale_keyed_at = s_keyed_at;
+                        reason = "SWR or power readings unavailable";
+                    } else if (result == TX_SWR_LIMIT || result == TX_SWR_RISE) {
+                        s_state.stop_swr = tx_swr_value(meters.rig, meters.swr);
+                        reason = result == TX_SWR_RISE ? "rise" : "limit";
+                    }
                 }
                 if (reason) {
                     stop_locked(reason);
@@ -141,16 +330,32 @@ static void watchdog_tick(void)
         }
     }
     xSemaphoreGive(s_lock);
+    // Send TX0 before collecting or printing diagnostics.
+    if (stale_at) {
+        log_stale_meters(&stale_meters, stale_keyed_at, stale_at);
+    }
 }
 
 tx_state_t tx_get_state(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     tx_state_t result = s_state;
-    const int64_t remaining = s_deadline - esp_timer_get_time();
+    const int64_t now = esp_timer_get_time();
+    const int64_t remaining = s_deadline - now;
     result.left_s = s_state.phase == TX_KEYED && !s_stopping && remaining > 0
                     ? (unsigned)((remaining + 999999) / 1000000) : 0;
     result.on_air = s_state.phase == TX_KEYED && cat_radio_tx();
+    const cat_tx_meters_t meters = cat_get_tx_meters();
+    if (s_keyed_at > 0) {
+        const int64_t max_age_us = tx_meter_max_age_us(s_swr_guard.rig);
+        result.po_valid = meters.po_us >= s_keyed_at && now - meters.po_us <= max_age_us;
+        result.swr_valid = result.po_valid && meters.po >= TX_PO_MIN_RAW &&
+                           meters.swr_po >= TX_PO_MIN_RAW && meters.swr_po_us >= s_keyed_at &&
+                           now - meters.swr_us <= max_age_us;
+        result.swr = result.swr_valid ? tx_swr_value(meters.rig, meters.swr) : 0;
+        result.swr_raw = meters.swr_us >= s_keyed_at ? meters.swr : 0;
+        result.po_raw = meters.po_us >= s_keyed_at ? meters.po : 0;
+    }
     xSemaphoreGive(s_lock);
     return result;
 }
@@ -161,7 +366,7 @@ bool tx_begin_usb_recovery(void)
     if (s_state.phase != TX_IDLE) {
         stop_locked("USB recovery");
     }
-    const bool allowed = !s_inhibited && s_state.phase == TX_IDLE && !cat_radio_tx();
+    const bool allowed = !s_inhibited && !s_usb_test_deadline && s_state.phase == TX_IDLE && !cat_radio_tx();
     if (allowed) {
         s_inhibited = true;
     }
@@ -173,7 +378,7 @@ bool tx_quiesce(const char *reason)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     stop_locked(reason);
-    const bool allowed = !s_inhibited && s_state.phase == TX_IDLE;
+    const bool allowed = !s_inhibited && !s_usb_test_deadline && s_state.phase == TX_IDLE;
     if (allowed) {
         s_inhibited = true;
     }
@@ -204,7 +409,7 @@ static void watchdog_alarm(void *arg)
 esp_err_t tx_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
-    if (!s_lock || xTaskCreate(watchdog_task, "tx_watchdog", 4096, NULL, 8, &s_watchdog_task) != pdPASS) {
+    if (!s_lock || xTaskCreatePinnedToCore(watchdog_task, "tx_watchdog", 4096, NULL, 8, &s_watchdog_task, 0) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     const esp_timer_create_args_t args = {.callback = watchdog_alarm, .name = "tx_watchdog"};

@@ -19,6 +19,7 @@
 #include "esp_check.h"
 #include "esp_https_server.h"
 #include "esp_system.h"
+#include "esp_random.h"
 #include "build_info.h"
 #include "acc_scope.h"
 #include "cat.h"
@@ -28,16 +29,19 @@
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
 #include <math.h>
+#include "mbedtls/platform_util.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "usb_audio.h"
 #include "web_auth.h"
 #include "web_server.h"
+#include "web_session_diag.h"
 
+#define WEB_CORE             0
 #define STREAM_CHUNK_BYTES   4096
 #define CAT_POST_MAX_BYTES   192     // largest accepted POST /cat body, including the NUL
-#define CAT_JSON_BYTES       1152    // GET /cat response
+#define CAT_JSON_BYTES       1344    // GET /cat response
 #define STREAM_READ_TIMEOUT  pdMS_TO_TICKS(200)
 #define KEEPALIVE_IDLE_READS 5       // idle waits (about 1 s) before a keep-alive silence block is sent
 #define KEEPALIVE_FRAMES     64      // length of that block in audio frames
@@ -99,6 +103,7 @@ typedef struct {
     size_t fill;
     uint32_t frame_bytes;
     uint32_t bytes_per_ms;
+    uint32_t sample_rate;
     SemaphoreHandle_t lock;
     TaskHandle_t sender;
     volatile bool stop;          // set by the sender: the reader must finish
@@ -259,11 +264,33 @@ static size_t fifo_read(audio_fifo_t *f, uint8_t *dst, size_t max)
 static void usb_reader_task(void *arg)
 {
     audio_fifo_t *f = (audio_fifo_t *)arg;
+    bool paused = false;
     while (!f->stop) {
         uint32_t n = 0;
         const esp_err_t r = usb_audio_read(s_usb_read_buf, sizeof(s_usb_read_buf), &n, STREAM_READ_TIMEOUT);
+        if (r == ESP_ERR_NOT_FINISHED) {
+            if (!paused) {
+                xSemaphoreTake(f->lock, portMAX_DELAY);
+                f->tail = f->head;
+                f->fill = 0;
+                xSemaphoreGive(f->lock);
+                paused = true;
+            }
+            // Keep browser time moving at the output rate, without counting
+            // synthetic silence as USB input or running it through the FIR.
+            const size_t silence_bytes = (f->sample_rate / 100) * f->frame_bytes;
+            const size_t bytes = silence_bytes < sizeof(s_usb_read_buf) ? silence_bytes :
+                                 sizeof(s_usb_read_buf) / f->frame_bytes * f->frame_bytes;
+            memset(s_usb_read_buf, 0, bytes);
+            fifo_write(f, s_usb_read_buf, bytes);
+            xTaskNotifyGive(f->sender);
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
         if (r == ESP_ERR_TIMEOUT) {
-            s_st_usb_timeouts++;
+            if (!paused) {
+                s_st_usb_timeouts++;
+            }
             continue;
         }
         if (r != ESP_OK) {
@@ -276,8 +303,10 @@ static void usb_reader_task(void *arg)
         if (n > 0) {
             const int64_t now_us = esp_timer_get_time();
             portENTER_CRITICAL(&s_usb_rate_lock);
-            if (s_usb_rate.first_us == 0) {
+            if (paused || s_usb_rate.first_us == 0) {
+                s_usb_rate.bytes = 0;
                 s_usb_rate.first_us = now_us;
+                paused = false;
             } else {
                 s_usb_rate.bytes += n;     // the first read only marks the start
             }
@@ -303,27 +332,7 @@ static volatile uint32_t s_st_slow_sends;   // sends slower than SLOW_SEND_US
 static volatile uint32_t s_st_max_send_ms;  // slowest send
 static volatile uint32_t s_st_starts;       // streams started since boot
 
-// Connection diagnostics: every new TLS session costs tens of KB of internal RAM while it is set up,
-// so /status reports how many sessions were opened and closed since boot
-static volatile uint32_t s_st_conn_opened;
-static volatile uint32_t s_st_conn_closed;
-
-static void session_closed(void *ctx)
-{
-    (void)ctx;
-    s_st_conn_closed++;
-}
-
-/** Call at the start of a handler: counts the session the first time it sends a request */
-static void note_session(httpd_req_t *req)
-{
-    static const char marker = 1;
-    const int fd = httpd_req_to_sockfd(req);
-    if (httpd_sess_get_ctx(req->handle, fd) == NULL) {
-        httpd_sess_set_ctx(req->handle, fd, (void *)&marker, session_closed);
-        s_st_conn_opened++;
-    }
-}
+static uint32_t s_boot_id;
 
 static void put_le32(uint8_t *p, uint32_t v)
 {
@@ -425,6 +434,7 @@ static void stream_task(void *arg)
         f->head = f->tail = f->fill = 0;
         f->frame_bytes = frame_bytes;
         f->bytes_per_ms = bytes_per_ms;
+        f->sample_rate = ctx->out_rate;
         f->sender = xTaskGetCurrentTaskHandle();
         f->stop = false;
         f->reader_done = false;
@@ -490,8 +500,8 @@ static void stream_task(void *arg)
     }
     f->data = NULL;
     const uint64_t usb_in_dhz = usb_input_rate_dhz();
-    ESP_LOGI(TAG, "Stream ended (%s), chunks=%lu, usb_in_hz=%lu.%lu, usb_bus_resets=%lu",
-             f->device_gone ? "USB input read failed" : esp_err_to_name(err),
+    ESP_LOGI(TAG, "Stream ended (%s), fd=%d, chunks=%lu, usb_in_hz=%lu.%lu, usb_bus_resets=%lu",
+             f->device_gone ? "USB input read failed" : esp_err_to_name(err), httpd_req_to_sockfd(req),
              (unsigned long)s_st_chunks, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10),
              (unsigned long)usb_audio_bus_resets());
 
@@ -503,7 +513,6 @@ static void stream_task(void *arg)
 
 static esp_err_t start_stream(httpd_req_t *req, bool wav)
 {
-    note_session(req);
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
         return ESP_OK;
     }
@@ -548,7 +557,7 @@ static esp_err_t start_stream(httpd_req_t *req, bool wav)
     s_ctx = (stream_ctx_t) {.req = async_req, .wav = wav, .fmt = fmt, .out_rate = out_rate, .decim = decim};
     // TLS record encryption runs in this task, so it needs more stack than plain HTTP
     // Core 1: keep TLS encryption and sending away from Wi-Fi / USB, which run on core 0
-    if (xTaskCreatePinnedToCore(stream_task, "stream", 8192, &s_ctx, 5, NULL, 1) != pdPASS) {
+    if (xTaskCreatePinnedToCore(stream_task, "stream", 8192, &s_ctx, 5, NULL, WEB_CORE) != pdPASS) {
         httpd_req_async_handler_complete(async_req);
         atomic_store(&s_stream_active, false);
         return ESP_FAIL;
@@ -618,14 +627,23 @@ static char safe_mode_char(char c)
     return ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) ? c : ' ';
 }
 
+static const char *tx_reason(const tx_state_t *tx, char formatted[32])
+{
+    if (!tx->stop_swr) {
+        return tx->reason;
+    }
+    const unsigned tenths = (tx->stop_swr + 5) / 10;
+    snprintf(formatted, 32, "SWR %u.%u:1 (%s)", tenths / 10, tenths % 10, tx->reason);
+    return formatted;
+}
+
 static esp_err_t status_handler(httpd_req_t *req)
 {
-    note_session(req);
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 128];
+    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -641,21 +659,22 @@ static esp_err_t status_handler(httpd_req_t *req)
         char acc_reason[2 * sizeof(acc.reason) + 1];
         json_escape(acc.reason, acc_reason, sizeof(acc_reason));
         const uint64_t usb_in_dhz = usb_input_rate_dhz();
+        const web_session_stats_t sessions = web_session_stats();
         wifi_ap_record_t ap;
         const int rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
         // heap_* include PSRAM when it is enabled; int_* are the internal RAM only
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"uptime_s\":%lu,\"heap_free\":%lu,\"heap_min\":%lu,\"heap_block\":%lu,"
+                      ",\"boot_id\":%lu,\"uptime_s\":%lu,\"heap_free\":%lu,\"heap_min\":%lu,\"heap_block\":%lu,"
                       "\"int_free\":%lu,\"int_min\":%lu,\"int_block\":%lu,\"rssi\":%d,"
-                      "\"conn_opened\":%lu,\"conn_closed\":%lu,"
+                      "\"conn_opened\":%u,\"conn_closed\":%u,\"conn_lru_purges\":%u,\"tls_handshake_errors\":%u,"
                       "\"stream\":{\"active\":%s,\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
                       "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu,"
-                      "\"usb_bus_resets\":%lu},"
+                      "\"usb_bus_resets\":%lu,\"rx_paused\":%s},"
                       "\"acc\":{\"enabled\":%s,\"fps\":%lu,\"frames\":%lu,\"accepted\":%lu,\"rejected\":%lu,"
                       "\"age_ms\":%ld,\"last_len\":%lu,\"last_reject\":\"%s\","
                       "\"rej\":{\"length\":%lu,\"not_ftdx10\":%lu,\"vfo_copies\":%lu,\"vfo_range\":%lu,"
                       "\"span\":%lu,\"cat\":%lu},\"clients\":%lu}",
-                      (unsigned long)(esp_timer_get_time() / 1000000),
+                      (unsigned long)s_boot_id, (unsigned long)(esp_timer_get_time() / 1000000),
                       (unsigned long)esp_get_free_heap_size(),
                       (unsigned long)esp_get_minimum_free_heap_size(),
                       (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
@@ -663,14 +682,14 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                       (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       rssi,
-                      (unsigned long)s_st_conn_opened, (unsigned long)s_st_conn_closed,
+                      sessions.opened, sessions.closed, sessions.lru_purges, sessions.handshake_errors,
                       atomic_load(&s_stream_active) ? "true" : "false",
                       (unsigned long)s_st_starts, (unsigned long)s_st_chunks,
                       (unsigned long)s_st_usb_timeouts, (unsigned long)s_st_slow_sends,
                       (unsigned long)s_st_max_send_ms,
                       (unsigned long)s_st_buf_ms, (unsigned long)s_st_buf_max_ms, (unsigned long)s_st_overflows,
                       (unsigned long)s_st_rate, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10),
-                      (unsigned long)usb_audio_bus_resets(),
+                      (unsigned long)usb_audio_bus_resets(), usb_audio_rx_paused() ? "true" : "false",
                       acc.enabled ? "true" : "false", (unsigned long)acc.fps, (unsigned long)acc.frames,
                       (unsigned long)acc.accepted, (unsigned long)acc.rejected,
                       acc.age_ms == UINT32_MAX ? -1L : (long)acc.age_ms, (unsigned long)acc.last_len, acc_reason,
@@ -693,30 +712,69 @@ static esp_err_t status_handler(httpd_req_t *req)
                      (unsigned long)output.rate_min, (unsigned long)output.rate_max);
         }
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"tx_audio\":{\"present\":%s,\"rates\":[%s],\"channels\":%u,\"bits\":%u%s}}",
-                      present ? "true" : "false", rates, output.channels, output.bits, range);
+                      ",\"tx_audio\":{\"present\":%s,\"rates\":[%s],\"channels\":%u,\"bits\":%u,\"mps\":%u%s}}",
+                      present ? "true" : "false", rates, output.channels, output.bits, output.mps, range);
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const tx_state_t tx = tx_get_state();
+        const usb_tx_stats_t audio = usb_audio_tx_stats();
+        const usb_tx_transfer_stats_t transfers = usb_audio_tx_transfer_stats();
         const char *phase = tx.phase == TX_KEYED ? "KEYED" : tx.phase == TX_ARMED ? "ARMED" : "IDLE";
+        char reason[32], swr[16], po[8];
+        if (tx.swr_valid) {
+            snprintf(swr, sizeof(swr), "%u.%02u", tx.swr / 100, tx.swr % 100);
+        } else {
+            strcpy(swr, "null");
+        }
+        if (tx.po_valid) {
+            snprintf(po, sizeof(po), "%u", tx.po_raw);
+        } else {
+            strcpy(po, "null");
+        }
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"tx\":{\"state\":\"%s\",\"owner\":%lu,\"left_s\":%u,\"reason\":\"%s\"}}",
-                      phase, (unsigned long)tx.owner, tx.left_s, tx.reason);
+                      ",\"tx\":{\"state\":\"%s\",\"owner\":%lu,\"left_s\":%u,\"reason\":\"%s\","
+                      "\"stopping\":%s,\"off_attempts\":%u,\"off_error\":%d,"
+                      "\"audio_rate\":%u,\"underruns\":%u,\"written_bytes\":%u,"
+                      "\"completed_bytes\":%u,\"completed_packets\":%u,\"failed_packets\":%u,\"pcm_peak\":%u,\"submit_error\":%d,"
+                      "\"swr\":%s,\"swr_raw\":%u,\"po\":%s,\"po_raw\":%u}}",
+                      phase, (unsigned long)tx.owner, tx.left_s, tx_reason(&tx, reason),
+                      tx.stopping ? "true" : "false", tx.off_attempts, tx.off_error,
+                      audio.audio_rate, audio.underruns, audio.written_bytes,
+                      transfers.completed_bytes, transfers.completed_packets, transfers.failed_packets,
+                      transfers.pcm_peak, transfers.submit_error,
+                      swr, tx.swr_raw, po, tx.po_raw);
+    }
+    if (n > 0 && (size_t)n < sizeof(json)) {
+        const cat_write_stats_t cat = cat_get_write_stats();
+        const tx_usb_test_state_t test = tx_usb_test_state();
+        n--;
+        n += snprintf(json + n, sizeof(json) - n,
+                      ",\"cat_write\":{\"budget_ms\":%u,\"keyed_poll_budget_ms\":%u,"
+                      "\"all\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
+                      "\"keyed\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
+                      "\"meters\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
+                      "\"usb_test\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u}},"
+                      "\"usb_test\":{\"active\":%s,\"left_s\":%u,\"rate\":%lu,\"reason\":\"%s\"}}",
+                      cat.budget_ms, cat.keyed_poll_budget_ms, cat.all.calls, cat.all.timeouts, cat.all.over_budget, cat.all.max_us,
+                      cat.keyed.calls, cat.keyed.timeouts, cat.keyed.over_budget, cat.keyed.max_us,
+                      cat.meters.calls, cat.meters.timeouts, cat.meters.over_budget, cat.meters.max_us,
+                      cat.usb_test.calls, cat.usb_test.timeouts, cat.usb_test.over_budget, cat.usb_test.max_us,
+                      test.active ? "true" : "false", test.left_s, (unsigned long)test.rate, test.reason);
     }
     return send_json(req, json, n, sizeof(json));
 }
 
 static esp_err_t cat_handler(httpd_req_t *req)
 {
-    note_session(req);
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
         return ESP_OK;
     }
     cat_state_t st;
-    char note[2 * sizeof(st.last_error) + 1];
+    char note[2 * sizeof(st.last_error) + 1], write_error[2 * sizeof(st.write_error) + 1];
     char json[CAT_JSON_BYTES];
     cat_get_state(&st);
+    json_escape(st.write_error, write_error, sizeof(write_error));
     json_escape(st.last_error, note, sizeof(note));   // contains bytes echoed by the radio
     char rig_name[2 * sizeof(st.rig_name) + 1];
     char rig_id[2 * sizeof(st.rig_id) + 1];
@@ -751,9 +809,10 @@ static esp_err_t cat_handler(httpd_req_t *req)
     if (n > 0 && (size_t)n < sizeof(json)) {
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s}",
+                      ",\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\"}",
                       app_config_tx_enabled() ? "true" : "false",
-                      st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false");
+                      st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
+                      st.tx_radio_known ? "true" : "false", (unsigned long)st.write_error_seq, write_error);
     }
     return send_json(req, json, n, sizeof(json));
 }
@@ -841,6 +900,8 @@ typedef struct {
     char type[12];
     char pass[APP_CONFIG_PASS_MAX_LEN + 1];
     bool on;
+    tx_tone_t tone;
+    int dbfs;
 } tx_ws_message_t;
 
 static bool parse_tx_password(const char **p, char out[APP_CONFIG_PASS_MAX_LEN + 1])
@@ -875,7 +936,8 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
     if (*p++ != '{') {
         return false;
     }
-    enum { TYPE = 1, PASS = 2, ON = 4 };
+    enum { TYPE = 1, PASS = 2, ON = 4, TONE = 8, DBFS = 16 };
+    msg->dbfs = TX_TONE_DEFAULT_DBFS;
     unsigned fields = 0;
     for (;;) {
         char key[8];
@@ -907,6 +969,31 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
                 return false;
             }
             msg->on = strcmp(token, "true") == 0;
+        } else if (strcmp(key, "tone") == 0) {
+            field = TONE;
+            char tone[8];
+            if (!parse_string(&p, tone, sizeof(tone))) {
+                return false;
+            }
+            if (strcmp(tone, "single") == 0) {
+                msg->tone = TX_TONE_SINGLE;
+            } else if (strcmp(tone, "dual") == 0) {
+                msg->tone = TX_TONE_DUAL;
+            } else if (strcmp(tone, "off") != 0) {
+                return false;
+            }
+        } else if (strcmp(key, "dbfs") == 0) {
+            field = DBFS;
+            char token[5], *end;
+            if (!parse_token(&p, token, sizeof(token)) || token[0] != '-' ||
+                token[1] < '1' || token[1] > '9') {
+                return false;
+            }
+            const long level = strtol(token, &end, 10);
+            if (*end || level < TX_TONE_MIN_DBFS || level > TX_TONE_MAX_DBFS) {
+                return false;
+            }
+            msg->dbfs = (int)level;
         } else {
             return false;
         }
@@ -925,7 +1012,8 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
     }
     skip_ws(&p);
     return *p == '\0' && ((fields == (TYPE | PASS) && strcmp(msg->type, "tx_auth") == 0) ||
-                          (fields == (TYPE | ON) && strcmp(msg->type, "ptt") == 0) ||
+                          ((fields & ~(TONE | DBFS)) == (TYPE | ON) &&
+                           (!(fields & (TONE | DBFS)) || (msg->on && (fields & TONE))) && strcmp(msg->type, "ptt") == 0) ||
                           (fields == TYPE && (strcmp(msg->type, "hb") == 0 || strcmp(msg->type, "status") == 0)));
 }
 
@@ -949,6 +1037,7 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     uint8_t input[192];
     if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK ||
         frame.type != HTTPD_WS_TYPE_TEXT || !frame.final || frame.len == 0 || frame.len >= sizeof(input)) {
+        ESP_LOGW(TAG, "TX WebSocket rejected: invalid control frame");
         return ESP_FAIL;
     }
     frame.payload = input;
@@ -959,6 +1048,7 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
 
     tx_ws_message_t msg = {0};
     if (!parse_tx_message((const char *)input, &msg)) {
+        ESP_LOGW(TAG, "TX WebSocket rejected: invalid control message");
         return ESP_FAIL;
     }
     const char *error = "";
@@ -979,6 +1069,7 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
             session->owner = next_owner;
             req->sess_ctx = session;
             req->free_ctx = free_tx_session;
+            ESP_LOGI(TAG, "TX WebSocket authorized");
         }
     } else if (!session) {
         return ESP_FAIL;
@@ -990,7 +1081,7 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
         tx_release(session->owner, "PTT released");
     } else if (!tx_acquire(session->owner)) {
         error = "TX busy or unavailable";
-    } else if (!tx_key(session->owner)) {
+    } else if (!tx_key_tone(session->owner, msg.tone, msg.dbfs)) {
         const tx_state_t refused = tx_get_state();
         error = refused.reason[0] ? refused.reason : "PTT unavailable";
     }
@@ -1001,13 +1092,15 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     const char *tx_vfo = cat.tx_vfo == CAT_TX_VFO_MAIN ? "main" :
                          cat.tx_vfo == CAT_TX_VFO_SUB ? "sub" : "";
     const char *phase = state.phase == TX_KEYED ? "KEYED" : state.phase == TX_ARMED ? "ARMED" : "IDLE";
-    char json[384];
+    char json[512], reason[32];
     const int n = snprintf(json, sizeof(json),
                            "{\"t\":\"tx\",\"state\":\"%s\",\"left_s\":%u,\"reason\":\"%s\","
-                           "\"on_air\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\"}",
-                           phase, state.left_s, state.reason, state.on_air ? "true" : "false", tx_vfo,
-                           session ? "true" : "false",
-                           session && state.owner == session->owner ? "true" : "false", error);
+                           "\"on_air\":%s,\"stopping\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\","
+                           "\"swr_x100\":%u,\"swr_raw\":%u,\"po_raw\":%u,\"po_valid\":%s}",
+                           phase, state.left_s, tx_reason(&state, reason), state.on_air ? "true" : "false",
+                           state.stopping ? "true" : "false", tx_vfo,
+                           session ? "true" : "false", session && state.owner == session->owner ? "true" : "false",
+                           error, state.swr, state.swr_raw, state.po_raw, state.po_valid ? "true" : "false");
     if (n < 0 || (size_t)n >= sizeof(json)) {
         return ESP_FAIL;
     }
@@ -1155,6 +1248,42 @@ static bool read_body(httpd_req_t *req, char *buf, size_t buf_size)
     return strlen(buf) == total;   // an embedded NUL would hide data from the parser
 }
 
+static esp_err_t usb_test_handler(httpd_req_t *req)
+{
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, true)) {
+        return ESP_OK;
+    }
+    char query[32];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        (strcmp(query, "usb_test=1") != 0 && strcmp(query, "usb_test=1&rate=44100") != 0)) {
+        httpd_resp_set_hdr(req, "Connection", "close");
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Expected USB test query");
+    }
+
+    char body[192];
+    tx_ws_message_t auth = {0};
+    const bool parsed = read_body(req, body, sizeof(body)) &&
+                        parse_tx_message(body, &auth) && strcmp(auth.type, "tx_auth") == 0;
+    mbedtls_platform_zeroize(body, sizeof(body));
+    const bool authorized = parsed && web_auth_tx_check(req, auth.pass);
+    mbedtls_platform_zeroize(&auth, sizeof(auth));
+    web_auth_set_common_headers(req);
+    if (!authorized) {
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_set_status(req, "403 Forbidden");
+        return httpd_resp_sendstr(req, "TX authorization refused");
+    }
+
+    const esp_err_t err = tx_usb_test_start(strcmp(query, "usb_test=1") == 0 ? 48000 : 44100);
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_sendstr(req, esp_err_to_name(err));
+    }
+    httpd_resp_set_status(req, "202 Accepted");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"usb_test\":\"started\",\"duration_s\":20}");
+}
+
 static bool content_type_is_json(httpd_req_t *req)
 {
     char type[48];
@@ -1172,19 +1301,23 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
         return ESP_OK;
     }
     web_auth_set_common_headers(req);
-    // The body may stay unread on an early error, so do not reuse the connection
-    httpd_resp_set_hdr(req, "Connection", "close");
-
+    // Close on a rejected or incomplete body. A fully consumed POST can reuse the session.
     if (!content_type_is_json(req)) {
+        httpd_resp_set_hdr(req, "Connection", "close");
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Content-Type must be application/json");
     }
     if (req->content_len >= CAT_POST_MAX_BYTES) {
+        httpd_resp_set_hdr(req, "Connection", "close");
         return httpd_resp_send_err(req, HTTPD_413_CONTENT_TOO_LARGE, "Request body is too large");
     }
 
     char buf[CAT_POST_MAX_BYTES];
     cat_req_t r;
-    if (!read_body(req, buf, sizeof(buf)) || !parse_cat_request(buf, &r)) {
+    if (!read_body(req, buf, sizeof(buf))) {
+        httpd_resp_set_hdr(req, "Connection", "close");
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request body");
+    }
+    if (!parse_cat_request(buf, &r)) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request");
     }
 
@@ -1219,7 +1352,6 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
 #define CATLOG_MAX 64
 static esp_err_t catlog_handler(httpd_req_t *req)
 {
-    note_session(req);
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
         return ESP_OK;
     }
@@ -1270,6 +1402,7 @@ static esp_err_t reboot_handler(httpd_req_t *req)
     web_auth_set_common_headers(req);
     httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_set_type(req, "application/json");
+    web_session_close_reason(req, "reboot");
     ESP_LOGI(TAG, "Reboot requested via web API");
     httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"Rebooting...\"}", HTTPD_RESP_USE_STRLEN);
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -1341,6 +1474,7 @@ static void scope_task(void *arg)
     }
     free(row);
     free(rec);
+    ESP_LOGI(TAG, "Scope ended (%s), fd=%d", esp_err_to_name(err), httpd_req_to_sockfd(req));
     httpd_resp_send_chunk(req, NULL, 0);
     httpd_req_async_handler_complete(req);
     free(sc);
@@ -1350,7 +1484,6 @@ static void scope_task(void *arg)
 
 static esp_err_t scope_handler(httpd_req_t *req)
 {
-    note_session(req);
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
         return ESP_OK;
     }
@@ -1379,7 +1512,7 @@ static esp_err_t scope_handler(httpd_req_t *req)
     sc->req = async_req;
     sc->min_interval_ms = 1000 / fps - 5;      // a little slack, so 25 fps really gets every frame
     // Core 1 with the web server; TLS record encryption runs in this task, hence the stack
-    if (xTaskCreatePinnedToCore(scope_task, "scope", 6144, sc, 5, NULL, 1) != pdPASS) {
+    if (xTaskCreatePinnedToCore(scope_task, "scope", 6144, sc, 5, NULL, WEB_CORE) != pdPASS) {
         httpd_req_async_handler_complete(async_req);
         free(sc);
         atomic_fetch_sub(&s_scope_clients, 1);
@@ -1478,16 +1611,17 @@ static void redirect_server_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port = 80;
-    cfg.ctrl_port = 32769;                      // the HTTPS server uses the default 32768
+    cfg.ctrl_port = ESP_HTTPD_DEF_CTRL_PORT;    // HTTPS reserves ESP_HTTPD_DEF_CTRL_PORT + 1
     cfg.max_open_sockets = 2;
     cfg.max_uri_handlers = 2;
     cfg.lru_purge_enable = true;
-    cfg.core_id = 1;
+    cfg.core_id = WEB_CORE;
     cfg.stack_size = 3072;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     httpd_handle_t h = NULL;
-    if (httpd_start(&h, &cfg) != ESP_OK) {
-        ESP_LOGW(TAG, "HTTP redirect server on port 80 did not start (HTTPS still works)");
+    const esp_err_t err = httpd_start(&h, &cfg);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "HTTP redirect port %u (control %u): %s", cfg.server_port, cfg.ctrl_port, esp_err_to_name(err));
         return;
     }
     static const httpd_uri_t any_get = {.uri = "/*", .method = HTTP_GET, .handler = redirect_handler};
@@ -1499,7 +1633,9 @@ static void redirect_server_start(void)
 
 esp_err_t web_server_start(void)
 {
+    s_boot_id = esp_random();
     httpd_ssl_config_t config = HTTPD_SSL_CONFIG_DEFAULT();
+    config.user_cb = web_session_tls_event;
     config.servercert = servercert_pem_start;
     config.servercert_len = servercert_pem_end - servercert_pem_start;
     config.prvtkey_pem = prvtkey_pem_start;
@@ -1510,8 +1646,8 @@ esp_err_t web_server_start(void)
     // sockets until complete. The default of 4 fills up immediately, causing "Too many retries".
     // 8 is enough for a single browser client (page + /status poll + /cat poll + stream).
     config.httpd.max_open_sockets = 10;   // + the ACC scope stream (two browsers at most)
-    // Run the httpd task (including TLS handshakes) on core 1, away from Wi-Fi / USB on core 0
-    config.httpd.core_id = 1;
+    // Keep HTTPS and lwIP off the core that services USB audio and ACC.
+    config.httpd.core_id = WEB_CORE;
     // The TLS handshake runs synchronously inside the single httpd task. Chrome (especially on Android)
     // opens speculative connections that never send a ClientHello; with the 10 s default each of them
     // freezes the whole server and the real request ends in ERR_TOO_MANY_RETRIES. A normal handshake
@@ -1530,6 +1666,7 @@ esp_err_t web_server_start(void)
         {.uri = "/",           .method = HTTP_GET,  .handler = index_handler},
         {.uri = "/map",        .method = HTTP_GET,  .handler = map_handler},
         {.uri = "/status",     .method = HTTP_GET,  .handler = status_handler},
+        {.uri = "/status",     .method = HTTP_POST, .handler = usb_test_handler},
         {.uri = "/cat",        .method = HTTP_GET,  .handler = cat_handler},
         {.uri = "/cat",        .method = HTTP_POST, .handler = cat_post_handler},
         {.uri = "/reboot",     .method = HTTP_POST, .handler = reboot_handler},
@@ -1544,6 +1681,8 @@ esp_err_t web_server_start(void)
         ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &uris[i]), TAG, "register handler");
     }
     ESP_RETURN_ON_ERROR(ota_register(server), TAG, "register ota");
+    ESP_RETURN_ON_ERROR(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, web_session_unknown_route), TAG, "trace 404");
+    ESP_RETURN_ON_ERROR(httpd_register_err_handler(server, HTTPD_405_METHOD_NOT_ALLOWED, web_session_unknown_route), TAG, "trace 405");
     ESP_LOGI(TAG, "HTTPS server started on port %d", config.port_secure);
     redirect_server_start();
     web_auth_log_startup();

@@ -32,6 +32,9 @@ extern "C" {
 #define APP_CONFIG_MIN_SECRET_LEN   12
 #define APP_CONFIG_MIN_TX_SECRET_LEN 6
 #define TX_DEFAULT_SECONDS 120
+#define TX_SWR_DEFAULT 30
+#define TX_SWR_MIN 15
+#define TX_SWR_MAX 30
 #define TX_MIN_SECONDS 10
 #define TX_MAX_SECONDS 600
 
@@ -51,6 +54,7 @@ typedef struct {
     char web_pass[APP_CONFIG_WEB_PASS_MAX_LEN + 1];
     bool tx_enabled;
     unsigned tx_max_seconds;
+    unsigned swr_max; // tenths of the SWR ratio
     char tx_pass[APP_CONFIG_PASS_MAX_LEN + 1];
     char hostname[APP_CONFIG_HOSTNAME_MAX_LEN + 1];   /* DHCP / mDNS host name, without ".local" */
 } app_config_t;

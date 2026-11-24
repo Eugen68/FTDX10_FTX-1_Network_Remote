@@ -18,6 +18,7 @@
 #include "mbedtls/constant_time.h"
 #include "app_config.h"
 #include "web_auth.h"
+#include "web_session_diag.h"
 
 #define AUTH_FIELD_BYTES    128                       // decoded "user:password", zero padded for a fixed-size compare
 #define AUTH_HEADER_BYTES   (AUTH_FIELD_BYTES * 4 / 3 + 16)
@@ -40,7 +41,8 @@ _Static_assert((APP_CONFIG_OTA_USER_MAX_LEN + 1 + APP_CONFIG_OTA_PASS_MAX_LEN + 
     "default-src 'none'; script-src 'self' 'unsafe-inline'; worker-src blob:; "          \
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "                    \
     "font-src https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; " \
-    "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    "connect-src 'self'"
+#define CONTENT_SECURITY_POLICY_END "; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 static const char *TAG = "web_auth";
 
@@ -89,7 +91,20 @@ void web_auth_set_common_headers(httpd_req_t *req)
 
 void web_auth_set_html_headers(httpd_req_t *req)
 {
-    httpd_resp_set_hdr(req, "Content-Security-Policy", CONTENT_SECURITY_POLICY);
+    // The HTTPS server sends these pages synchronously in its single handler task.
+    // Some browsers do not match WSS against HTTPS 'self'. Permit only this Host's /ws.
+    static char websocket_policy[sizeof(CONTENT_SECURITY_POLICY CONTENT_SECURITY_POLICY_END) + HOST_HEADER_BYTES + 10];
+    const char *policy = CONTENT_SECURITY_POLICY CONTENT_SECURITY_POLICY_END;
+    char host[HOST_HEADER_BYTES];
+    if (app_config_tx_enabled() && read_hdr(req, "Host", host, sizeof(host)) == HDR_OK &&
+        host[0] != '\0' && strspn(host, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-:[]") == strlen(host)) {
+        const int n = snprintf(websocket_policy, sizeof(websocket_policy),
+                               CONTENT_SECURITY_POLICY " wss://%s/ws" CONTENT_SECURITY_POLICY_END, host);
+        if (n >= 0 && (size_t)n < sizeof(websocket_policy)) {
+            policy = websocket_policy;
+        }
+    }
+    httpd_resp_set_hdr(req, "Content-Security-Policy", policy);
 }
 
 static bool reject(httpd_req_t *req, const char *status, const char *body)
@@ -295,6 +310,7 @@ static bool csrf_ok(httpd_req_t *req)
 
 bool web_auth_check(httpd_req_t *req, web_auth_realm_t realm, bool state_changing)
 {
+    web_session_request(req);
     app_config_t cfg;
     app_config_get(&cfg);
 
@@ -349,9 +365,28 @@ bool web_auth_check(httpd_req_t *req, web_auth_realm_t realm, bool state_changin
 bool web_auth_ws_check(httpd_req_t *req)
 {
     char query[16];
-    return app_config_tx_enabled() && request_origin_ok(req, true) &&
-           httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
-           strcmp(query, "csrf=ftx1") == 0 && web_auth_check(req, WEB_AUTH_REALM_WEB, false);
+    if (!app_config_tx_enabled()) {
+        web_session_request(req);
+        web_session_close_reason(req, "ws-disabled");
+        return reject(req, "403 Forbidden", "Remote TX is disabled");
+    }
+    if (!request_origin_ok(req, true)) {
+        web_session_request(req);
+        web_session_close_reason(req, "ws-origin");
+        ESP_LOGW(TAG, "TX WebSocket rejected: origin check");
+        return reject(req, "403 Forbidden", "TX WebSocket origin refused");
+    }
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK || strcmp(query, "csrf=ftx1") != 0) {
+        web_session_request(req);
+        web_session_close_reason(req, "ws-csrf");
+        ESP_LOGW(TAG, "TX WebSocket rejected: missing or invalid CSRF marker");
+        return reject(req, "403 Forbidden", "TX WebSocket CSRF marker refused");
+    }
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
+        ESP_LOGW(TAG, "TX WebSocket rejected: web login");
+        return false;
+    }
+    return true;
 }
 
 bool web_auth_tx_check(httpd_req_t *req, const char *pass)

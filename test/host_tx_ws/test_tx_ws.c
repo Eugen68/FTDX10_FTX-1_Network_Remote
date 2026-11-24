@@ -6,6 +6,7 @@
 #include <string.h>
 #include "app_config.h"
 #include "cat.h"
+#include "esp_log.h"
 #include "tx.h"
 
 typedef struct {
@@ -22,7 +23,7 @@ typedef struct {
 } httpd_ws_frame_t;
 
 static const char *message;
-static char reply[384];
+static char reply[512];
 static unsigned auth_checks, key_requests;
 static uint32_t acquired_owner, released_owner;
 static bool mode_refused;
@@ -63,9 +64,10 @@ bool tx_acquire(uint32_t owner)
     acquired_owner = owner;
     return true;
 }
-bool tx_key(uint32_t owner)
+bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
 {
     assert(owner == acquired_owner);
+    assert(tone == TX_TONE_SINGLE && dbfs == -24);
     key_requests++;
     return !mode_refused;
 }
@@ -109,10 +111,16 @@ int main(void)
     assert(auth_checks == 2);
 
     mode_refused = true;
-    message = "{\"t\":\"ptt\",\"on\":true}";
+    message = "{\"t\":\"ptt\",\"on\":true,\"tone\":\"single\",\"dbfs\":-24}";
     assert(tx_ws_handler(&req) == ESP_OK);
     assert(key_requests == 1 && acquired_owner != 0);
     assert(strstr(reply, "\"error\":\"Set MAIN mode to USB, LSB, DATA-USB or DATA-LSB\""));
+    message = "{\"t\":\"ptt\",\"on\":true,\"tone\":\"dual\",\"dbfs\":0}";
+    assert(tx_ws_handler(&req) == ESP_FAIL && key_requests == 1);
+    message = "{\"t\":\"ptt\",\"on\":true,\"tone\":\"dual\",\"dbfs\":-06}";
+    assert(tx_ws_handler(&req) == ESP_FAIL && key_requests == 1);
+    message = "{\"t\":\"ptt\",\"on\":false,\"tone\":\"dual\"}";
+    assert(tx_ws_handler(&req) == ESP_FAIL && key_requests == 1);
     req.free_ctx(req.sess_ctx);
     assert(released_owner == acquired_owner);
     puts("WebSocket session and PTT refusal tests passed");

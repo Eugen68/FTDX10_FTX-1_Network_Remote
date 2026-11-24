@@ -233,6 +233,7 @@ static void print_config_summary(const app_config_t *cfg)
         " t) TX enabled       : %s\r\n"
         " p) TX password      : %s\r\n"
         " m) TX limit         : %u s\r\n"
+        " s) SWR limit        : %u.%u:1\r\n"
         " h) Host name        : %s.local\r\n"
         "==================================================\r\n",
         cfg->wifi_ssid[0] ? cfg->wifi_ssid : "(not set)",
@@ -243,7 +244,7 @@ static void print_config_summary(const app_config_t *cfg)
         cfg->web_pass[0] ? masked_web_pass : (cfg->ota_pass[0] ? "(empty: uses the OTA password)" : "(empty: web UI refuses all requests)"),
         cfg->tx_enabled ? "yes" : "no",
         cfg->tx_pass[0] ? masked_tx_pass : "(not set)", cfg->tx_max_seconds,
-        cfg->hostname
+        cfg->swr_max / 10, cfg->swr_max % 10, cfg->hostname
     );
     console_write_str(msg);
 }
@@ -279,9 +280,10 @@ void console_menu_run(void)
             "  t: Toggle remote TX\r\n"
             "  p: Set TX password (6+ chars)\r\n"
             "  m: Set TX time limit (10–600 seconds)\r\n"
+            "  s: Set SWR limit (1.5–3.0)\r\n"
             "  h: Set Host name (mDNS / DHCP)\r\n"
             "--------------------------------------------------\r\n"
-            "Enter selection (0-9, h, t, p, m): "
+            "Enter selection (0-9, h, t, p, m, s): "
         );
 
         char opt[8] = {0};
@@ -386,6 +388,21 @@ void console_menu_run(void)
                 } else {
                     cfg.tx_max_seconds = (unsigned)seconds;
                 }
+                break;
+            }
+            case 's': {
+                char value[12] = {0};
+                console_write_str("SWR limit (1.5 to 3.0): ");
+                read_line(value, sizeof(value), false);
+                if (strlen(value) == 3 && (value[0] >= '1' && value[0] <= '3') &&
+                    value[1] == '.' && (value[2] >= '0' && value[2] <= '9')) {
+                    const unsigned limit = (value[0] - '0') * 10 + (value[2] - '0');
+                    if (limit >= TX_SWR_MIN && limit <= TX_SWR_MAX) {
+                        cfg.swr_max = limit;
+                        break;
+                    }
+                }
+                console_write_str("-> Enter a limit from 1.5 to 3.0 with one decimal\r\n");
                 break;
             }
             case 'h':
