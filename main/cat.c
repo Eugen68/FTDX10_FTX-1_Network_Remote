@@ -390,7 +390,7 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         return ctl && pl == 0;
     case CAT_TWO('A', 'I'):         // auto information ON
         return ctl && pl == 1 && p[0] == '1';
-    case CAT_TWO('R', 'I'):         // radio information (read), FTX-1
+    case CAT_TWO('R', 'I'):         // radio information (read), including Hi-SWR
         return rig->can_tx && pl == 1 && p[0] == '0';
     case CAT_TWO('B', 'Y'):         // busy (read), FTDX10
         return rig->has_by_tx && pl == 0;
@@ -1142,13 +1142,14 @@ typedef struct {
     unsigned meters_until_status;
 } keyed_poll_t;
 
-static bool keyed_poll_answered(const keyed_poll_t *poll)
+static bool keyed_poll_answered(const rig_profile_t *rig, const keyed_poll_t *poll)
 {
     const int64_t sent_at = poll->sent_at;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     const bool answered = poll->status
         ? s_last_ptt_status_us >= sent_at && s_swr_status_us >= sent_at &&
-          s_tx_vfo_status_us >= sent_at && s_mode_status_us[0] >= sent_at && s_mode_status_us[1] >= sent_at
+          s_tx_vfo_status_us >= sent_at && s_mode_status_us[0] >= sent_at &&
+          (!rig->dual_rx || s_mode_status_us[1] >= sent_at)
         : s_tx_meters.po_us >= sent_at && s_rm6_reply_us >= s_tx_meters.po_us;
     xSemaphoreGive(s_lock);
     return answered;
@@ -1164,7 +1165,7 @@ static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_po
         const int64_t reply_timeout = rig->rig == CAT_RIG_FTDX10
             ? FTDX10_KEYED_REPLY_TIMEOUT_US : FTX1_KEYED_REPLY_TIMEOUT_US;
         if (elapsed < POLL_PERIOD_MS * 1000 ||
-            (elapsed < reply_timeout && !keyed_poll_answered(poll))) {
+            (elapsed < reply_timeout && !keyed_poll_answered(rig, poll))) {
             return;
         }
     }
@@ -1174,7 +1175,7 @@ static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_po
     poll->status = poll->meters_until_status == 0;
     const char *cmds = "RM5;RM6;";
     if (poll->status) {
-        cmds = rig->has_ri ? "RI0;TX;FT;MD0;MD1;" : "TX;RI0;FT;MD0;MD1;";
+        cmds = rig->dual_rx ? "RI0;TX;FT;MD0;MD1;" : "TX;RI0;FT;MD0;";
         poll->meters_until_status = rig->rig == CAT_RIG_FTX1 ? 1 : 2;
     } else {
         --poll->meters_until_status;
@@ -1260,7 +1261,7 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             }
             send_poll(dev, rig->poll_status);
             if (rig->can_tx && app_config_tx_enabled()) {
-                send_poll(dev, "FT;MD0;MD1;");
+                send_poll(dev, rig->dual_rx ? "FT;MD0;MD1;" : "FT;MD0;");
             }
         }
 
@@ -1595,7 +1596,9 @@ const char *cat_ptt_mode_error(int64_t keyed_at)
                s_tx_vfo_status_us < oldest) {
         reason = "Waiting for TX VFO confirmation";
     } else if (s_state.tx_vfo == CAT_TX_VFO_SUB) {
-        if (!s_mode_status_us[1] || s_mode_status_us[1] < oldest ||
+        if (!s_rig->dual_rx) {
+            reason = "Select MAIN for remote PTT";
+        } else if (!s_mode_status_us[1] || s_mode_status_us[1] < oldest ||
             s_state.mode_sub_raw != s_reported_mode[1]) {
             reason = "Waiting for SUB mode confirmation";
         } else if (!ptt_sideband_mode(s_reported_mode[1])) {

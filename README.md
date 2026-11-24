@@ -604,7 +604,8 @@ and the TX password. Five failed TX password attempts from the same IP trigger t
 One browser can hold PTT at a time. Hold the button or Space while the page has focus. During confirmed TX, the PTT button and the
 frequency readout for the radio-selected TX VFO turn red.
 The TX panel offers PTT only, a 1,000 Hz test tone, and a 700 + 1,900 Hz two-tone test. Set MAIN to USB, LSB, DATA-USB or DATA-LSB.
-When the radio selects SUB for transmit, set SUB to one of those modes too. The firmware waits for fresh
+On FTX-1, when SUB is selected for transmit, set SUB to one of those modes too. On FTDX10, select MAIN
+for remote PTT. The firmware waits for fresh
 CAT confirmation of the mode and the selected transmitter. Select USB modulation on the radio to use the test tones. The firmware leaves the modulation-source and transmit-gain menus under local control.
 
 The device releases PTT on button/key release, a closed connection, 1.5 seconds without the owner's

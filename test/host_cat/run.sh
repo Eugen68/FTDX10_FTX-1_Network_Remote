@@ -4,6 +4,6 @@ set -e
 here=$(cd "$(dirname "$0")" && pwd)
 out=$(mktemp -d)
 gcc -std=gnu11 -Wall -Wno-unused-variable -Wno-unused-function \
-    -I"$here/stub" -I"$here/../../main" -o "$out/test_cat" "$here/test_cat.c"
+    -I"$here/stub" -I"$here/../../main" -o "$out/test_cat" "$here/test_cat.c" "$here/../../main/tx_swr.c"
 "$out/test_cat"
 rm -rf "$out"

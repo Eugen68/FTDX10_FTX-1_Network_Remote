@@ -14,6 +14,7 @@
 char g_sent[1024];
 int64_t g_now_us = 1000000;
 #include "cat.c"   // the real file, built against the stubs in stub/
+#include "tx_swr.h"
 uint32_t g_write_timeout_ms;
 int64_t g_write_duration_us;
 esp_err_t g_write_result;
@@ -144,7 +145,14 @@ int main(void) {
     handle_cat_packet("RI01010000;");
     CHECK(strcmp(cat_ptt_fault(g_now_us, 1500000), "High SWR") == 0, "FTX-1 RI reports high SWR");
     use("0761");
+    ++g_now_us;
+    handle_cat_packet("RI00010000;");
+    CHECK(s_swr_status_us < g_now_us, "FTDX10 does not use extended RI replies");
+    ++g_now_us;
+    handle_cat_packet("RI02;");
+    CHECK(s_swr_status_us < g_now_us, "invalid FTDX10 SWR flag does not refresh RI status");
     handle_cat_packet("RI01;");
+    CHECK(s_swr_status_us == g_now_us, "FTDX10 short RI reply refreshes SWR status");
     CHECK(strcmp(cat_ptt_fault(g_now_us, 1500000), "High SWR") == 0, "FTDX10 RI reports high SWR");
     use("0840");
     handle_cat_packet("RI00000000;");
@@ -289,7 +297,7 @@ int main(void) {
         g_sent[0] = '\0';
         keyed_poll_t poll = {0};
         poll_keyed((void *)1, s_rig, &poll);
-        CHECK(strcmp(g_sent, i ? "TX;RI0;FT;MD0;MD1;" : "RI0;TX;FT;MD0;MD1;") == 0,
+        CHECK(strcmp(g_sent, i ? "TX;RI0;FT;MD0;" : "RI0;TX;FT;MD0;MD1;") == 0,
               "only TX status is outstanding on %s", s_rig->name);
         CHECK(g_write_timeout_ms == 1200, "keyed poll uses the longer write budget");
         CHECK(cat_enqueue("FA;") == ESP_ERR_INVALID_STATE, "ordinary commands cannot queue during TX");
@@ -299,10 +307,16 @@ int main(void) {
         handle_cat_packet("TX1;");
         handle_cat_packet(i ? "RI00;" : "RI00010000;");
         handle_cat_packet("FT0;");
+        if (i) {
+            poll_keyed((void *)1, s_rig, &poll);
+            CHECK(!g_sent[0], "FTDX10 must wait for MD0");
+        }
         handle_cat_packet("MD01;");
-        poll_keyed((void *)1, s_rig, &poll);
-        CHECK(!g_sent[0], "partial status must not launch another poll");
-        handle_cat_packet("MD11;");
+        if (!i) {
+            poll_keyed((void *)1, s_rig, &poll);
+            CHECK(!g_sent[0], "FTX-1 must wait for MD1");
+            handle_cat_packet("MD11;");
+        }
         g_write_duration_us = i ? 125000 : 950000;
         const cat_write_stats_t before_slow_write = cat_get_write_stats();
         poll_keyed((void *)1, s_rig, &poll);
@@ -332,6 +346,43 @@ int main(void) {
               g_write_timeout_ms == 200, "TX0 keeps its independent short budget");
     }
 
+    // Exercise a full minute of FTDX10 polling without a single MD1 reply.
+    use("0761");
+    s_state.tx_cat = true;
+    s_mode_status_us[1] = 0;
+    g_now_us += 1000;
+    const int64_t trial_started = g_now_us;
+    keyed_poll_t trial_poll = {0};
+    tx_swr_guard_t trial_guard = {.rig = CAT_RIG_FTDX10};
+    unsigned meter_polls = 0;
+    for (unsigned i = 0; i < 600; ++i) {
+        g_sent[0] = '\0';
+        poll_keyed((void *)1, s_rig, &trial_poll);
+        g_now_us += 10000;
+        if (strcmp(g_sent, "TX;RI0;FT;MD0;") == 0) {
+            handle_cat_packet("TX1;");
+            handle_cat_packet("RI00;");
+            handle_cat_packet("FT0;");
+            handle_cat_packet("MD0C;");
+        } else if (strcmp(g_sent, "RM5;RM6;") == 0) {
+            ++meter_polls;
+            handle_cat_packet("RM5033000;");
+            ++g_now_us;
+            handle_cat_packet("RM6000000;");
+        }
+        g_now_us = trial_started + (i + 1) * 100000LL;
+        const cat_tx_meters_t trial_meters = cat_get_tx_meters();
+        CHECK(tx_swr_check(&trial_guard, &trial_meters, trial_started, g_now_us, 300) == TX_SWR_OK,
+              "FTDX10 meter safety remains satisfied without MD1 at iteration %u", i);
+    }
+    CHECK(meter_polls == 400, "status releases the next meter poll on time: %u", meter_polls);
+    CHECK(cat_ptt_mode_error(trial_started) == NULL, "FTDX10 MAIN mode is confirmed without MD1");
+    handle_cat_packet("FT1;");
+    handle_cat_packet("MD1C;");
+    CHECK(strcmp(cat_ptt_mode_error(trial_started), "Select MAIN for remote PTT") == 0,
+          "FTDX10 remote TX does not use an unmonitored SUB mode");
+    s_state.tx_cat = false;
+
     // FTDX10 regression: a lost meter pair and then a partial status batch
     // must leave time to collect fresh meters before the 1.1 s watchdog.
     use("0761");
@@ -348,7 +399,7 @@ int main(void) {
     poll_keyed((void *)1, s_rig, &ftdx10_poll);
     handle_cat_packet("TX1;");
     handle_cat_packet("RI00;");
-    CHECK(strcmp(g_sent, "TX;RI0;FT;MD0;MD1;") == 0, "missing meter pair advances to status");
+    CHECK(strcmp(g_sent, "TX;RI0;FT;MD0;") == 0, "missing meter pair advances to status");
     g_sent[0] = '\0';
     g_now_us += FTDX10_KEYED_REPLY_TIMEOUT_US;
     poll_keyed((void *)1, s_rig, &ftdx10_poll);
