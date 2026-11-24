@@ -279,6 +279,19 @@ int main(void) {
     CHECK(n == 1 && le[0].kind == CAT_LOG_ERROR && strcmp(le[0].text, "RM5;") == 0,
           "meter diagnostics include failed writes");
 
+    for (unsigned i = 0; i < 2; ++i) {
+        use(i ? "0761" : "0840");
+        s_state.tx_cat = true;
+        g_sent[0] = '\0';
+        poll_keyed((void *)1, s_rig, 0);
+        CHECK(strcmp(g_sent, i ? "TX;RI0;FT;MD0;MD1;RM5;RM6;" : "RI0;TX;FT;MD0;MD1;RM5;RM6;") == 0,
+              "TX status precedes meters for %s: %s", s_rig->name, g_sent);
+        g_sent[0] = '\0';
+        poll_keyed((void *)1, s_rig, 1);
+        CHECK(strcmp(g_sent, "RM5;RM6;") == 0, "intervening TX poll only reads meters");
+        s_state.tx_cat = false;
+    }
+
     printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     return fails != 0;
 }

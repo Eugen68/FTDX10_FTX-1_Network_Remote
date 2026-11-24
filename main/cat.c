@@ -1108,10 +1108,23 @@ static void report_queued_write_failure(const char *cmd, esp_err_t err)
     xSemaphoreGive(s_lock);
 }
 
+static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, unsigned cycle)
+{
+    // Reserve the link for safety telemetry during TX. Send status immediately,
+    // then every third cycle, ahead of the metering pair.
+    if (cycle % 3 == 0) {
+        send_poll(dev, rig->has_ri ? "RI0;TX;FT;MD0;MD1;" : "TX;RI0;FT;MD0;MD1;");
+    }
+    if (cat_tx_requested()) {
+        send_poll(dev, "RM5;RM6;");
+    }
+}
+
 static void poll_loop(cdc_acm_dev_hdl_t dev)
 {
     const rig_profile_t *rig = s_rig;
     uint32_t poll_count = 0;
+    unsigned keyed_cycle = 0;
     bool usb_level_applied = false;   // DATA audio output level already set for the current DATA-USB session
 
     // Request the initial state asynchronously (rx_cb parses answers as they arrive). The sync string
@@ -1123,9 +1136,19 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
     send_poll(dev, rig->poll_fast);
 
     while (!s_disconnected) {
+        if (rig->can_tx && cat_tx_requested()) {
+            poll_keyed(dev, rig, keyed_cycle++);
+            vTaskDelay(pdMS_TO_TICKS(POLL_PERIOD_MS));
+            continue;
+        }
+        if (keyed_cycle) {
+            // Refresh radio status immediately after a TX0, before normal polling.
+            send_poll(dev, rig->poll_status);
+            keyed_cycle = 0;
+        }
         // 1. Process any pending commands in the queue (already checked against the allow-list when queued)
         cat_cmd_item_t item;
-        while (s_cmd_queue && xQueueReceive(s_cmd_queue, &item, 0) == pdTRUE) {
+        while (s_cmd_queue && !cat_tx_requested() && xQueueReceive(s_cmd_queue, &item, 0) == pdTRUE) {
             ESP_LOGI(TAG, "Sending CAT command: %s", item.cmd);
             const esp_err_t err = cat_tx(dev, item.cmd);
             if (err != ESP_OK) {
@@ -1146,6 +1169,10 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             }
         }
 
+        if (rig->can_tx && cat_tx_requested()) {
+            continue;
+        }
+
         // 1b. Entering DATA-USB (from the web UI or the radio itself): set the DATA audio output level
         //     (the profile's menu item) once. Leaving DATA-USB re-arms it, so a level changed by hand
         //     stays until the next entry.
@@ -1163,9 +1190,6 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
 
         // 2. Poll the S meter every 100 ms
         send_poll(dev, rig->poll_fast);
-        if (rig->can_tx && cat_tx_requested()) {
-            send_poll(dev, "RM5;RM6;");
-        }
 
         // 3. Poll BUSY / TX every 500 ms (every 5 iterations)
         if ((poll_count % 5) == 0) {
@@ -1175,9 +1199,6 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             send_poll(dev, rig->poll_status);
             if (rig->can_tx && app_config_tx_enabled()) {
                 send_poll(dev, "FT;MD0;MD1;");
-            }
-            if (rig->has_by_tx && cat_tx_requested()) {
-                send_poll(dev, "RI0;");
             }
         }
 
