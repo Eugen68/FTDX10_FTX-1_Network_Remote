@@ -107,6 +107,8 @@ static bool s_ptt_ready;
 static int64_t s_swr_status_us;
 static cat_tx_meters_t s_tx_meters;
 static cat_write_stats_t s_write_stats;
+static unsigned s_usb_test_generation;
+static bool s_usb_test_active;
 static int64_t s_tx_vfo_status_us;
 static int64_t s_mode_status_us[2];
 static char s_reported_mode[2];
@@ -584,6 +586,7 @@ static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_ki
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     const bool keyed = s_state.tx_cat;
+    const unsigned usb_test = s_usb_test_active ? s_usb_test_generation : 0;
     xSemaphoreGive(s_lock);
     const int64_t start = esp_timer_get_time();
     const esp_err_t err = cdc_acm_host_data_tx_blocking(dev, (const uint8_t *)cmds, strlen(cmds), TX_TIMEOUT_MS);
@@ -592,6 +595,9 @@ static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_ki
     capture_write_timing(&s_write_stats.all, elapsed, err);
     if (keyed) {
         capture_write_timing(&s_write_stats.keyed, elapsed, err);
+    }
+    if (usb_test && usb_test == s_usb_test_generation) {
+        capture_write_timing(&s_write_stats.usb_test, elapsed, err);
     }
     if (strcmp(cmds, "RM5;RM6;") == 0) {
         capture_write_timing(&s_write_stats.meters, elapsed, err);
@@ -1399,6 +1405,19 @@ cat_write_stats_t cat_get_write_stats(void)
     xSemaphoreGive(s_lock);
     stats.budget_ms = TX_TIMEOUT_MS;
     return stats;
+}
+
+void cat_set_usb_test(bool active)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (active) {
+        if (++s_usb_test_generation == 0) {
+            ++s_usb_test_generation;
+        }
+        s_write_stats.usb_test = (cat_write_timing_t){0};
+    }
+    s_usb_test_active = active;
+    xSemaphoreGive(s_lock);
 }
 
 bool cat_radio_rx_after(int64_t after_us)

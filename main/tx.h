@@ -21,6 +21,16 @@ typedef struct {
     bool swr_valid, po_valid;
 } tx_state_t;
 
+typedef struct {
+    bool active;
+    unsigned left_s;
+    uint32_t rate;
+    const char *reason;
+} tx_usb_test_state_t;
+
+esp_err_t tx_usb_test_start(uint32_t rate);
+tx_usb_test_state_t tx_usb_test_state(void);
+
 esp_err_t tx_init(void);
 bool tx_acquire(uint32_t owner);
 bool tx_key(uint32_t owner);

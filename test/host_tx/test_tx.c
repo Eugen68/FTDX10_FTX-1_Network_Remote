@@ -16,6 +16,8 @@ static void record_warning(const char *format, ...)
     va_end(args);
 }
 
+#undef ESP_LOGI
+#define ESP_LOGI(tag, ...) record_warning(__VA_ARGS__)
 #undef ESP_LOGW
 #define ESP_LOGW(tag, ...) record_warning(__VA_ARGS__)
 #include "tx.c"
@@ -31,6 +33,8 @@ static bool output_idle = true;
 static cat_rig_t radio_model = CAT_RIG_FTDX10;
 static bool prepare_fails, prepare_changes_mode, prepare_shared;
 static unsigned preparations, cleanups;
+static bool usb_test_counting;
+static uint32_t prepared_rate;
 static tx_tone_t audio_request;
 static unsigned po_raw, swr_raw;
 static bool meters_missing;
@@ -48,11 +52,12 @@ bool usb_audio_tx_available(void) { return output_available; }
 bool usb_audio_tx_idle(void) { return output_idle; }
 void usb_audio_tx_request(tx_tone_t tone, int dbfs) { audio_request = tone; }
 void cat_get_state(cat_state_t *state) { *state = (cat_state_t){.rig = radio_model}; }
-esp_err_t usb_audio_tx_prepare(bool shared)
+esp_err_t usb_audio_tx_prepare(bool shared, uint32_t rate)
 {
     assert(!radio_on && output_idle);
     ++preparations;
     prepare_shared = shared;
+    prepared_rate = rate;
     if (prepare_changes_mode) {
         mode_error = "Mode changed";
     }
@@ -60,7 +65,7 @@ esp_err_t usb_audio_tx_prepare(bool shared)
 }
 void usb_audio_tx_finished(void)
 {
-    assert(!radio_on && audio_request == TX_TONE_OFF);
+    assert((s_usb_test_deadline || !radio_on) && audio_request == TX_TONE_OFF);
     ++cleanups;
 }
 cat_tx_meters_t cat_get_tx_meters(void)
@@ -75,10 +80,12 @@ cat_tx_meters_t cat_get_tx_meters(void)
 }
 cat_write_stats_t cat_get_write_stats(void)
 {
-    assert(s_stopping && off_writes == 10);
+    if (!s_stopping) return (cat_write_stats_t){0};
+    assert(off_writes == 10);
     ++stale_diagnostics_reads;
     return (cat_write_stats_t){.meters = {.calls = 6, .timeouts = 1, .max_us = 10000}};
 }
+void cat_set_usb_test(bool active) { usb_test_counting = active; }
 size_t cat_log_recent_tx_meters(uint32_t through_ms, cat_log_entry_t *entries, size_t max)
 {
     assert(through_ms == (uint32_t)(g_now_us / 1000) && max >= 1);
@@ -276,5 +283,24 @@ int main(void)
     assert(audio_request == TX_TONE_OFF && cleanups == 2);
     confirm_rx();
     assert(cleanups == 3);
+    const unsigned before_test_on = on_writes, before_test_off = off_writes;
+    assert(tx_usb_test_start(44100) == ESP_OK);
+    assert(tx_usb_test_state().active && tx_usb_test_state().left_s == 20 && tx_usb_test_state().rate == 44100);
+    assert(usb_test_counting && prepare_shared && prepared_rate == 44100 && audio_request == TX_TONE_SINGLE);
+    assert(tx_get_state().phase == TX_IDLE && !tx_acquire(1));
+    assert(!tx_begin_usb_recovery() && !tx_quiesce("Reboot"));
+    g_now_us += USB_TEST_US - 1;
+    watchdog_tick();
+    assert(tx_usb_test_state().active);
+    ++g_now_us;
+    watchdog_tick();
+    assert(!tx_usb_test_state().active && !usb_test_counting && audio_request == TX_TONE_OFF);
+    assert(cleanups == 4 && on_writes == before_test_on && off_writes == before_test_off);
+    rx_us = g_now_us;
+    assert(tx_usb_test_start(48000) == ESP_OK && prepared_rate == 48000);
+    radio_on = true;
+    watchdog_tick();
+    assert(!tx_usb_test_state().active && strcmp(tx_usb_test_state().reason,"Radio entered TX") == 0);
+    assert(on_writes == before_test_on && off_writes == before_test_off);
     puts("all TX state tests passed");
 }

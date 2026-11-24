@@ -47,9 +47,9 @@ _Static_assert(CONFIG_AUDIO_RING_BUFFER_SIZE != USB_AUDIO_TX_RING_BYTES,
 
 // ESP32-S3 reports 200 FIFO lines in GHWCFG3.DFIFODEPTH. Use that budget
 // rather than the 256 lines used to calculate the driver's default bias ratios.
-// Keep RX at 104 lines, as in the balanced profile on a 200-line controller.
+// Experiment: increase bulk OUT FIFO while retaining room for stereo audio IN.
 #define USB_FIFO_LINES          200
-#define USB_NPTX_FIFO_LINES      32
+#define USB_NPTX_FIFO_LINES      64
 #define USB_PTX_FIFO_LINES       64
 #define USB_RX_FIFO_LINES       (USB_FIFO_LINES - USB_NPTX_FIFO_LINES - USB_PTX_FIFO_LINES)
 
@@ -88,6 +88,7 @@ static atomic_bool s_rx_paused;                // logical RX stream retained whi
 static SemaphoreHandle_t s_output_lock;        // keeps handle open across UAC output operations
 static uac_host_device_handle_t s_output_handle;
 static uac_host_stream_config_t s_tx_format;
+static uint32_t s_tx_play_rate;
 static bool s_output_prepared;                 // protected by s_output_lock
 static atomic_bool s_tx_finish;
 static TaskHandle_t s_tx_task;
@@ -586,12 +587,26 @@ static void finish_audio_tx(void)
     atomic_store(&s_tx_clean, err == ESP_OK);
 }
 
-esp_err_t usb_audio_tx_prepare(bool share_rx_channel)
+esp_err_t usb_audio_tx_prepare(bool share_rx_channel, uint32_t test_rate)
 {
     xSemaphoreTake(s_output_lock, portMAX_DELAY);
     if (!s_tx_clean || !s_tx_available || !s_output_handle) {
         xSemaphoreGive(s_output_lock);
         return ESP_ERR_INVALID_STATE;
+    }
+
+    uac_host_stream_config_t stream = s_tx_format;
+    if (test_rate) {
+        // The FTX-1 stereo alternate advertises both rates on the same endpoint.
+        bool supported = false;
+        for (unsigned i = 0; i < s_output_format.rate_count; ++i) {
+            supported |= s_output_format.rates[i] == test_rate;
+        }
+        if (!supported) {
+            xSemaphoreGive(s_output_lock);
+            return ESP_ERR_NOT_SUPPORTED;
+        }
+        stream.sample_freq = test_rate;
     }
 
     const bool pause_rx = share_rx_channel || s_output_format.endpoints > 1;
@@ -619,8 +634,9 @@ esp_err_t usb_audio_tx_prepare(bool share_rx_channel)
     ESP_LOGI(TAG, "USB TX start: endpoints=%u bmAttributes=0x%02x sync_type=%u rx_paused=%s",
              s_output_format.endpoints, s_output_format.attributes,
              (s_output_format.attributes >> 2) & 3, pause_rx ? "yes" : "no");
-    const esp_err_t err = uac_host_device_start(s_output_handle, &s_tx_format);
+    const esp_err_t err = uac_host_device_start(s_output_handle, &stream);
     if (err == ESP_OK) {
+        s_tx_play_rate = stream.sample_freq;
         s_output_prepared = true;
     } else {
         ESP_LOGW(TAG, "USB TX audio start failed: %s", esp_err_to_name(err));
@@ -691,10 +707,10 @@ static void tx_audio_task(void *arg)
         if (request && !active && s_output_prepared && s_output_handle &&
             request == atomic_load(&s_tx_request)) {
             active = request;
-            tx_tone_fill(pcm, s_tx_format.sample_freq, s_tx_format.channels,
+            tx_tone_fill(pcm, s_tx_play_rate, s_tx_format.channels,
                          (tx_tone_t)(request & 3), -(int)((request >> 2) & 63));
-            bytes = (s_tx_format.sample_freq / 100) * s_tx_format.channels * sizeof(pcm[0]);
-            atomic_store(&s_tx_rate, s_tx_format.sample_freq);
+            bytes = (s_tx_play_rate / 100) * s_tx_format.channels * sizeof(pcm[0]);
+            atomic_store(&s_tx_rate, s_tx_play_rate);
             tick = xTaskGetTickCount();
             last_write_us = 0;
             blocks = TX_PREFILL_BLOCKS;

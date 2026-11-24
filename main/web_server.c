@@ -29,6 +29,7 @@
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
 #include <math.h>
+#include "mbedtls/platform_util.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
@@ -642,7 +643,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 640];
+    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -746,15 +747,20 @@ static esp_err_t status_handler(httpd_req_t *req)
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const cat_write_stats_t cat = cat_get_write_stats();
+        const tx_usb_test_state_t test = tx_usb_test_state();
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"cat_write\":{\"budget_ms\":%u,"
                       "\"all\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
                       "\"keyed\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
-                      "\"meters\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u}}}",
+                      "\"meters\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
+                      "\"usb_test\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u}},"
+                      "\"usb_test\":{\"active\":%s,\"left_s\":%u,\"rate\":%lu,\"reason\":\"%s\"}}",
                       cat.budget_ms, cat.all.calls, cat.all.timeouts, cat.all.over_budget, cat.all.max_us,
                       cat.keyed.calls, cat.keyed.timeouts, cat.keyed.over_budget, cat.keyed.max_us,
-                      cat.meters.calls, cat.meters.timeouts, cat.meters.over_budget, cat.meters.max_us);
+                      cat.meters.calls, cat.meters.timeouts, cat.meters.over_budget, cat.meters.max_us,
+                      cat.usb_test.calls, cat.usb_test.timeouts, cat.usb_test.over_budget, cat.usb_test.max_us,
+                      test.active ? "true" : "false", test.left_s, (unsigned long)test.rate, test.reason);
     }
     return send_json(req, json, n, sizeof(json));
 }
@@ -1241,6 +1247,42 @@ static bool read_body(httpd_req_t *req, char *buf, size_t buf_size)
     return strlen(buf) == total;   // an embedded NUL would hide data from the parser
 }
 
+static esp_err_t usb_test_handler(httpd_req_t *req)
+{
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, true)) {
+        return ESP_OK;
+    }
+    char query[32];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        (strcmp(query, "usb_test=1") != 0 && strcmp(query, "usb_test=1&rate=44100") != 0)) {
+        httpd_resp_set_hdr(req, "Connection", "close");
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Expected USB test query");
+    }
+
+    char body[192];
+    tx_ws_message_t auth = {0};
+    const bool parsed = read_body(req, body, sizeof(body)) &&
+                        parse_tx_message(body, &auth) && strcmp(auth.type, "tx_auth") == 0;
+    mbedtls_platform_zeroize(body, sizeof(body));
+    const bool authorized = parsed && web_auth_tx_check(req, auth.pass);
+    mbedtls_platform_zeroize(&auth, sizeof(auth));
+    web_auth_set_common_headers(req);
+    if (!authorized) {
+        httpd_resp_set_hdr(req, "Connection", "close");
+        httpd_resp_set_status(req, "403 Forbidden");
+        return httpd_resp_sendstr(req, "TX authorization refused");
+    }
+
+    const esp_err_t err = tx_usb_test_start(strcmp(query, "usb_test=1") == 0 ? 48000 : 44100);
+    if (err != ESP_OK) {
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_sendstr(req, esp_err_to_name(err));
+    }
+    httpd_resp_set_status(req, "202 Accepted");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"usb_test\":\"started\",\"duration_s\":20}");
+}
+
 static bool content_type_is_json(httpd_req_t *req)
 {
     char type[48];
@@ -1623,6 +1665,7 @@ esp_err_t web_server_start(void)
         {.uri = "/",           .method = HTTP_GET,  .handler = index_handler},
         {.uri = "/map",        .method = HTTP_GET,  .handler = map_handler},
         {.uri = "/status",     .method = HTTP_GET,  .handler = status_handler},
+        {.uri = "/status",     .method = HTTP_POST, .handler = usb_test_handler},
         {.uri = "/cat",        .method = HTTP_GET,  .handler = cat_handler},
         {.uri = "/cat",        .method = HTTP_POST, .handler = cat_post_handler},
         {.uri = "/reboot",     .method = HTTP_POST, .handler = reboot_handler},

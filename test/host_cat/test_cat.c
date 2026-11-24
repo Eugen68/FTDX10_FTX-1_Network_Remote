@@ -292,6 +292,15 @@ int main(void) {
         s_state.tx_cat = false;
     }
 
+    cat_set_usb_test(true);
+    use("0840");
+    cat_tx((void *)1, "RI0;TX;");
+    cat_set_usb_test(false);
+    cat_tx((void *)1, "RI0;TX;");
+    CHECK(cat_get_write_stats().usb_test.calls == 1, "count CAT writes only during the USB test");
+    cat_set_usb_test(true);
+    CHECK(cat_get_write_stats().usb_test.calls == 0, "reset USB test counters on start");
+    cat_set_usb_test(false);
     printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     return fails != 0;
 }
