@@ -86,6 +86,17 @@ int main(void)
     unmatched.swr_us = 1700001;
     assert(tx_swr_check(&guard, &unmatched, 1000000, 1700001, 300) == TX_SWR_LIMIT);
 
+    // The profile is known before the first meter reply arrives.
+    guard = (tx_swr_guard_t){.rig = CAT_RIG_FTX1};
+    const cat_tx_meters_t no_replies = {0};
+    assert(tx_swr_check(&guard, &no_replies, 1000000, 3000000, 300) == TX_SWR_OK);
+    assert(tx_swr_check(&guard, &no_replies, 1000000, 3000001, 300) == TX_SWR_STALE);
+    delayed.rig = CAT_RIG_FTX1;
+    assert(tx_swr_check(&guard, &delayed, 1000000, 2100001, 300) == TX_SWR_OK);
+    assert(tx_swr_check(&guard, &delayed, 1000000, 3000001, 300) == TX_SWR_STALE);
+    delayed.swr = 242;
+    assert(tx_swr_check(&guard, &delayed, 1000000, 1000001, 300) == TX_SWR_LIMIT);
+
     int16_t pcm[960];
     tx_tone_fill(pcm, 48000, 2, TX_TONE_SINGLE, -24);
     assert(energy(pcm, 10) > 400000 && energy(pcm, 7) < 100);

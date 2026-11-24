@@ -31,12 +31,18 @@ unsigned tx_swr_value(cat_rig_t rig, unsigned raw)
     return points[count-1][1];
 }
 
+int64_t tx_meter_max_age_us(cat_rig_t rig)
+{
+    return rig == CAT_RIG_FTX1 ? 2000000LL : 1100000LL;
+}
+
 tx_swr_result_t tx_swr_check(tx_swr_guard_t *g, const cat_tx_meters_t *m,
                              int64_t started, int64_t now, unsigned swr_max)
 {
-    if (m->po_us < started || now - m->po_us > TX_METER_MAX_AGE_US) {
+    const int64_t max_age_us = tx_meter_max_age_us(g->rig);
+    if (m->po_us < started || now - m->po_us > max_age_us) {
         // Once the start-up grace expires, a missing PO value cannot prove low power.
-        return now - started > TX_METER_MAX_AGE_US ? TX_SWR_STALE : TX_SWR_OK;
+        return now - started > max_age_us ? TX_SWR_STALE : TX_SWR_OK;
     }
     if (m->po < TX_PO_MIN_RAW) {
         g->power_since_us = 0;
@@ -55,9 +61,9 @@ tx_swr_result_t tx_swr_check(tx_swr_guard_t *g, const cat_tx_meters_t *m,
         g->power_since_us = m->po_us;
     }
     if (m->swr_po_us < g->power_since_us || m->swr_po < TX_PO_MIN_RAW ||
-        now - m->swr_us > TX_METER_MAX_AGE_US) {
-        return now - g->power_since_us > TX_METER_MAX_AGE_US ||
-               (m->swr_po_us >= g->power_since_us && now - m->swr_us > TX_METER_MAX_AGE_US)
+        now - m->swr_us > max_age_us) {
+        return now - g->power_since_us > max_age_us ||
+               (m->swr_po_us >= g->power_since_us && now - m->swr_us > max_age_us)
                ? TX_SWR_STALE : TX_SWR_OK;
     }
     const unsigned swr = tx_swr_value(m->rig, m->swr);

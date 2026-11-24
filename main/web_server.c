@@ -750,13 +750,13 @@ static esp_err_t status_handler(httpd_req_t *req)
         const tx_usb_test_state_t test = tx_usb_test_state();
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"cat_write\":{\"budget_ms\":%u,"
+                      ",\"cat_write\":{\"budget_ms\":%u,\"keyed_poll_budget_ms\":%u,"
                       "\"all\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
                       "\"keyed\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
                       "\"meters\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
                       "\"usb_test\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u}},"
                       "\"usb_test\":{\"active\":%s,\"left_s\":%u,\"rate\":%lu,\"reason\":\"%s\"}}",
-                      cat.budget_ms, cat.all.calls, cat.all.timeouts, cat.all.over_budget, cat.all.max_us,
+                      cat.budget_ms, cat.keyed_poll_budget_ms, cat.all.calls, cat.all.timeouts, cat.all.over_budget, cat.all.max_us,
                       cat.keyed.calls, cat.keyed.timeouts, cat.keyed.over_budget, cat.keyed.max_us,
                       cat.meters.calls, cat.meters.timeouts, cat.meters.over_budget, cat.meters.max_us,
                       cat.usb_test.calls, cat.usb_test.timeouts, cat.usb_test.over_budget, cat.usb_test.max_us,

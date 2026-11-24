@@ -43,7 +43,7 @@ static unsigned on_writes, off_writes;
 static const char *fault;
 static const char *mode_error;
 
-const char *cat_ptt_mode_error(void) { return mode_error; }
+const char *cat_ptt_mode_error(int64_t keyed_at) { return mode_error; }
 
 bool app_config_tx_enabled(void) { return enabled; }
 void app_config_get(app_config_t *cfg) { *cfg = (app_config_t){.tx_max_seconds = 10, .swr_max = 30}; }

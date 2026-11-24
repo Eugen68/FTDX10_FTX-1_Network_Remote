@@ -139,7 +139,7 @@ typedef struct {
 
 typedef struct {
     cat_write_timing_t all, keyed, meters, usb_test;
-    unsigned budget_ms;
+    unsigned budget_ms, keyed_poll_budget_ms;
 } cat_write_stats_t;
 
 cat_write_stats_t cat_get_write_stats(void);
@@ -148,7 +148,7 @@ bool cat_radio_rx_after(int64_t after_us);
 bool cat_radio_tx(void);
 esp_err_t cat_ptt(bool on);
 const char *cat_ptt_fault(int64_t started, int64_t grace_us);
-const char *cat_ptt_mode_error(void);
+const char *cat_ptt_mode_error(int64_t keyed_at);
 
 /*
  * There is deliberately no function that sends a free-form CAT string. Every command is built here from

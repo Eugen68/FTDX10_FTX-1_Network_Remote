@@ -14,6 +14,9 @@
 char g_sent[1024];
 int64_t g_now_us = 1000000;
 #include "cat.c"   // the real file, built against the stubs in stub/
+uint32_t g_write_timeout_ms;
+int64_t g_write_duration_us;
+esp_err_t g_write_result;
 
 static bool tx_enabled, tx_password;
 bool app_config_tx_enabled(void) { return tx_enabled && tx_password; }
@@ -180,26 +183,26 @@ int main(void) {
     for (size_t i = 0; i < sizeof(permitted) - 1; i++) {
         mode_packet[3] = permitted[i];
         handle_cat_packet(mode_packet);
-        CHECK(cat_ptt_mode_error() == NULL, "MAIN mode %c permits PTT", permitted[i]);
+        CHECK(cat_ptt_mode_error(0) == NULL, "MAIN mode %c permits PTT", permitted[i]);
     }
     for (size_t i = 0; i < sizeof(refused) - 1; i++) {
         mode_packet[3] = refused[i];
         handle_cat_packet(mode_packet);
-        CHECK(cat_ptt_mode_error() != NULL, "MAIN mode %c must block PTT", refused[i]);
+        CHECK(cat_ptt_mode_error(0) != NULL, "MAIN mode %c must block PTT", refused[i]);
     }
     handle_cat_packet("MD02;");
     handle_cat_packet("FT1;");
     handle_cat_packet("MD14;");
-    CHECK(cat_ptt_mode_error() != NULL, "SUB FM must block PTT when SUB was selected for TX");
+    CHECK(cat_ptt_mode_error(0) != NULL, "SUB FM must block PTT when SUB was selected for TX");
     handle_cat_packet("MD18;");
-    CHECK(cat_ptt_mode_error() == NULL, "SUB DATA-LSB is permitted");
+    CHECK(cat_ptt_mode_error(0) == NULL, "SUB DATA-LSB is permitted");
     g_now_us += RADIO_STATUS_MAX_AGE_US + 1;
-    CHECK(cat_ptt_mode_error() != NULL, "stale mode must block PTT");
+    CHECK(cat_ptt_mode_error(0) != NULL, "stale mode must block PTT");
     handle_cat_packet("MD02;");
-    CHECK(cat_ptt_mode_error() != NULL, "unconfirmed TX VFO must block PTT");
+    CHECK(cat_ptt_mode_error(0) != NULL, "unconfirmed TX VFO must block PTT");
     handle_cat_packet("FT0;");
     CHECK(cat_set_mode_char(false, '5') == ESP_OK, "queue an AM mode change");
-    CHECK(cat_ptt_mode_error() != NULL, "optimistic mode change cannot authorize PTT");
+    CHECK(cat_ptt_mode_error(0) != NULL, "optimistic mode change cannot authorize PTT");
 
     use("0761");
     CHECK(ok("RM5;") && ok("RM6;") && !ok("RM60;") && !ok("RM7;"), "PO/SWR are read-only");
@@ -234,8 +237,8 @@ int main(void) {
     CHECK(cat_get_tx_meters().swr_us == last_pair, "RM6 alone cannot refresh a metering pair");
 
     cat_write_timing_t timing = {0};
-    capture_write_timing(&timing, 200000, ESP_ERR_TIMEOUT);
-    capture_write_timing(&timing, 201000, ESP_OK);
+    capture_write_timing(&timing, 200000, ESP_ERR_TIMEOUT, TX_TIMEOUT_MS);
+    capture_write_timing(&timing, 201000, ESP_OK, TX_TIMEOUT_MS);
     CHECK(timing.calls == 2 && timing.timeouts == 1 && timing.over_budget == 1 && timing.max_us == 201000,
           "measure timeout and duration independently");
     report_queued_write_failure("MD02;", ESP_ERR_TIMEOUT);
@@ -282,15 +285,81 @@ int main(void) {
     for (unsigned i = 0; i < 2; ++i) {
         use(i ? "0761" : "0840");
         s_state.tx_cat = true;
+        g_now_us += 1000;
         g_sent[0] = '\0';
-        poll_keyed((void *)1, s_rig, 0);
-        CHECK(strcmp(g_sent, i ? "TX;RI0;FT;MD0;MD1;RM5;RM6;" : "RI0;TX;FT;MD0;MD1;RM5;RM6;") == 0,
-              "TX status precedes meters for %s: %s", s_rig->name, g_sent);
+        keyed_poll_t poll = {0};
+        poll_keyed((void *)1, s_rig, &poll);
+        CHECK(strcmp(g_sent, i ? "TX;RI0;FT;MD0;MD1;" : "RI0;TX;FT;MD0;MD1;") == 0,
+              "only TX status is outstanding on %s", s_rig->name);
+        CHECK(g_write_timeout_ms == 1200, "keyed poll uses the longer write budget");
+        CHECK(cat_enqueue("FA;") == ESP_ERR_INVALID_STATE, "ordinary commands cannot queue during TX");
+        CHECK(cat_tx((void *)1, "FA;") == ESP_ERR_INVALID_STATE, "ordinary writes cannot reach USB during TX");
         g_sent[0] = '\0';
-        poll_keyed((void *)1, s_rig, 1);
-        CHECK(strcmp(g_sent, "RM5;RM6;") == 0, "intervening TX poll only reads meters");
-        s_state.tx_cat = false;
+        g_now_us += POLL_PERIOD_MS * 1000;
+        handle_cat_packet("TX1;");
+        handle_cat_packet(i ? "RI00;" : "RI00010000;");
+        handle_cat_packet("FT0;");
+        handle_cat_packet("MD01;");
+        poll_keyed((void *)1, s_rig, &poll);
+        CHECK(!g_sent[0], "partial status must not launch another poll");
+        handle_cat_packet("MD11;");
+        g_write_duration_us = 950000;
+        const cat_write_stats_t before_slow_write = cat_get_write_stats();
+        poll_keyed((void *)1, s_rig, &poll);
+        g_write_duration_us = 0;
+        CHECK(strcmp(g_sent, "RM5;RM6;") == 0, "complete status releases meter poll");
+        CHECK(cat_get_write_stats().keyed.over_budget == before_slow_write.keyed.over_budget,
+              "950 ms is inside the keyed budget");
+        g_sent[0] = '\0';
+        handle_cat_packet("RM6046000;");
+        poll_keyed((void *)1, s_rig, &poll);
+        CHECK(!g_sent[0], "unsolicited RM6 must not release a poll without RM5");
+        g_now_us = poll.sent_at + KEYED_REPLY_TIMEOUT_US - 1;
+        poll_keyed((void *)1, s_rig, &poll);
+        CHECK(!g_sent[0], "partial meter poll waits up to 1.5 s");
+        ++g_now_us;
+        poll_keyed((void *)1, s_rig, &poll);
+        CHECK(g_sent[0], "next batch allowed after 1.5 s without a complete reply");
+        s_unkey_requested = true;
+        g_sent[0] = '\0';
+        g_now_us += KEYED_REPLY_TIMEOUT_US;
+        poll_keyed((void *)1, s_rig, &poll);
+        CHECK(!g_sent[0], "no new poll while unkeying");
+        s_ptt_lock = (void *)1;
+        s_ptt_port = (void *)1;
+        CHECK(cat_ptt(false) == ESP_OK && strcmp(g_sent, "TX0;") == 0 &&
+              g_write_timeout_ms == 200, "TX0 keeps its independent short budget");
     }
+
+    use("0840");
+    g_now_us += KEYED_CAT_MAX_AGE_US;
+    const int64_t keyed_at = g_now_us;
+    handle_cat_packet("TX1;");
+    handle_cat_packet("RI00010000;");
+    s_state.tx_cat = true;
+    g_write_result = ESP_ERR_TIMEOUT;
+    g_write_duration_us = 1200000;
+    keyed_poll_t poll = {0};
+    const unsigned timeouts = cat_get_write_stats().keyed.timeouts;
+    poll_keyed((void *)1, s_rig, &poll);
+    g_write_result = ESP_OK;
+    g_write_duration_us = 0;
+    CHECK(cat_get_write_stats().keyed.timeouts == timeouts + 1, "write timeout is counted");
+    CHECK(cat_ptt_fault(keyed_at, 1500000) == NULL, "one write timeout does not lose CAT");
+    g_now_us = keyed_at + KEYED_CAT_MAX_AGE_US - 1;
+    CHECK(cat_ptt_fault(keyed_at, 1500000) == NULL, "wait full three seconds for responses");
+    ++g_now_us;
+    handle_cat_packet("RM6256000;");
+    CHECK(strcmp(cat_ptt_fault(keyed_at, 1500000), "CAT lost") == 0,
+          "malformed meter cannot refresh CAT liveness");
+    handle_cat_packet("RM6046000;");
+    CHECK(strcmp(cat_ptt_fault(keyed_at, 1500000), "Radio TX status unavailable") == 0,
+          "a valid meter keeps CAT alive, but cannot replace stale TX confirmations");
+    handle_cat_packet("RI01010000;");
+    handle_cat_packet("RI00010000;");
+    CHECK(strcmp(cat_ptt_fault(keyed_at, 1500000), "High SWR") == 0,
+          "a Hi-SWR report is retained even if normal status arrives before the watchdog");
+    s_state.tx_cat = false;
 
     cat_set_usb_test(true);
     use("0840");

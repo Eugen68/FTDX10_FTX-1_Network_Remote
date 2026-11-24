@@ -608,7 +608,10 @@ When the radio selects SUB for transmit, set SUB to one of those modes too. The 
 CAT confirmation of the mode and the selected transmitter. Select USB modulation on the radio to use the test tones. The firmware leaves the modulation-source and transmit-gain menus under local control.
 
 The device releases PTT on button/key release, a closed connection, 1.5 seconds without the owner's
-heartbeat, the transmit time limit, loss of CAT or USB audio, high SWR, or unexpected transmit status.
+heartbeat, the transmit time limit, loss of CAT or USB audio, high SWR, or missing or unexpected
+transmit status. While keyed, the firmware waits for a CAT poll's replies or a 1.5-second deadline
+before issuing the next poll. Telemetry writes have a 1.2-second budget. A write timeout by itself
+does not indicate CAT loss, which is reported after three seconds without a valid reply.
 It sends TX off when a supported radio is identified, even with remote TX disabled. USB recovery, reboot, and OTA wait for
 confirmed receive after a device-controlled transmission. During idle, automatic USB recovery can run
 without CAT, but defers if a recent CAT report shows a transmission. If CAT is physically unavailable
@@ -625,9 +628,9 @@ Use a dummy load and minimum power.
 The serial menu option `s` sets the SWR limit from 1.5:1 to 3.0:1 (default 3.0:1). While keyed, the
 device reads RM5 (power) and RM6 (SWR). When PO reaches 3 on its raw 0–255 scale, the device checks the
 absolute limit and stops on an increase of at least 0.5:1 over a three-sample reference taken after
-one second of steady power. The rise also uses a three-sample average. Stale metering stops TX after
-a grace interval when power is high or cannot be confirmed. The radio's Hi-SWR report remains a
-separate stop condition.
+one second of steady power. The rise also uses a three-sample average. Stale metering stops TX when
+power is high or cannot be confirmed. The startup grace and maximum meter age are 2 seconds on the
+FTX-1 and 1.1 seconds on the FTDX10. A Hi-SWR report requests an immediate stop.
 
 The panel and `/status` show both raw meters. SWR conversions use provisional, model-specific
 [FTX-1](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftx1/ftx1.h)

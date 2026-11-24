@@ -91,14 +91,6 @@ bool tx_key(uint32_t owner)
     return tx_key_tone(owner, TX_TONE_OFF, TX_TONE_DEFAULT_DBFS);
 }
 
-static esp_err_t prepare_tone_audio(void)
-{
-    cat_state_t radio;
-    cat_get_state(&radio);
-    // The FTX-1 can exhaust channels even with a single OUT endpoint.
-    return usb_audio_tx_prepare(radio.rig == CAT_RIG_FTX1, 0);
-}
-
 bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
 {
     if (tone < TX_TONE_OFF || tone > TX_TONE_DUAL || dbfs < TX_TONE_MIN_DBFS || dbfs > TX_TONE_MAX_DBFS) {
@@ -112,19 +104,21 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
     const char *refusal = "PTT unavailable";
     if (s_state.phase == TX_ARMED && s_state.owner == owner && !s_inhibited &&
         usb_audio_get_format(NULL) && cat_radio_rx_after(0)) {
-        const char *mode_error = cat_ptt_mode_error();
+        cat_state_t radio;
+        cat_get_state(&radio);
+        const char *mode_error = cat_ptt_mode_error(0);
         if (!usb_audio_tx_idle()) {
             refusal = "Waiting for USB TX audio to stop";
         } else if (tone != TX_TONE_OFF && !usb_audio_tx_available()) {
             refusal = "USB TX audio unavailable";
         } else if (mode_error) {
             refusal = mode_error;
-        } else if (tone != TX_TONE_OFF && prepare_tone_audio() != ESP_OK) {
+        } else if (tone != TX_TONE_OFF && usb_audio_tx_prepare(radio.rig == CAT_RIG_FTX1, 0) != ESP_OK) {
             refusal = "USB TX audio start failed";
         } else if (tone != TX_TONE_OFF &&
                    (esp_timer_get_time() - s_heartbeat >= HEARTBEAT_US ||
                     !usb_audio_tx_available() || !usb_audio_get_format(NULL) ||
-                    !cat_radio_rx_after(0) || cat_ptt_mode_error())) {
+                    !cat_radio_rx_after(0) || cat_ptt_mode_error(0))) {
             usb_audio_tx_finished();
             refusal = "PTT conditions changed during USB audio setup";
         } else {
@@ -133,7 +127,7 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
             s_state.phase = TX_KEYED;  // even a failed write may have reached the radio
             s_tone = tone;
             s_swr_max = cfg.swr_max * 10;
-            s_swr_guard = (tx_swr_guard_t){0};
+            s_swr_guard = (tx_swr_guard_t){.rig = radio.rig};
             keyed = cat_ptt(true) == ESP_OK;
             if (keyed && tone != TX_TONE_OFF) {
                 usb_audio_tx_request(tone, dbfs);
@@ -301,7 +295,7 @@ static void watchdog_tick(void)
             } else {
                 const char *reason = cat_ptt_fault(s_keyed_at, CONFIRM_US);
                 if (!reason) {
-                    reason = cat_ptt_mode_error();
+                    reason = cat_ptt_mode_error(s_keyed_at);
                 }
                 if (!reason) {
                     const cat_tx_meters_t meters = cat_get_tx_meters();
@@ -341,10 +335,11 @@ tx_state_t tx_get_state(void)
     result.on_air = s_state.phase == TX_KEYED && cat_radio_tx();
     const cat_tx_meters_t meters = cat_get_tx_meters();
     if (s_keyed_at > 0) {
-        result.po_valid = meters.po_us >= s_keyed_at && now - meters.po_us <= TX_METER_MAX_AGE_US;
+        const int64_t max_age_us = tx_meter_max_age_us(s_swr_guard.rig);
+        result.po_valid = meters.po_us >= s_keyed_at && now - meters.po_us <= max_age_us;
         result.swr_valid = result.po_valid && meters.po >= TX_PO_MIN_RAW &&
                            meters.swr_po >= TX_PO_MIN_RAW && meters.swr_po_us >= s_keyed_at &&
-                           now - meters.swr_us <= TX_METER_MAX_AGE_US;
+                           now - meters.swr_us <= max_age_us;
         result.swr = result.swr_valid ? tx_swr_value(meters.rig, meters.swr) : 0;
         result.swr_raw = meters.swr_us >= s_keyed_at ? meters.swr : 0;
         result.po_raw = meters.po_us >= s_keyed_at ? meters.po : 0;
