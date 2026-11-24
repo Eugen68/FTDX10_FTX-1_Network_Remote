@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+#include <inttypes.h>
 #include "tx.h"
 #include "app_config.h"
 #include "cat.h"
@@ -151,8 +152,44 @@ void tx_unkey(const char *reason)
     }
 }
 
+static void log_stale_meters(const cat_tx_meters_t *meters, int64_t keyed_at, int64_t now)
+{
+    const struct {
+        const char *name;
+        int64_t stamp;
+        unsigned raw;
+    } samples[] = {
+        {"po_us", meters->po_us, meters->po},
+        {"swr_us", meters->swr_us, meters->swr},
+        {"swr_po_us", meters->swr_po_us, meters->swr_po},
+    };
+    const cat_write_timing_t writes = cat_get_write_stats().meters;
+    ESP_LOGW("tx", "STALE now_us=%" PRId64 " keyed_at_us=%" PRId64
+             " cat_write.meters calls=%u timeouts=%u max_us=%u",
+             now, keyed_at, writes.calls, writes.timeouts, writes.max_us);
+    for (size_t i = 0; i < sizeof(samples) / sizeof(samples[0]); ++i) {
+        const int64_t stamp = samples[i].stamp;
+        ESP_LOGW("tx", "STALE %s=%" PRId64 " age_us=%" PRId64 " since_keyed_us=%" PRId64 " raw=%u",
+                 samples[i].name, stamp, stamp ? now - stamp : -1,
+                 stamp ? stamp - keyed_at : 0, samples[i].raw);
+    }
+    cat_log_entry_t entries[12];
+    size_t count = cat_log_recent_tx_meters((uint32_t)(now / 1000), entries,
+                                            sizeof(entries) / sizeof(entries[0]));
+    if (!count) {
+        ESP_LOGW("tx", "STALE CAT log: no recent RM5/RM6 entries");
+    }
+    while (count > 0) {
+        const cat_log_entry_t *entry = &entries[--count];
+        ESP_LOGW("tx", "STALE CAT seq=%" PRIu32 " ms=%" PRIu32 " %c kind=%u %s",
+                 entry->seq, entry->ms, entry->dir, entry->kind, entry->text);
+    }
+}
+
 static void watchdog_tick(void)
 {
+    cat_tx_meters_t stale_meters;
+    int64_t stale_at = 0, stale_keyed_at = 0;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (s_state.phase != TX_IDLE) {
         const int64_t now = esp_timer_get_time();
@@ -172,8 +209,12 @@ static void watchdog_tick(void)
                 }
                 if (!reason) {
                     const cat_tx_meters_t meters = cat_get_tx_meters();
-                    const tx_swr_result_t result = tx_swr_check(&s_swr_guard, &meters, s_keyed_at, now, s_swr_max);
+                    const int64_t meter_now = esp_timer_get_time();
+                    const tx_swr_result_t result = tx_swr_check(&s_swr_guard, &meters, s_keyed_at, meter_now, s_swr_max);
                     if (result == TX_SWR_STALE) {
+                        stale_meters = meters;
+                        stale_at = meter_now;
+                        stale_keyed_at = s_keyed_at;
                         reason = "SWR or power readings unavailable";
                     } else if (result == TX_SWR_LIMIT || result == TX_SWR_RISE) {
                         s_state.stop_swr = tx_swr_value(meters.rig, meters.swr);
@@ -187,6 +228,10 @@ static void watchdog_tick(void)
         }
     }
     xSemaphoreGive(s_lock);
+    // Send TX0 before collecting or printing diagnostics.
+    if (stale_at) {
+        log_stale_meters(&stale_meters, stale_keyed_at, stale_at);
+    }
 }
 
 tx_state_t tx_get_state(void)

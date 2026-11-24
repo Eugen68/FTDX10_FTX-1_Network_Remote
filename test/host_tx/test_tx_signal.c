@@ -50,14 +50,29 @@ int main(void)
     guard = (tx_swr_guard_t){0};
     cat_tx_meters_t missing = {.rig = CAT_RIG_FTDX10};
     assert(tx_swr_check(&guard, &missing, 1000000, 1500000, 300) == TX_SWR_OK);
-    assert(tx_swr_check(&guard, &missing, 1000000, 1700000, 300) == TX_SWR_STALE);
+    assert(tx_swr_check(&guard, &missing, 1000000, 1700000, 300) == TX_SWR_OK);
+    assert(tx_swr_check(&guard, &missing, 1000000, 2100000, 300) == TX_SWR_OK);
+    assert(tx_swr_check(&guard, &missing, 1000000, 2100001, 300) == TX_SWR_STALE);
     missing.po_us = 1700000;
     missing.po = 20;
     assert(tx_swr_check(&guard, &missing, 1000000, 1700000, 300) == TX_SWR_OK);
     missing.po_us = 2400000;
-    assert(tx_swr_check(&guard, &missing, 1000000, 2400000, 300) == TX_SWR_STALE);
-    missing.po = 0;
     assert(tx_swr_check(&guard, &missing, 1000000, 2400000, 300) == TX_SWR_OK);
+    missing.po_us = 2800001;
+    assert(tx_swr_check(&guard, &missing, 1000000, 2800001, 300) == TX_SWR_STALE);
+    missing.po = 0;
+    assert(tx_swr_check(&guard, &missing, 1000000, 2800001, 300) == TX_SWR_OK);
+
+    // Delay a previously fresh pair for 0.7 s. A valid high SWR still trips at once.
+    guard = (tx_swr_guard_t){0};
+    assert(sample(&guard, 50, 10, 1000000) == TX_SWR_OK);
+    cat_tx_meters_t delayed = {
+        .rig = CAT_RIG_FTDX10, .po = 10, .swr = 50, .swr_po = 10,
+        .po_us = 1000000, .swr_us = 1000000, .swr_po_us = 1000000,
+    };
+    assert(tx_swr_check(&guard, &delayed, 1000000, 1700000, 300) == TX_SWR_OK);
+    assert(tx_swr_check(&guard, &delayed, 1000000, 2100001, 300) == TX_SWR_STALE);
+    assert(sample(&guard, 126, 10, 2150000) == TX_SWR_LIMIT);
 
     // A new high PO sample cannot unlock an old SWR sample taken at low PO.
     guard = (tx_swr_guard_t){0};

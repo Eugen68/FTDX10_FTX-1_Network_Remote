@@ -266,6 +266,19 @@ int main(void) {
     n = cat_log_read(UINT32_MAX, le, 200);
     CHECK(n == 160, "resume log after stale browser cursor");
 
+    const uint32_t through_ms = (uint32_t)(g_now_us / 1000);
+    log_cmds('T', CAT_LOG_POLL, "RM5;RM6;RM1;");
+    log_cmds('R', CAT_LOG_POLL, "RM5005000;RM6026000;");
+    g_now_us += 1000;
+    log_cmds('T', CAT_LOG_ERROR, "RM5;");
+    n = cat_log_recent_tx_meters(through_ms, le, 3);
+    CHECK(n == 3 && strcmp(le[0].text, "RM6026000;") == 0 &&
+          strcmp(le[1].text, "RM5005000;") == 0 && strcmp(le[2].text, "RM6;") == 0,
+          "meter diagnostics select newest matching RX and TX entries before the cutoff");
+    n = cat_log_recent_tx_meters(through_ms + 1, le, 1);
+    CHECK(n == 1 && le[0].kind == CAT_LOG_ERROR && strcmp(le[0].text, "RM5;") == 0,
+          "meter diagnostics include failed writes");
+
     printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     return fails != 0;
 }

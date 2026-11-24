@@ -107,6 +107,9 @@ typedef struct {
  */
 size_t cat_log_read(uint32_t since_seq, cat_log_entry_t *out, size_t max);
 
+/** Copy the latest RM5/RM6 entries through the given uptime, newest first. */
+size_t cat_log_recent_tx_meters(uint32_t through_ms, cat_log_entry_t *out, size_t max);
+
 /**
  * @brief Start the CAT client. Requires usb_audio_init() (it installs the USB Host Library) first.
  *

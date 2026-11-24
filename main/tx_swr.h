@@ -3,7 +3,8 @@
 
 #include "cat.h"
 
-#define TX_METER_MAX_AGE_US 600000LL
+// Applies to the start-up grace as well as the freshness of accepted readings.
+#define TX_METER_MAX_AGE_US 1100000LL
 #define TX_PO_MIN_RAW 3
 
 typedef struct {

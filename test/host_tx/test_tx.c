@@ -1,6 +1,23 @@
 /* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
 #include <assert.h>
+#include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
+#include "esp_log.h"
+
+static char warnings[4096];
+
+static void record_warning(const char *format, ...)
+{
+    const size_t len = strlen(warnings);
+    va_list args;
+    va_start(args, format);
+    vsnprintf(warnings + len, sizeof(warnings) - len, format, args);
+    va_end(args);
+}
+
+#undef ESP_LOGW
+#define ESP_LOGW(tag, ...) record_warning(__VA_ARGS__)
 #include "tx.c"
 
 int64_t g_now_us = 1000000;
@@ -13,6 +30,8 @@ static bool output_available = true;
 static bool output_idle = true;
 static tx_tone_t audio_request;
 static unsigned po_raw, swr_raw;
+static bool meters_missing;
+static unsigned stale_diagnostics_reads;
 static unsigned on_writes, off_writes;
 static const char *fault;
 static const char *mode_error;
@@ -27,10 +46,25 @@ bool usb_audio_tx_idle(void) { return output_idle; }
 void usb_audio_tx_request(tx_tone_t tone, int dbfs) { audio_request = tone; }
 cat_tx_meters_t cat_get_tx_meters(void)
 {
+    if (meters_missing) {
+        return (cat_tx_meters_t){.rig = CAT_RIG_FTDX10};
+    }
     return (cat_tx_meters_t){
         .rig = CAT_RIG_FTDX10, .po = po_raw, .swr = swr_raw, .swr_po = po_raw, .po_us = g_now_us,
         .swr_us = g_now_us, .swr_po_us = g_now_us
     };
+}
+cat_write_stats_t cat_get_write_stats(void)
+{
+    assert(s_stopping && off_writes == 10);
+    ++stale_diagnostics_reads;
+    return (cat_write_stats_t){.meters = {.calls = 6, .timeouts = 1, .max_us = 10000}};
+}
+size_t cat_log_recent_tx_meters(uint32_t through_ms, cat_log_entry_t *entries, size_t max)
+{
+    assert(through_ms == (uint32_t)(g_now_us / 1000) && max >= 1);
+    *entries = (cat_log_entry_t){.dir = 'T', .text = "RM5;"};
+    return 1;
 }
 bool cat_radio_rx_after(int64_t after_us) { return cat_available && !radio_on && rx_us > after_us; }
 bool cat_radio_tx(void) { return cat_available && radio_on; }
@@ -184,5 +218,20 @@ int main(void)
     assert(audio_request == TX_TONE_OFF && off_writes == 9);
     assert(tx_get_state().stop_swr == 300);
     confirm_rx();
+    meters_missing = true;
+    warnings[0] = '\0';
+    key();
+    g_now_us += 700000;
+    watchdog_tick();
+    assert(!s_stopping && off_writes == 9 && stale_diagnostics_reads == 0);
+    g_now_us += 500000;
+    watchdog_tick();
+    assert(s_stopping && off_writes == 10 && stale_diagnostics_reads == 1);
+    assert(strcmp(tx_get_state().reason, "SWR or power readings unavailable") == 0);
+    assert(strstr(warnings, "cat_write.meters calls=6 timeouts=1 max_us=10000"));
+    assert(strstr(warnings, "po_us=0 age_us=-1") && strstr(warnings, "swr_us=0 age_us=-1"));
+    assert(strstr(warnings, "swr_po_us=0") && strstr(warnings, "RM5;"));
+    confirm_rx();
+    assert(stale_diagnostics_reads == 1);
     puts("all TX state tests passed");
 }

@@ -545,6 +545,23 @@ size_t cat_log_read(uint32_t since_seq, cat_log_entry_t *out, size_t max)
     return n;
 }
 
+size_t cat_log_recent_tx_meters(uint32_t through_ms, cat_log_entry_t *out, size_t max)
+{
+    size_t n = 0;
+    taskENTER_CRITICAL(&s_log_mux);
+    const uint32_t last = s_log_seq;
+    const uint32_t available = last < CAT_LOG_LEN ? last : CAT_LOG_LEN;
+    for (uint32_t i = 0; n < max && i < available; ++i) {
+        const cat_log_entry_t *entry = &s_log[(last - i) % CAT_LOG_LEN];
+        if ((int32_t)(entry->ms - through_ms) <= 0 && entry->text[0] == 'R' && entry->text[1] == 'M' &&
+            (entry->text[2] == '5' || entry->text[2] == '6')) {
+            out[n++] = *entry;
+        }
+    }
+    taskEXIT_CRITICAL(&s_log_mux);
+    return n;
+}
+
 static void capture_write_timing(cat_write_timing_t *stats, unsigned us, esp_err_t err)
 {
     ++stats->calls;
