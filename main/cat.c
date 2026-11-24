@@ -84,7 +84,8 @@
 #define ANSWER_TIMEOUT_MS   300
 #define TX_TIMEOUT_MS       200
 #define KEYED_WRITE_TIMEOUT_MS 1200
-#define KEYED_REPLY_TIMEOUT_US 1500000LL
+#define FTX1_KEYED_REPLY_TIMEOUT_US 1500000LL
+#define FTDX10_KEYED_REPLY_TIMEOUT_US 300000LL
 #define KEYED_CAT_MAX_AGE_US   3000000LL
 #define RX_BUF_BYTES        64
 #define MAX_FAILS           10       // consecutive missing answers before the port is dropped
@@ -1158,8 +1159,12 @@ static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_po
     const int64_t now = esp_timer_get_time();
     if (poll->sent_at) {
         const int64_t elapsed = now - poll->sent_at;
+        // On the FTDX10 a missing reply must leave time for another meter poll
+        // before the SWR watchdog reaches its 1.1 s freshness limit.
+        const int64_t reply_timeout = rig->rig == CAT_RIG_FTDX10
+            ? FTDX10_KEYED_REPLY_TIMEOUT_US : FTX1_KEYED_REPLY_TIMEOUT_US;
         if (elapsed < POLL_PERIOD_MS * 1000 ||
-            (elapsed < KEYED_REPLY_TIMEOUT_US && !keyed_poll_answered(poll))) {
+            (elapsed < reply_timeout && !keyed_poll_answered(poll))) {
             return;
         }
     }

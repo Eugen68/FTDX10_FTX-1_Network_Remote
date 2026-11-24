@@ -303,26 +303,27 @@ int main(void) {
         poll_keyed((void *)1, s_rig, &poll);
         CHECK(!g_sent[0], "partial status must not launch another poll");
         handle_cat_packet("MD11;");
-        g_write_duration_us = 950000;
+        g_write_duration_us = i ? 125000 : 950000;
         const cat_write_stats_t before_slow_write = cat_get_write_stats();
         poll_keyed((void *)1, s_rig, &poll);
         g_write_duration_us = 0;
         CHECK(strcmp(g_sent, "RM5;RM6;") == 0, "complete status releases meter poll");
         CHECK(cat_get_write_stats().keyed.over_budget == before_slow_write.keyed.over_budget,
-              "950 ms is inside the keyed budget");
+              "model latency is inside the keyed write budget");
         g_sent[0] = '\0';
         handle_cat_packet("RM6046000;");
         poll_keyed((void *)1, s_rig, &poll);
         CHECK(!g_sent[0], "unsolicited RM6 must not release a poll without RM5");
-        g_now_us = poll.sent_at + KEYED_REPLY_TIMEOUT_US - 1;
+        const int64_t reply_timeout = i ? FTDX10_KEYED_REPLY_TIMEOUT_US : FTX1_KEYED_REPLY_TIMEOUT_US;
+        g_now_us = poll.sent_at + reply_timeout - 1;
         poll_keyed((void *)1, s_rig, &poll);
-        CHECK(!g_sent[0], "partial meter poll waits up to 1.5 s");
+        CHECK(!g_sent[0], "partial meter poll waits for the model-specific deadline");
         ++g_now_us;
         poll_keyed((void *)1, s_rig, &poll);
-        CHECK(g_sent[0], "next batch allowed after 1.5 s without a complete reply");
+        CHECK(g_sent[0], "next batch allowed at the deadline without a complete reply");
         s_unkey_requested = true;
         g_sent[0] = '\0';
-        g_now_us += KEYED_REPLY_TIMEOUT_US;
+        g_now_us += reply_timeout;
         poll_keyed((void *)1, s_rig, &poll);
         CHECK(!g_sent[0], "no new poll while unkeying");
         s_ptt_lock = (void *)1;
@@ -330,6 +331,35 @@ int main(void) {
         CHECK(cat_ptt(false) == ESP_OK && strcmp(g_sent, "TX0;") == 0 &&
               g_write_timeout_ms == 200, "TX0 keeps its independent short budget");
     }
+
+    // FTDX10 regression: a lost meter pair and then a partial status batch
+    // must leave time to collect fresh meters before the 1.1 s watchdog.
+    use("0761");
+    s_state.tx_cat = true;
+    g_now_us += 1000;
+    const int64_t last_ftdx10_pair = g_now_us;
+    handle_cat_packet("RM5033000;");
+    ++g_now_us;
+    handle_cat_packet("RM6000000;");
+    g_now_us += POLL_PERIOD_MS * 1000;
+    keyed_poll_t ftdx10_poll = {.sent_at = g_now_us};
+    g_sent[0] = '\0';
+    g_now_us += FTDX10_KEYED_REPLY_TIMEOUT_US;
+    poll_keyed((void *)1, s_rig, &ftdx10_poll);
+    handle_cat_packet("TX1;");
+    handle_cat_packet("RI00;");
+    CHECK(strcmp(g_sent, "TX;RI0;FT;MD0;MD1;") == 0, "missing meter pair advances to status");
+    g_sent[0] = '\0';
+    g_now_us += FTDX10_KEYED_REPLY_TIMEOUT_US;
+    poll_keyed((void *)1, s_rig, &ftdx10_poll);
+    CHECK(strcmp(g_sent, "RM5;RM6;") == 0, "partial status does not starve meters");
+    g_now_us += 125000;
+    handle_cat_packet("RM5033000;");
+    ++g_now_us;
+    handle_cat_packet("RM6000000;");
+    CHECK(s_tx_meters.swr_po_us > last_ftdx10_pair && s_tx_meters.swr_us == g_now_us &&
+          g_now_us - last_ftdx10_pair < 1100000, "fresh PO/SWR pair arrives before the previous pair expires");
+    s_state.tx_cat = false;
 
     use("0840");
     g_now_us += KEYED_CAT_MAX_AGE_US;

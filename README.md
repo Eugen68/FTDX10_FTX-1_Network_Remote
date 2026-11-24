@@ -609,8 +609,8 @@ CAT confirmation of the mode and the selected transmitter. Select USB modulation
 
 The device releases PTT on button/key release, a closed connection, 1.5 seconds without the owner's
 heartbeat, the transmit time limit, loss of CAT or USB audio, high SWR, or missing or unexpected
-transmit status. While keyed, the firmware waits for a CAT poll's replies or a 1.5-second deadline
-before issuing the next poll. Telemetry writes have a 1.2-second budget. A write timeout by itself
+transmit status. While keyed, the firmware waits for a CAT poll's replies before issuing the next poll, up to 1.5 seconds on the FTX-1 or 300 ms on
+the FTDX10. Telemetry writes have a 1.2-second budget. A write timeout by itself
 does not indicate CAT loss, which is reported after three seconds without a valid reply.
 It sends TX off when a supported radio is identified, even with remote TX disabled. USB recovery, reboot, and OTA wait for
 confirmed receive after a device-controlled transmission. During idle, automatic USB recovery can run
