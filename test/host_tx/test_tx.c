@@ -30,6 +30,7 @@ static bool cat_available = true;
 static bool usb_available = true;
 static bool output_available = true;
 static bool output_idle = true;
+static bool defer_audio_cleanup, cleanup_pending;
 static cat_rig_t radio_model = CAT_RIG_FTDX10;
 static bool prepare_fails, prepare_changes_mode, prepare_shared;
 static unsigned preparations, cleanups;
@@ -50,6 +51,7 @@ void app_config_get(app_config_t *cfg) { *cfg = (app_config_t){.tx_max_seconds =
 bool usb_audio_get_format(usb_audio_format_t *fmt) { return usb_available; }
 bool usb_audio_tx_available(void) { return output_available; }
 bool usb_audio_tx_idle(void) { return output_idle; }
+bool usb_audio_tx_cleanup_pending(void) { return cleanup_pending; }
 void usb_audio_tx_request(tx_tone_t tone, int dbfs) { audio_request = tone; }
 void cat_get_state(cat_state_t *state) { *state = (cat_state_t){.rig = radio_model}; }
 esp_err_t usb_audio_tx_prepare(bool shared, uint32_t rate)
@@ -67,6 +69,10 @@ void usb_audio_tx_finished(void)
 {
     assert((s_usb_test_deadline || !radio_on) && audio_request == TX_TONE_OFF);
     ++cleanups;
+    if (defer_audio_cleanup) {
+        cleanup_pending = true;
+        output_idle = false;
+    }
 }
 cat_tx_meters_t cat_get_tx_meters(void)
 {
@@ -302,5 +308,33 @@ int main(void)
     watchdog_tick();
     assert(!tx_usb_test_state().active && strcmp(tx_usb_test_state().reason,"Radio entered TX") == 0);
     assert(on_writes == before_test_on && off_writes == before_test_off);
+    // Safety unkey should preserve the stop reason and reject re-key before cleanup.
+    radio_on = false;
+    radio_model = CAT_RIG_FTDX10;
+    rx_us = ++g_now_us;
+    assert(tx_acquire(1) && tx_key_tone(1, TX_TONE_SINGLE, -24));
+    defer_audio_cleanup = true;
+    fault = "High SWR";
+    watchdog_tick();
+    assert(tx_get_state().stopping && audio_request == TX_TONE_OFF);
+    assert(off_writes == before_test_off + 1 && !cleanup_pending);
+    radio_on = false;
+    rx_us = ++g_now_us;
+    watchdog_tick();
+    assert(cleanup_pending && tx_get_state().stopping && !tx_get_state().on_air);
+    assert(!tx_acquire(1) && !tx_acquire(2));
+    assert(strcmp(tx_get_state().reason, "High SWR") == 0);
+    g_now_us += CONFIRM_US + 1;
+    watchdog_tick();
+    assert(off_writes == before_test_off + 1);
+    output_idle = true;
+    cleanup_pending = false;
+    watchdog_tick();
+    assert(tx_get_state().phase == TX_IDLE && !tx_get_state().stopping);
+    fault = NULL;
+    assert(tx_acquire(1) && tx_key_tone(1, TX_TONE_SINGLE, -24));
+    defer_audio_cleanup = false;
+    tx_release(1, "Released");
+    confirm_rx();
     puts("all TX state tests passed");
 }

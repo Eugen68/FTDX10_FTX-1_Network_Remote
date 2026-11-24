@@ -1095,9 +1095,10 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     char json[512], reason[32];
     const int n = snprintf(json, sizeof(json),
                            "{\"t\":\"tx\",\"state\":\"%s\",\"left_s\":%u,\"reason\":\"%s\","
-                           "\"on_air\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\","
+                           "\"on_air\":%s,\"stopping\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\","
                            "\"swr_x100\":%u,\"swr_raw\":%u,\"po_raw\":%u,\"po_valid\":%s}",
-                           phase, state.left_s, tx_reason(&state, reason), state.on_air ? "true" : "false", tx_vfo,
+                           phase, state.left_s, tx_reason(&state, reason), state.on_air ? "true" : "false",
+                           state.stopping ? "true" : "false", tx_vfo,
                            session ? "true" : "false", session && state.owner == session->owner ? "true" : "false",
                            error, state.swr, state.swr_raw, state.po_raw, state.po_valid ? "true" : "false");
     if (n < 0 || (size_t)n >= sizeof(json)) {

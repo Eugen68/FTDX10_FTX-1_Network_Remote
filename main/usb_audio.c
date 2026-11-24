@@ -646,6 +646,11 @@ esp_err_t usb_audio_tx_prepare(bool share_rx_channel, uint32_t test_rate)
     return err;
 }
 
+bool usb_audio_tx_cleanup_pending(void)
+{
+    return atomic_load(&s_tx_finish);
+}
+
 void usb_audio_tx_finished(void)
 {
     atomic_store(&s_tx_finish, true);
@@ -695,8 +700,14 @@ static void tx_audio_task(void *arg)
 
         const char *error = NULL;
         xSemaphoreTake(s_output_lock, portMAX_DELAY);
-        if (atomic_exchange(&s_tx_finish, false) && !s_tx_clean) {
-            finish_audio_tx();
+        if (atomic_load(&s_tx_finish)) {
+            if (!s_tx_clean) {
+                finish_audio_tx();
+                if (s_tx_clean) {
+                    ESP_LOGI(TAG, "USB TX audio stopped");
+                }
+            }
+            atomic_store(&s_tx_finish, false);
         }
         if (active && (active != request || !s_output_prepared || !s_output_handle)) {
             active = 0;

@@ -631,7 +631,11 @@ device reads RM5 (power) and RM6 (SWR). When PO reaches 3 on its raw 0–255 sca
 absolute limit and stops on an increase of at least 0.5:1 over a three-sample reference taken after
 one second of steady power. The rise also uses a three-sample average. Stale metering stops TX when
 power is high or cannot be confirmed. The startup grace and maximum meter age are 2 seconds on the
-FTX-1 and 1.1 seconds on the FTDX10. A Hi-SWR report requests an immediate stop.
+FTX-1 and 1.1 seconds on the FTDX10. A radio Hi-SWR report requests an immediate stop after startup.
+During the first 300 ms on FTDX10, an early Hi-SWR report is rechecked. A fresh normal report in that
+window clears the transient flag. A persistent flag or missing confirmation stops TX at the end of
+the window. The measured SWR limit and rise detector stay active throughout. After RX is confirmed,
+the TX state remains stopping until the USB audio output finishes cleanup.
 
 The panel and `/status` show both raw meters. SWR conversions use provisional, model-specific
 [FTX-1](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftx1/ftx1.h)

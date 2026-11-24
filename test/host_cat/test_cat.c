@@ -153,7 +153,29 @@ int main(void) {
     CHECK(s_swr_status_us < g_now_us, "invalid FTDX10 SWR flag does not refresh RI status");
     handle_cat_packet("RI01;");
     CHECK(s_swr_status_us == g_now_us, "FTDX10 short RI reply refreshes SWR status");
-    CHECK(strcmp(cat_ptt_fault(g_now_us, 1500000), "High SWR") == 0, "FTDX10 RI reports high SWR");
+    const int64_t spike_start = g_now_us - 1000;
+    CHECK(cat_ptt_fault(spike_start, 1500000) == NULL, "FTDX10 rechecks early Hi-SWR");
+    g_now_us = spike_start + FTDX10_HI_SWR_STARTUP_US - 1;
+    CHECK(cat_ptt_fault(spike_start, 1500000) == NULL, "FTDX10 gives the startup flag time to clear");
+    ++g_now_us;
+    CHECK(strcmp(cat_ptt_fault(spike_start, 1500000), "High SWR") == 0,
+          "FTDX10 stops when startup Hi-SWR has no timely normal reply");
+    handle_cat_packet("RI00;");
+    CHECK(strcmp(cat_ptt_fault(spike_start, 1500000), "High SWR") == 0,
+          "a normal reply at the deadline is too late to clear the startup fault");
+
+    const int64_t next_start = ++g_now_us;
+    g_now_us += 100000;
+    handle_cat_packet("RI01;");
+    g_now_us += 100000;
+    handle_cat_packet("RI00;");
+    g_now_us = next_start + FTDX10_HI_SWR_STARTUP_US;
+    CHECK(cat_ptt_fault(next_start, 1500000) == NULL, "fresh RI00 suppresses only the startup spike");
+    handle_cat_packet("RI01;");
+    ++g_now_us;
+    handle_cat_packet("RI00;");
+    CHECK(strcmp(cat_ptt_fault(next_start, 1500000), "High SWR") == 0,
+          "post-startup Hi-SWR latches even if followed by RI00");
     use("0840");
     handle_cat_packet("RI00000000;");
 
@@ -345,6 +367,23 @@ int main(void) {
         CHECK(cat_ptt(false) == ESP_OK && strcmp(g_sent, "TX0;") == 0 &&
               g_write_timeout_ms == 200, "TX0 keeps its independent short budget");
     }
+
+    use("0761");
+    s_state.tx_cat = true;
+    g_now_us += 1000;
+    keyed_poll_t startup_poll = {0};
+    g_sent[0] = '\0';
+    poll_keyed((void *)1, s_rig, &startup_poll);
+    ++g_now_us;
+    handle_cat_packet("TX1;");
+    handle_cat_packet("RI01;");
+    handle_cat_packet("FT0;");
+    handle_cat_packet("MD0C;");
+    g_now_us = startup_poll.sent_at + POLL_PERIOD_MS * 1000;
+    g_sent[0] = '\0';
+    poll_keyed((void *)1, s_rig, &startup_poll);
+    CHECK(strcmp(g_sent, "TX;RI0;FT;MD0;") == 0, "early high SWR gets an expedited status recheck");
+    s_state.tx_cat = false;
 
     // Exercise a full minute of FTDX10 polling without a single MD1 reply.
     use("0761");

@@ -87,6 +87,7 @@
 #define FTX1_KEYED_REPLY_TIMEOUT_US 1500000LL
 #define FTDX10_KEYED_REPLY_TIMEOUT_US 300000LL
 #define KEYED_CAT_MAX_AGE_US   3000000LL
+#define FTDX10_HI_SWR_STARTUP_US 300000LL
 #define RX_BUF_BYTES        64
 #define MAX_FAILS           10       // consecutive missing answers before the port is dropped
 #define SCAN_PERIOD_MS      2000
@@ -110,6 +111,7 @@ static cdc_acm_dev_hdl_t s_ptt_port;
 static bool s_ptt_ready;
 static int64_t s_swr_status_us;
 static int64_t s_hi_swr_us;
+static int64_t s_normal_swr_us;
 static int64_t s_rm6_reply_us;
 static bool s_unkey_requested;
 static cat_tx_meters_t s_tx_meters;
@@ -692,6 +694,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_last_tx_status_us = 0;
         s_swr_status_us = 0;
         s_hi_swr_us = 0;
+        s_normal_swr_us = 0;
         s_rm6_reply_us = 0;
         s_unkey_requested = false;
         s_tx_meters = (cat_tx_meters_t){0};
@@ -976,6 +979,8 @@ static void handle_cat_packet(const char *pkt)
             s_last_answer_us = now_pkt_us;
             if (pkt[3] == '1') {
                 s_hi_swr_us = now_pkt_us;
+            } else {
+                s_normal_swr_us = now_pkt_us;
             }
             xSemaphoreGive(s_lock);
         }
@@ -1158,6 +1163,7 @@ static bool keyed_poll_answered(const rig_profile_t *rig, const keyed_poll_t *po
 static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_poll_t *poll)
 {
     const int64_t now = esp_timer_get_time();
+    bool recheck_swr = false;
     if (poll->sent_at) {
         const int64_t elapsed = now - poll->sent_at;
         // On the FTDX10 a missing reply must leave time for another meter poll
@@ -1168,11 +1174,17 @@ static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_po
             (elapsed < reply_timeout && !keyed_poll_answered(rig, poll))) {
             return;
         }
+        if (rig->rig == CAT_RIG_FTDX10 && poll->status) {
+            // Check a possible startup spike again without waiting for two meter polls.
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            recheck_swr = s_hi_swr_us >= poll->sent_at && s_normal_swr_us < s_hi_swr_us;
+            xSemaphoreGive(s_lock);
+        }
     }
 
     // Record before writing: a reply can arrive before the CDC write returns.
     poll->sent_at = now;
-    poll->status = poll->meters_until_status == 0;
+    poll->status = recheck_swr || poll->meters_until_status == 0;
     const char *cmds = "RM5;RM6;";
     if (poll->status) {
         cmds = rig->dual_rx ? "RI0;TX;FT;MD0;MD1;" : "TX;RI0;FT;MD0;";
@@ -1555,7 +1567,13 @@ const char *cat_ptt_fault(int64_t started, int64_t grace_us)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     const int64_t now = esp_timer_get_time();
     const char *reason = NULL;
-    if (s_hi_swr_us && s_hi_swr_us >= started) {
+    const int64_t startup_end = started + FTDX10_HI_SWR_STARTUP_US;
+    // An early FTDX10 flag needs a fresh normal report within the startup window.
+    // A missing normal reply is a fault, and a flag after startup always latches.
+    const bool hi_swr = s_hi_swr_us && s_hi_swr_us >= started &&
+        (s_rig->rig != CAT_RIG_FTDX10 || s_hi_swr_us >= startup_end ||
+         (now >= startup_end && !(s_normal_swr_us > s_hi_swr_us && s_normal_swr_us < startup_end)));
+    if (hi_swr) {
         reason = "High SWR";
     } else if (s_disconnected || !s_state.connected) {
         reason = "CAT disconnected";

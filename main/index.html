@@ -3902,7 +3902,7 @@ function releasePtt() {
 }
 
 function pressPtt() {
-  if (!txAuthenticated || txHeld || !document.hasFocus() || document.hidden) return;
+  if (!txAuthenticated || ptt.disabled || txHeld || !document.hasFocus() || document.hidden) return;
   if (txTone.value !== 'off' && (!txLevel.value || !txLevel.validity.valid)) {
     txInfo.textContent = 'Enter a level from −60 to −6 dBFS';
     return;
@@ -3931,7 +3931,7 @@ txConnect.addEventListener('click', () => {
     const state = JSON.parse(event.data);
     if (state.t !== 'tx') return;
     txAuthenticated = state.auth;
-    ptt.disabled = !state.auth;
+    ptt.disabled = !state.auth || state.stopping === true;
     showTransmitState(state.on_air === true, state.tx_vfo);
     txTone.disabled = txLevel.disabled = state.state === 'KEYED';
     txMeters.textContent = state.state === 'KEYED' || state.po_raw || state.swr_raw
@@ -3944,7 +3944,7 @@ txConnect.addEventListener('click', () => {
     } else if (!txHeartbeat) {
       txHeartbeat = setInterval(() => sendTx({t: txHeld && !document.hidden && document.hasFocus() ? 'hb' : 'status'}), 250);
     }
-    if (state.error) releasePtt();
+    if (state.error || state.stopping) releasePtt();
   });
   socket.addEventListener('close', () => {
     clearInterval(txHeartbeat);

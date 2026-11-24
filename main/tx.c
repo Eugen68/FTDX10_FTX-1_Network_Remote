@@ -20,7 +20,7 @@ static TaskHandle_t s_watchdog_task;
 static esp_timer_handle_t s_timer;
 static tx_state_t s_state = {.reason = ""};
 static int64_t s_heartbeat, s_keyed_at, s_deadline, s_off_sent;
-static bool s_stopping, s_inhibited;
+static bool s_stopping, s_inhibited, s_waiting_for_audio_cleanup;
 static tx_swr_guard_t s_swr_guard;
 static unsigned s_swr_max;
 static tx_tone_t s_tone;
@@ -34,6 +34,7 @@ static void finish_stop(void)
     s_state.phase = TX_IDLE;
     s_state.owner = 0;
     s_stopping = false;
+    s_waiting_for_audio_cleanup = false;
     s_state.stopping = false;
     s_off_sent = 0;
 }
@@ -54,13 +55,23 @@ static void stop_locked(const char *reason)
 
     s_stopping = true;
     s_state.stopping = true;
+    if (s_waiting_for_audio_cleanup) {
+        if (!usb_audio_tx_cleanup_pending()) {
+            finish_stop();
+        }
+        return;
+    }
+
     usb_audio_tx_request(TX_TONE_OFF, 0);
     if (s_off_sent && cat_radio_rx_after(s_off_sent)) {
         ESP_LOGI("tx", "RX confirmed after %u TX0 attempt(s)", s_state.off_attempts);
         if (s_tone != TX_TONE_OFF) {
             usb_audio_tx_finished();
+            s_waiting_for_audio_cleanup = usb_audio_tx_cleanup_pending();
         }
-        finish_stop();
+        if (!s_waiting_for_audio_cleanup) {
+            finish_stop();
+        }
     } else if (!s_off_sent || esp_timer_get_time() - s_off_sent >= CONFIRM_US) {
         const esp_err_t previous = s_state.off_error;
         s_state.off_attempts++;
@@ -107,10 +118,11 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
         cat_state_t radio;
         cat_get_state(&radio);
         const char *mode_error = cat_ptt_mode_error(0);
-        if (!usb_audio_tx_idle()) {
-            refusal = "Waiting for USB TX audio to stop";
-        } else if (tone != TX_TONE_OFF && !usb_audio_tx_available()) {
+        if (tone != TX_TONE_OFF && !usb_audio_tx_available()) {
             refusal = "USB TX audio unavailable";
+        } else if (!usb_audio_tx_idle()) {
+            refusal = usb_audio_tx_cleanup_pending() ? "Waiting for USB TX audio to stop"
+                                                      : "USB TX audio not ready";
         } else if (mode_error) {
             refusal = mode_error;
         } else if (tone != TX_TONE_OFF && usb_audio_tx_prepare(radio.rig == CAT_RIG_FTX1, 0) != ESP_OK) {
