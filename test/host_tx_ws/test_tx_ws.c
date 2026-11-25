@@ -94,6 +94,7 @@ tx_state_t tx_get_state(void)
 {
     return (tx_state_t){.reason = mode_refused ? "Set MAIN mode to USB, LSB, DATA-USB or DATA-LSB" : ""};
 }
+bool usb_audio_rx_paused(void) { return false; }
 void cat_get_state(cat_state_t *state) { *state = (cat_state_t){0}; }
 
 #include "tx_ws_handler.inc"

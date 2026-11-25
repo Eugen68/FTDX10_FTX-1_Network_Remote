@@ -745,12 +745,12 @@ static esp_err_t status_handler(httpd_req_t *req)
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"tx\":{\"state\":\"%s\",\"owner\":%lu,\"left_s\":%u,\"reason\":\"%s\","
-                      "\"stopping\":%s,\"off_attempts\":%u,\"off_error\":%d,"
+                      "\"stopping\":%s,\"rx_confirmed\":%s,\"off_attempts\":%u,\"off_error\":%d,"
                       "\"audio_rate\":%u,\"underruns\":%u,\"written_bytes\":%u,"
                       "\"completed_bytes\":%u,\"completed_packets\":%u,\"failed_packets\":%u,\"pcm_peak\":%u,\"submit_error\":%d,"
                       "\"swr\":%s,\"swr_raw\":%u,\"po\":%s,\"po_raw\":%u}}",
                       phase, (unsigned long)tx.owner, tx.left_s, tx_reason(&tx, reason),
-                      tx.stopping ? "true" : "false", tx.off_attempts, tx.off_error,
+                      tx.stopping ? "true" : "false", tx.rx_confirmed ? "true" : "false", tx.off_attempts, tx.off_error,
                       audio.audio_rate, audio.underruns, audio.written_bytes,
                       transfers.completed_bytes, transfers.completed_packets, transfers.failed_packets,
                       transfers.pcm_peak, transfers.submit_error,
@@ -1122,10 +1122,11 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     char json[512], reason[32];
     const int n = snprintf(json, sizeof(json),
                            "{\"t\":\"tx\",\"state\":\"%s\",\"left_s\":%u,\"reason\":\"%s\","
-                           "\"on_air\":%s,\"stopping\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\","
+                           "\"on_air\":%s,\"stopping\":%s,\"rx_confirmed\":%s,\"rx_paused\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\","
                            "\"swr_x100\":%u,\"swr_raw\":%u,\"po_raw\":%u,\"po_valid\":%s}",
                            phase, state.left_s, tx_reason(&state, reason), state.on_air ? "true" : "false",
-                           state.stopping ? "true" : "false", tx_vfo,
+                           state.stopping ? "true" : "false", state.rx_confirmed ? "true" : "false",
+                           usb_audio_rx_paused() ? "true" : "false", tx_vfo,
                            session ? "true" : "false", session && state.owner == session->owner ? "true" : "false",
                            error, state.swr, state.swr_raw, state.po_raw, state.po_valid ? "true" : "false");
     if (n < 0 || (size_t)n >= sizeof(json)) {

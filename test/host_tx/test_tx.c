@@ -326,7 +326,7 @@ int main(void)
     radio_on = false;
     rx_us = ++g_now_us;
     watchdog_tick();
-    assert(cleanup_pending && tx_get_state().stopping && !tx_get_state().on_air);
+    assert(cleanup_pending && tx_get_state().stopping && !tx_get_state().on_air && tx_get_state().rx_confirmed);
     assert(!tx_acquire(1) && !tx_acquire(2));
     assert(strcmp(tx_get_state().reason, "High SWR") == 0);
     g_now_us += CONFIRM_US + 1;

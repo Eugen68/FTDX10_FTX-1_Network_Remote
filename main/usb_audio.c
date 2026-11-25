@@ -559,18 +559,22 @@ bool usb_audio_tx_idle(void)
 
 static void restore_rx(bool channel_available)
 {
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    if (s_rx_paused) {
-        const esp_err_t err = !channel_available || !s_mic_handle
-                              ? ESP_ERR_INVALID_STATE : uac_host_device_start(s_mic_handle, &s_rx_format);
-        if (err != ESP_OK) {
-            s_streaming = false;
-            ESP_LOGW(TAG, "USB audio RX restore failed: %s", esp_err_to_name(err));
-        } else {
-            ESP_LOGI(TAG, "USB audio RX restored after TX");
-        }
-        s_rx_paused = false;
+    // Called under s_output_lock. With independent RX there is nothing to
+    // restore, so do not contend with the continuous RX reader for s_lock.
+    if (!atomic_load(&s_rx_paused)) {
+        return;
     }
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const esp_err_t err = !channel_available || !s_mic_handle
+                          ? ESP_ERR_INVALID_STATE : uac_host_device_start(s_mic_handle, &s_rx_format);
+    if (err != ESP_OK) {
+        s_streaming = false;
+        ESP_LOGW(TAG, "USB audio RX restore failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "USB audio RX restored after TX");
+    }
+    atomic_store(&s_rx_paused, false);
     xSemaphoreGive(s_lock);
 }
 

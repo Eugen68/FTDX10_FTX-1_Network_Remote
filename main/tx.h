@@ -16,6 +16,7 @@ typedef struct {
     const char *reason;
     bool on_air;
     bool stopping;
+    bool rx_confirmed;
     unsigned off_attempts;
     esp_err_t off_error;
     unsigned swr, swr_raw, po_raw, stop_swr;

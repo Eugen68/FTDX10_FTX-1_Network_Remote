@@ -321,7 +321,7 @@ int main(void) {
         poll_keyed((void *)1, s_rig, &poll);
         CHECK(strcmp(g_sent, i ? "TX;RI0;FT;MD0;" : "RI0;TX;FT;MD0;MD1;") == 0,
               "only TX status is outstanding on %s", s_rig->name);
-        CHECK(g_write_timeout_ms == 1200, "keyed poll uses the longer write budget");
+        CHECK(g_write_timeout_ms == (i ? 300 : 1200), "keyed poll uses the model-specific write budget");
         CHECK(cat_enqueue("FA;") == ESP_ERR_INVALID_STATE, "ordinary commands cannot queue during TX");
         CHECK(cat_tx((void *)1, "FA;") == ESP_ERR_INVALID_STATE, "ordinary writes cannot reach USB during TX");
         g_sent[0] = '\0';

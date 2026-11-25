@@ -4081,7 +4081,8 @@ txConnect.addEventListener('click', () => {
     txKeyed = state.state === 'KEYED';
     txStopping = state.stopping === true;
     txOwnsKey = state.owner === true;
-    muteReceptionForTx(txKeyed || txStopping || state.on_air === true);
+    const receptionReady = state.rx_confirmed === true && state.rx_paused === false;
+    muteReceptionForTx(state.on_air === true || (!receptionReady && (txKeyed || txStopping)));
     updateTxControls();
     showTransmitState(state.on_air === true, state.tx_vfo);
     txTone.disabled = txLevel.disabled = state.state === 'KEYED';

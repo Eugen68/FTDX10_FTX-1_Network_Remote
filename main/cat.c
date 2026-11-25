@@ -78,13 +78,14 @@
 // opened by USB device address. Whichever answers "ID;" at CAT_BAUD is used as the CAT port.
 #define SILABS_VID          0x10C4
 #define CAT_BAUD            115200   // CAT-1 RATE of this radio
-#define CAT_TASK_PRIORITY   4
+#define CAT_TASK_PRIORITY   6         // above HTTPS (5): voice frames must not delay CAT safety polling
 #define POLL_PERIOD_MS      100
 #define RADIO_STATUS_MAX_AGE_US 1500000LL  // BUSY/TX is polled every five iterations
 #define VOICE_MENU_MAX_AGE_US 15000000LL
 #define ANSWER_TIMEOUT_MS   300
 #define TX_TIMEOUT_MS       200
-#define KEYED_WRITE_TIMEOUT_MS 1200
+#define FTX1_KEYED_WRITE_TIMEOUT_MS 1200
+#define FTDX10_KEYED_WRITE_TIMEOUT_MS 300
 #define FTX1_KEYED_REPLY_TIMEOUT_US 1500000LL
 #define FTDX10_KEYED_REPLY_TIMEOUT_US 300000LL
 #define KEYED_CAT_MAX_AGE_US   3000000LL
@@ -585,6 +586,11 @@ static void capture_write_timing(cat_write_timing_t *stats, unsigned us, esp_err
     }
 }
 
+static unsigned keyed_write_timeout_ms(void)
+{
+    return s_rig->rig == CAT_RIG_FTDX10 ? FTDX10_KEYED_WRITE_TIMEOUT_MS : FTX1_KEYED_WRITE_TIMEOUT_MS;
+}
+
 /** The only place that writes to the radio */
 static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_kind_t kind, bool keyed_poll)
 {
@@ -604,7 +610,7 @@ static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_ki
     }
     const unsigned usb_test = s_usb_test_active ? s_usb_test_generation : 0;
     xSemaphoreGive(s_lock);
-    const unsigned budget_ms = keyed_poll ? KEYED_WRITE_TIMEOUT_MS : TX_TIMEOUT_MS;
+    const unsigned budget_ms = keyed_poll ? keyed_write_timeout_ms() : TX_TIMEOUT_MS;
     const int64_t start = esp_timer_get_time();
     const esp_err_t err = cdc_acm_host_data_tx_blocking(dev, (const uint8_t *)cmds, strlen(cmds), budget_ms);
     const unsigned elapsed = (unsigned)(esp_timer_get_time() - start);
@@ -1522,7 +1528,7 @@ cat_write_stats_t cat_get_write_stats(void)
     cat_write_stats_t stats = s_write_stats;
     xSemaphoreGive(s_lock);
     stats.budget_ms = TX_TIMEOUT_MS;
-    stats.keyed_poll_budget_ms = KEYED_WRITE_TIMEOUT_MS;
+    stats.keyed_poll_budget_ms = keyed_write_timeout_ms();
     return stats;
 }
 

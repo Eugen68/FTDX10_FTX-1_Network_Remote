@@ -66,6 +66,7 @@ static void stop_locked(const char *reason)
     usb_audio_tx_request(TX_TONE_OFF, 0);
     if (s_tone == TX_TONE_VOICE) tx_voice_stop();
     if (s_off_sent && cat_radio_rx_after(s_off_sent)) {
+        s_state.rx_confirmed = true;
         ESP_LOGI("tx", "RX confirmed after %u TX0 attempt(s)", s_state.off_attempts);
         if (s_tone != TX_TONE_OFF) {
             usb_audio_tx_finished();

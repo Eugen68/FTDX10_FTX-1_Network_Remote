@@ -629,7 +629,7 @@ confirmed. Set the radio's modulation gain locally and use the microphone slider
 
 Hold PTT or Space on the focused page. Touch-and-hold PTT is supported on mobile. The browser sends
 microphone audio only while it holds PTT and the firmware confirms it is the keyed owner. RX playback
-is muted during remote TX. A release, focus loss, or ended microphone track releases PTT. Audio
+is muted during remote TX and resumes after confirmed RX or after USB input restarts if it was paused. A release, focus loss, or ended microphone track releases PTT. Audio
 packets never refresh the control heartbeat. The other automatic stops described above apply to voice.
 
 `/status.tx_voice` reports the buffered milliseconds, the adaptive prefill target, underruns, discarded
