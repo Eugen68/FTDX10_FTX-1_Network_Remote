@@ -345,10 +345,13 @@ int main(void)
     uint8_t frame[TX_VOICE_FRAME_BYTES] = {3, 2};
     assert(tx_submit_voice(2, frame, sizeof(frame)) && voice_frames == 0);
     assert(!tx_submit_voice(1, frame, sizeof(frame) - 1) && voice_frames == 0);
+    uint8_t packet[TX_VOICE_PACKET_BYTES] = {3, 2};
+    assert(!tx_submit_voice(1, packet, sizeof(packet) - 1));
+    assert(tx_submit_voice(1, packet, sizeof(packet)) && voice_frames == 2);
     g_now_us += HEARTBEAT_US - 1;
-    assert(tx_submit_voice(1, frame, sizeof(frame)) && voice_frames == 1);
+    assert(tx_submit_voice(1, frame, sizeof(frame)) && voice_frames == 3);
     ++g_now_us;
-    assert(tx_submit_voice(1, frame, sizeof(frame)) && voice_frames == 1);
+    assert(tx_submit_voice(1, frame, sizeof(frame)) && voice_frames == 3);
     watchdog_tick();
     assert(tx_get_state().stopping && strcmp(tx_get_state().reason, "Heartbeat lost") == 0);
     confirm_rx();

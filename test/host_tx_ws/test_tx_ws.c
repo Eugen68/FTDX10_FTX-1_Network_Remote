@@ -24,8 +24,10 @@ typedef struct {
 } httpd_ws_frame_t;
 
 static const char *message;
-static uint8_t binary[TX_VOICE_FRAME_BYTES] = {3, 2};
+static uint8_t binary[TX_VOICE_PACKET_BYTES] = {3, 2};
 static bool sending_binary;
+static unsigned receive_yields;
+static void vTaskDelay(unsigned ticks) { assert(ticks == 1); ++receive_yields; }
 static uint32_t voice_owner;
 static char reply[512];
 static unsigned auth_checks, key_requests;
@@ -85,7 +87,7 @@ void tx_release(uint32_t owner, const char *reason)
 }
 bool tx_submit_voice(uint32_t owner, const uint8_t *frame, size_t length)
 {
-    assert(length == TX_VOICE_FRAME_BYTES && frame[0] == 3 && frame[1] == 2);
+    assert(length == TX_VOICE_PACKET_BYTES && frame[0] == 3 && frame[1] == 2);
     voice_owner = owner;
     return true;
 }
@@ -139,7 +141,7 @@ int main(void)
     message = "{\"t\":\"ptt\",\"on\":false,\"tone\":\"dual\"}";
     assert(tx_ws_handler(&req) == ESP_FAIL && key_requests == 1);
     sending_binary = true;
-    assert(tx_ws_handler(&req) == ESP_OK && voice_owner == acquired_owner && voice_owner != 0);
+    assert(tx_ws_handler(&req) == ESP_OK && voice_owner == acquired_owner && voice_owner != 0 && receive_yields == 1);
     sending_binary = false;
     req.free_ctx(req.sess_ctx);
     assert(released_owner == acquired_owner);

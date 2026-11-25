@@ -3928,6 +3928,7 @@ let voiceSource = 0;
 let mic = null;
 let micOpening = false;
 let micGeneration = 0;
+let pendingMicFrame = null;
 
 function updateTxControls() {
   const voice = txTone.value === 'voice';
@@ -3940,6 +3941,7 @@ function updateTxControls() {
 
 function stopMic() {
   ++micGeneration;
+  pendingMicFrame = null;
   if (mic) {
     mic.node.port.onmessage = null;
     mic.stream.getTracks().forEach(track => track.stop());
@@ -3955,13 +3957,22 @@ function sendMicFrame(pcm, peak) {
   micLevel.value = Math.min(1, peak);
   if (!txHeld || !txOwnsKey || !txKeyed || txStopping || document.hidden || !document.hasFocus() ||
       txTone.value !== 'voice' || txSocket?.readyState !== WebSocket.OPEN) return;
-  // Drop frames instead of queueing speech or delaying the PTT release behind it.
-  if (txSocket.bufferedAmount >= 2 * 642) return;
-  const data = new ArrayBuffer(2 + 2 * pcm.length);
+  // Send two consecutive 20 ms captures in one TLS/WebSocket message.
+  // Keep at most one capture locally and discard a pair under backpressure.
+  if (!pendingMicFrame) {
+    pendingMicFrame = pcm;
+    return;
+  }
+  const first = pendingMicFrame;
+  pendingMicFrame = null;
+  const bytes = 2 + 2 * (first.length + pcm.length);
+  if (txSocket.bufferedAmount >= bytes) return;
+  const data = new ArrayBuffer(bytes);
   const view = new DataView(data);
   view.setUint8(0, 3);
   view.setUint8(1, 2);
-  for (let i = 0; i < pcm.length; ++i) view.setInt16(2 + i * 2, pcm[i], true);
+  for (let i = 0; i < first.length; ++i) view.setInt16(2 + i * 2, first[i], true);
+  for (let i = 0; i < pcm.length; ++i) view.setInt16(2 + (first.length + i) * 2, pcm[i], true);
   txSocket.send(data);
 }
 
@@ -4057,6 +4068,7 @@ function sendTx(message) {
 function releasePtt() {
   if (!txHeld) return;
   txHeld = false;
+  pendingMicFrame = null;
   ++txPress;
   ptt.setAttribute('aria-pressed', 'false');
   if (txKeyRequested) {
@@ -4118,6 +4130,7 @@ txConnect.addEventListener('click', () => {
     txKeyed = state.state === 'KEYED';
     txStopping = state.stopping === true;
     txOwnsKey = state.owner === true;
+    if (!txKeyed || !txOwnsKey || txStopping) pendingMicFrame = null;
     const receptionReady = state.rx_confirmed === true && state.rx_paused === false;
     muteReceptionForTx(state.on_air === true || (!receptionReady && (txKeyed || txStopping)));
     updateTxControls();

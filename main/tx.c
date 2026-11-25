@@ -162,13 +162,15 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
 
 bool tx_submit_voice(uint32_t owner, const uint8_t *frame, size_t length)
 {
-    if (length != TX_VOICE_FRAME_BYTES || frame[0] != 3 || frame[1] != TX_VOICE_RATE / 8000) {
+    if (!tx_voice_packet_size_valid(length) || frame[0] != 3 || frame[1] != TX_VOICE_RATE / 8000) {
         return false;
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (owner && owner == s_state.owner && s_state.phase == TX_KEYED && !s_stopping &&
         s_tone == TX_TONE_VOICE && esp_timer_get_time() - s_heartbeat < HEARTBEAT_US) {
-        tx_voice_push(frame + 2);
+        for (size_t offset = 2; offset < length; offset += 2 * TX_VOICE_SAMPLES) {
+            tx_voice_push(frame + offset);
+        }
     }
     xSemaphoreGive(s_lock);
     return true;

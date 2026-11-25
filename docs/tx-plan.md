@@ -202,7 +202,8 @@ Goal: know whether the radio exposes a UAC **output** (speaker) interface and it
 ### Phase 3: voice from the browser microphone
 
 - Page: port `MicCapture` from ftx1-pult `web/worklets.js` (AudioWorklet, 16 kHz, 20 ms frames, Float32 →
-  int16). Send binary frames over `/ws` only while KEYED and owner: `[0x03][rate/8000][int16 LE …]`,
+  int16). Group two captures in one binary message over `/ws` only while KEYED and owner:
+  `[0x03][rate/8000][int16 LE …]`,
   respecting `bufferedAmount`. Microphone permission is asked only when the TX panel is first used.
   `getUserMedia` constraints: echoCancellation true, noiseSuppression false, autoGainControl false.
 - Mute the RX playback in the page while KEYED (feedback), restore after.

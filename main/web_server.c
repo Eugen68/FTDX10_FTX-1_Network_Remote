@@ -1055,13 +1055,17 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     static uint32_t next_owner;
     tx_ws_session_t *session = req->free_ctx == free_tx_session ? req->sess_ctx : NULL;
     httpd_ws_frame_t frame = {0};
-    uint8_t input[TX_VOICE_FRAME_BYTES];
+    uint8_t input[TX_VOICE_PACKET_BYTES];
     if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK) return ESP_FAIL;
     if (frame.type == HTTPD_WS_TYPE_BINARY) {
-        if (!session || !frame.final || frame.len != TX_VOICE_FRAME_BYTES) return ESP_FAIL;
+        if (!session || !frame.final || !tx_voice_packet_size_valid(frame.len)) return ESP_FAIL;
         frame.payload = input;
         if (httpd_ws_recv_frame(req, &frame, frame.len) != ESP_OK) return ESP_FAIL;
-        return tx_submit_voice(session->owner, input, frame.len) ? ESP_OK : ESP_FAIL;
+        if (!tx_submit_voice(session->owner, input, frame.len)) return ESP_FAIL;
+        // A burst of pending TLS records can keep httpd continuously runnable.
+        // Block for one tick so lower priority tasks, including IDLE0, can run.
+        vTaskDelay(1);
+        return ESP_OK;
     }
     if (frame.type != HTTPD_WS_TYPE_TEXT || !frame.final || frame.len == 0 || frame.len >= 192) {
         ESP_LOGW(TAG, "TX WebSocket rejected: invalid control frame");

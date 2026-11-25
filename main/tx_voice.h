@@ -2,9 +2,20 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
-enum { TX_VOICE_RATE = 16000, TX_VOICE_SAMPLES = 320, TX_VOICE_FRAME_BYTES = 2 + 2 * TX_VOICE_SAMPLES };
+enum {
+    TX_VOICE_RATE = 16000,
+    TX_VOICE_SAMPLES = 320,
+    TX_VOICE_FRAME_BYTES = 2 + 2 * TX_VOICE_SAMPLES,
+    TX_VOICE_PACKET_BYTES = 2 + 4 * TX_VOICE_SAMPLES,
+};
+
+static inline bool tx_voice_packet_size_valid(size_t size)
+{
+    return size == TX_VOICE_FRAME_BYTES || size == TX_VOICE_PACKET_BYTES;
+}
 
 typedef struct {
     unsigned level_ms, target_ms, underruns, dropped_frames;
