@@ -382,7 +382,7 @@ Enter Host name without ".local" [Current: trx-remote] (a-z, 0-9, '-'; DEFAULT t
 
 ### Notes
 
-- **Certificate name**: after saving a new host name, regenerate the device certificate from the serial menu so its SAN matches the new name.
+- **Certificate name**: the device certificate covers `trx-remote.local` and `trx-remote`. A custom host name can show a name-mismatch warning.
 - **Duplicate names**: if another device with the same name is on the LAN, mDNS may automatically rename this one, for example `trx-remote-2.local`. When you use several units, give each a different host name.
 - **Browser state**: a new host name is a different site for the browser, so you have to log in (Basic authentication) and accept the certificate again.
 - macOS, iOS, Windows 10 and later, and recent Linux (avahi) resolve `.local` out of the box.
@@ -555,11 +555,11 @@ The `X-Requested-With: ftx1` header is required as CSRF protection (without it t
 
 ## Self-signed certificate
 
-On the first successful Wi-Fi boot, the board creates an EC P-256 key and a self-signed certificate. It stores the pair in the `https_identity` NVS namespace and reuses it after power cycles and app-only updates. The certificate covers the configured host name with and without `.local`. Its fixed validity window (2020–2049) allows first boot on a LAN without an Internet time source.
+On the first successful Wi-Fi boot, the board creates an EC P-256 key and a self-signed certificate. It stores the pair in the `https_identity` NVS namespace and reuses it after power cycles and app-only updates. The certificate covers `trx-remote.local` and `trx-remote`. It is valid for ten years from the firmware build date in UTC so it can be issued offline. The serial log prints generation time and the active certificate’s SHA-256 fingerprint.
 
 Accept or trust the certificate for your board on each browser or client. This trust can carry over to later firmware updates while the client uses the same address and the NVS identity is preserved. Access by IP can show a name-mismatch warning. The private key is stored in NVS and can be read by anyone with raw flash access unless flash/NVS encryption is enabled.
 
-To replace the key and certificate, choose `c` (**Regenerate HTTPS certificate**) in the serial menu, confirm with `yes`, then choose `7` to continue boot. For a new host name, save it with `6` first, then reopen the menu to regenerate. Confirm the new certificate after rotation. The built-in certificate is used only when the device cannot use or save its own identity.
+To replace the key and certificate, choose `c` (**Regenerate HTTPS certificate**) in the serial menu, confirm with `yes`, then choose `7` to continue boot. Confirm the new certificate after rotation. The built-in certificate is used only when the device cannot use or save its own identity.
 
 ## Security notes
 

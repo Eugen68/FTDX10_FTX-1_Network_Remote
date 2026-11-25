@@ -39,6 +39,18 @@ idf_component_register(SRCS "web_auth.c" "console_menu.c" "app_config.c" "main.c
 # or embedded page changes, so the build time shown in the GUI is always current.
 # (set_source_files_properties is not scriptable, so skip it during IDF's requirements scan.)
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    # Base the validity dates on UTC at configure time without requiring a device clock.
+    string(TIMESTAMP HTTPS_CERT_YEAR "%Y" UTC)
+    string(TIMESTAMP HTTPS_CERT_MONTH "%m" UTC)
+    string(TIMESTAMP HTTPS_CERT_DAY "%d" UTC)
+    math(EXPR HTTPS_CERT_EXPIRY_YEAR "${HTTPS_CERT_YEAR} + 10")
+    set(HTTPS_CERT_EXPIRY_DAY "${HTTPS_CERT_DAY}")
+    if(HTTPS_CERT_MONTH STREQUAL "02" AND HTTPS_CERT_DAY STREQUAL "29")
+        set(HTTPS_CERT_EXPIRY_DAY "28")
+    endif()
+    set_property(SOURCE https_identity.c APPEND PROPERTY COMPILE_DEFINITIONS
+        HTTPS_CERT_NOT_BEFORE="${HTTPS_CERT_YEAR}${HTTPS_CERT_MONTH}${HTTPS_CERT_DAY}000000"
+        HTTPS_CERT_NOT_AFTER="${HTTPS_CERT_EXPIRY_YEAR}${HTTPS_CERT_MONTH}${HTTPS_CERT_EXPIRY_DAY}000000")
     # Redirect the managed UAC component's ring calls only. The application
     # provides an explicit PSRAM backing store for the 16 KiB TX ring.
     idf_component_get_property(uac_target espressif__usb_host_uac COMPONENT_LIB)
