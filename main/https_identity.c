@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -32,6 +33,30 @@ typedef struct {
 
 static const char *TAG = "https_identity";
 static bool s_regenerate;
+// Published before the HTTPS task starts, immutable for the lifetime of that server.
+static esp_ip4_addr_t s_cert_ip;
+static char s_cert_fingerprint[32 * 3];
+
+static esp_ip4_addr_t current_ipv4(void)
+{
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t info;
+    if (netif && esp_netif_get_ip_info(netif, &info) == ESP_OK) {
+        return info.ip;
+    }
+    return (esp_ip4_addr_t){0};
+}
+
+bool https_identity_covers_ip(void)
+{
+    esp_ip4_addr_t ip = current_ipv4();
+    return ip.addr != 0 && ip.addr == s_cert_ip.addr;
+}
+
+const char *https_identity_fingerprint(void)
+{
+    return s_cert_fingerprint;
+}
 
 void https_identity_request_regeneration(void)
 {
@@ -89,17 +114,24 @@ static esp_err_t save_pair(const https_pair_t *pair)
     return err;
 }
 
-static int generate_pair(https_pair_t *pair)
+static int generate_pair(https_pair_t *pair, esp_ip4_addr_t ip)
 {
     static unsigned char fqdn[] = "trx-remote.local";
     static unsigned char hostname[] = "trx-remote";
+    // ESP-IDF stores IPv4 addresses in network byte order. Mbed TLS expects
+    // four raw octets for an iPAddress SAN.
+    unsigned char ip_bytes[4];
+    memcpy(ip_bytes, &ip.addr, sizeof(ip_bytes));
     mbedtls_x509_san_list names[] = {
         { .node = { .type = MBEDTLS_X509_SAN_DNS_NAME,
                     .san.unstructured_name = { .p = fqdn, .len = sizeof(fqdn) - 1 } } },
         { .node = { .type = MBEDTLS_X509_SAN_DNS_NAME,
                     .san.unstructured_name = { .p = hostname, .len = sizeof(hostname) - 1 } } },
+        { .node = { .type = MBEDTLS_X509_SAN_IP_ADDRESS,
+                    .san.unstructured_name = { .p = ip_bytes, .len = sizeof(ip_bytes) } } },
     };
     names[0].next = &names[1];
+    names[1].next = &names[2];
     const char *subject = "O=FTDX10 FTX-1 Network Remote,CN=trx-remote.local";
 
     psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
@@ -139,13 +171,16 @@ static int generate_pair(https_pair_t *pair)
     const mbedtls_asn1_sequence server_auth = {
         .buf = { .tag = MBEDTLS_ASN1_OID, .p = server_auth_oid, .len = sizeof(server_auth_oid) - 1 },
     };
+    // A self-signed identity installed as a local CA also needs the CA bit
+    // and keyCertSign for Android's CA certificate installer.
     // Derive validity from the firmware build so first boot works offline.
     if ((ret = mbedtls_x509write_crt_set_validity(&cert, HTTPS_CERT_NOT_BEFORE, HTTPS_CERT_NOT_AFTER)) != 0 ||
         (ret = mbedtls_x509write_crt_set_serial_raw(&cert, serial, sizeof(serial))) != 0 ||
         (ret = mbedtls_x509write_crt_set_subject_name(&cert, subject)) != 0 ||
         (ret = mbedtls_x509write_crt_set_issuer_name(&cert, subject)) != 0 ||
-        (ret = mbedtls_x509write_crt_set_basic_constraints(&cert, 0, -1)) != 0 ||
-        (ret = mbedtls_x509write_crt_set_key_usage(&cert, MBEDTLS_X509_KU_DIGITAL_SIGNATURE)) != 0 ||
+        (ret = mbedtls_x509write_crt_set_basic_constraints(&cert, 1, 0)) != 0 ||
+        (ret = mbedtls_x509write_crt_set_key_usage(&cert, MBEDTLS_X509_KU_DIGITAL_SIGNATURE |
+                                                 MBEDTLS_X509_KU_KEY_CERT_SIGN)) != 0 ||
         (ret = mbedtls_x509write_crt_set_ext_key_usage(&cert, &server_auth)) != 0 ||
         (ret = mbedtls_x509write_crt_set_subject_alternative_name(&cert, names)) != 0) {
         goto done;
@@ -175,6 +210,7 @@ done:
 
 typedef struct {
     https_pair_t *pair;
+    esp_ip4_addr_t ip;
     SemaphoreHandle_t finished;
     int result;
 } https_generation_t;
@@ -183,16 +219,16 @@ static void generation_task(void *arg)
 {
     https_generation_t *job = arg;
     int64_t start = esp_timer_get_time();
-    job->result = generate_pair(job->pair);
+    job->result = generate_pair(job->pair, job->ip);
     ESP_LOGI(TAG, "HTTPS key and certificate generation took %" PRId64 " ms (result %d)",
              (esp_timer_get_time() - start + 500) / 1000, job->result);
     xSemaphoreGive(job->finished);
     vTaskDelete(NULL);
 }
 
-static void try_generate_pair(https_pair_t *pair)
+static void try_generate_pair(https_pair_t *pair, esp_ip4_addr_t ip)
 {
-    https_generation_t job = { .pair = pair, .result = ESP_ERR_NO_MEM };
+    https_generation_t job = { .pair = pair, .ip = ip, .result = ESP_ERR_NO_MEM };
     job.finished = xSemaphoreCreateBinary();
     if (job.finished) {
         // Same priority as the watchdog-monitored idle tasks, which still get time slices.
@@ -222,23 +258,54 @@ static void try_generate_pair(https_pair_t *pair)
     }
 }
 
-static void log_fingerprint(const httpd_ssl_config_t *config, const char *source)
+static void record_certificate(const httpd_ssl_config_t *config)
 {
     mbedtls_x509_crt cert;
     mbedtls_x509_crt_init(&cert);
-    uint8_t hash[32];
-    size_t hash_len;
-    if (mbedtls_x509_crt_parse(&cert, config->servercert, config->servercert_len) == 0 &&
-        psa_hash_compute(PSA_ALG_SHA_256, cert.raw.p, cert.raw.len, hash, sizeof(hash), &hash_len) == PSA_SUCCESS) {
-        char fingerprint[sizeof(hash) * 3];
-        for (size_t i = 0; i < hash_len; ++i) {
-            snprintf(fingerprint + 3 * i, 4, "%02X%s", (unsigned)hash[i], i + 1 == hash_len ? "" : ":");
+    s_cert_ip.addr = 0;
+    s_cert_fingerprint[0] = '\0';
+    if (mbedtls_x509_crt_parse(&cert, config->servercert, config->servercert_len) == 0) {
+        uint8_t hash[32];
+        size_t hash_len;
+        if (psa_hash_compute(PSA_ALG_SHA_256, cert.raw.p, cert.raw.len,
+                             hash, sizeof(hash), &hash_len) == PSA_SUCCESS) {
+            for (size_t i = 0; i < hash_len; ++i) {
+                snprintf(s_cert_fingerprint + 3 * i, 4, "%02X%s",
+                         (unsigned)hash[i], i + 1 == hash_len ? "" : ":");
+            }
         }
-        ESP_LOGI(TAG, "Active HTTPS certificate (%s) SHA-256: %s", source, fingerprint);
+        for (const mbedtls_x509_sequence *name = &cert.subject_alt_names; name; name = name->next) {
+            const mbedtls_x509_buf *entry = &name->buf;
+            if (entry->tag == (MBEDTLS_ASN1_CONTEXT_SPECIFIC | MBEDTLS_X509_SAN_IP_ADDRESS) &&
+                entry->len == sizeof(s_cert_ip.addr)) {
+                memcpy(&s_cert_ip.addr, entry->p, sizeof(s_cert_ip.addr));
+                break;
+            }
+        }
+    }
+    mbedtls_x509_crt_free(&cert);
+}
+
+static esp_err_t start_with_certificate(httpd_handle_t *server, httpd_ssl_config_t *config,
+                                        const char *source)
+{
+    record_certificate(config);
+    // The SDK takes copies of the certificate and key buffers.
+    esp_err_t err = httpd_ssl_start(server, config);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (s_cert_fingerprint[0]) {
+        ESP_LOGI(TAG, "Active HTTPS certificate (%s) SHA-256: %s", source, s_cert_fingerprint);
     } else {
         ESP_LOGW(TAG, "Unable to report the active HTTPS certificate fingerprint");
     }
-    mbedtls_x509_crt_free(&cert);
+    esp_ip4_addr_t ip = current_ipv4();
+    if (ip.addr != 0 && ip.addr != s_cert_ip.addr) {
+        ESP_LOGW(TAG, "HTTPS certificate does not cover current IP " IPSTR "; use menu c to regenerate",
+                 IP2STR(&ip));
+    }
+    return ESP_OK;
 }
 
 esp_err_t https_identity_start(httpd_handle_t *server, httpd_ssl_config_t *config)
@@ -247,22 +314,26 @@ esp_err_t https_identity_start(httpd_handle_t *server, httpd_ssl_config_t *confi
     https_pair_t *pair = calloc(1, sizeof(*pair));
     if (pair) {
         esp_err_t err = load_pair(pair);
-        if (err != ESP_OK || s_regenerate) {
-            if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
-                ESP_LOGW(TAG, "Could not load HTTPS identity: %s", esp_err_to_name(err));
-            }
-            try_generate_pair(pair);
+        bool use_stored = err == ESP_OK;
+        if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW(TAG, "Could not load HTTPS identity: %s", esp_err_to_name(err));
         }
-        if (pair->cert_len != 0) {
+        if (err == ESP_ERR_NVS_NOT_FOUND || s_regenerate) {
+            esp_ip4_addr_t ip = current_ipv4();
+            if (ip.addr != 0) {
+                try_generate_pair(pair, ip);
+                use_stored = pair->cert_len != 0;
+            } else {
+                ESP_LOGW(TAG, "Current IPv4 address unavailable; skipping certificate generation");
+            }
+        }
+        if (use_stored) {
             httpd_ssl_config_t device_config = *config;
             device_config.servercert = pair->cert;
             device_config.servercert_len = pair->cert_len;
             device_config.prvtkey_pem = pair->key;
             device_config.prvtkey_len = pair->key_len;
-            err = httpd_ssl_start(server, &device_config); // SDK copies the DER buffers
-            if (err == ESP_OK) {
-                log_fingerprint(&device_config, "device NVS");
-            }
+            err = start_with_certificate(server, &device_config, "device NVS");
             mbedtls_platform_zeroize(pair, sizeof(*pair));
             free(pair);
             return err;
@@ -271,9 +342,5 @@ esp_err_t https_identity_start(httpd_handle_t *server, httpd_ssl_config_t *confi
         free(pair);
     }
     ESP_LOGW(TAG, "Device HTTPS identity unavailable; using embedded fallback certificate");
-    esp_err_t err = httpd_ssl_start(server, config);
-    if (err == ESP_OK) {
-        log_fingerprint(config, "embedded fallback");
-    }
-    return err;
+    return start_with_certificate(server, config, "embedded fallback");
 }

@@ -382,7 +382,7 @@ Enter Host name without ".local" [Current: trx-remote] (a-z, 0-9, '-'; DEFAULT t
 
 ### Notes
 
-- **Certificate name**: the device certificate covers `trx-remote.local` and `trx-remote`. A custom host name can show a name-mismatch warning.
+- **Certificate names**: a newly generated device certificate covers `trx-remote.local`, `trx-remote` and the board’s IPv4 address at generation time. A custom host name can show a name-mismatch warning.
 - **Duplicate names**: if another device with the same name is on the LAN, mDNS may automatically rename this one, for example `trx-remote-2.local`. When you use several units, give each a different host name.
 - **Browser state**: a new host name is a different site for the browser, so you have to log in (Basic authentication) and accept the certificate again.
 - macOS, iOS, Windows 10 and later, and recent Linux (avahi) resolve `.local` out of the box.
@@ -555,11 +555,41 @@ The `X-Requested-With: ftx1` header is required as CSRF protection (without it t
 
 ## Self-signed certificate
 
-On the first successful Wi-Fi boot, the board creates an EC P-256 key and a self-signed certificate. It stores the pair in the `https_identity` NVS namespace and reuses it after power cycles and app-only updates. The certificate covers `trx-remote.local` and `trx-remote`. It is valid for ten years from the firmware build date in UTC so it can be issued offline. The serial log prints generation time and the active certificate’s SHA-256 fingerprint.
+On the first successful Wi-Fi boot, the board creates an EC P-256 key and a self-signed certificate.
+It saves the pair in NVS and reuses it after power cycles, OTA and serial updates that preserve settings.
+A newly generated certificate covers `trx-remote.local`, `trx-remote` and the station IPv4 address
+assigned by DHCP at generation time. It is valid for ten years from the firmware build date in UTC.
 
-Accept or trust the certificate for your board on each browser or client. This trust can carry over to later firmware updates while the client uses the same address and the NVS identity is preserved. Access by IP can show a name-mismatch warning. The private key is stored in NVS and can be read by anyone with raw flash access unless flash/NVS encryption is enabled.
+Reserve the board’s IPv4 address in your router. A DHCP change or a firmware update leaves the
+stored certificate in place, including older certificates without an IP entry. The startup log
+warns when the current IPv4 address is missing. The authenticated `/status` endpoint reports
+`cert_covers_ip` for the current station IPv4 address and `cert_sha256` for the certificate being served.
 
-To replace the key and certificate, choose `c` (**Regenerate HTTPS certificate**) in the serial menu, confirm with `yes`, then choose `7` to continue boot. Confirm the new certificate after rotation. The built-in certificate is used only when the device cannot use or save its own identity.
+To replace the certificate and key, choose `c` (**Regenerate HTTPS certificate**) in the serial menu,
+enter `yes`, then choose `7` to continue boot. This captures the IPv4 address assigned on that boot.
+A VPN can route to the same LAN address. Access through a different address requires that address
+to be covered by the certificate. The embedded fallback is used if the device has no usable
+identity and cannot provision it. Its fingerprint and source appear in the startup log.
+
+### Trusting the board certificate
+
+Export only the public certificate from the browser’s certificate viewer (DER `.cer` or Base64/PEM).
+Before importing, compare the full SHA-256 fingerprint in the viewer with the serial line
+`Active HTTPS certificate (device NVS) SHA-256`. The new per-board certificate can be installed
+as a local CA. Import only your own board’s verified certificate. A trusted CA can authorize other
+TLS certificates if someone gets its private key, and raw flash access can expose that key unless
+flash/NVS encryption is enabled.
+
+- **Windows (Current User)**. Run `certmgr.msc`. Open **Trusted Root Certification Authorities**
+  → **Certificates**, then **All Tasks** → **Import** and select the exported certificate.
+  Reopen the browser and check both the IP address and `https://trx-remote.local`.
+  [Microsoft certificate store documentation](https://learn.microsoft.com/en-us/windows-server/identity/ad-cs/inspect-certificates-manage-certificate-stores)
+- **Android / Samsung**. Copy the exported public certificate to the phone. Open **Settings**
+  → **Security and privacy** → **More security settings** → **Install from device storage**
+  → **CA certificate**. Confirm and select the file. The labels vary by Android version.
+  [Samsung menu example](https://eu.community.samsung.com/t5/seria-galaxy-s25/instalare-certificat/td-p/13421503)
+
+After regenerating, remove the old trusted certificate, export the new one and import it again.
 
 ## Security notes
 
