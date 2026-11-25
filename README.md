@@ -603,16 +603,27 @@ option 6 to restart. Clearing the TX password also disables remote PTT. The page
 and the TX password. Five failed TX password attempts from the same IP trigger the 60-second lockout.
 One browser can hold PTT at a time. Hold the button or Space while the page has focus. During confirmed TX, the PTT button and the
 frequency readout for the radio-selected TX VFO turn red.
-The TX panel offers PTT only, a 1,000 Hz test tone, and a 700 + 1,900 Hz two-tone test. Set MAIN to USB, LSB, DATA-USB or DATA-LSB.
+The TX panel offers PTT only, browser microphone, a 1,000 Hz test tone, and a 700 + 1,900 Hz
+two-tone test. Set MAIN to USB, LSB, DATA-USB or DATA-LSB. Browser microphone requires USB or LSB.
 On FTX-1, when SUB is selected for transmit, set SUB to one of those modes too. On FTDX10, select MAIN
 for remote PTT. The firmware waits for fresh
 CAT confirmation of the mode and the selected transmitter. Select USB modulation on the radio to use the test tones. The firmware leaves the modulation-source and transmit-gain menus under local control.
 
-The device releases PTT on button/key release, a closed connection, 1.5 seconds without the owner's
-heartbeat, the transmit time limit, loss of CAT or USB audio, high SWR, or missing or unexpected
-transmit status. While keyed, the firmware waits for a CAT poll's replies before issuing the next poll, up to 1.5 seconds on the FTX-1 or 300 ms on
-the FTDX10. Telemetry writes have a 1.2-second budget. A write timeout by itself
-does not indicate CAT loss, which is reported after three seconds without a valid reply.
+Remote transmission stops automatically in these cases.
+
+- The owner releases or cancels PTT, leaves the button with the mouse, or the page loses focus, is
+  hidden, or closes. Disabling the browser microphone or losing its track also releases PTT.
+- The owner's WebSocket closes, no control heartbeat arrives for 1.5 seconds, or the configured
+  transmit time expires.
+- CAT disconnects or provides no valid response for 3 seconds, transmit status is missing or
+  unexpected, or the transmitted mode or TX VFO can no longer be confirmed as eligible.
+- USB audio is lost or a USB output transfer fails.
+- The radio reports Hi-SWR, the numeric SWR limit or rise detector trips, or PO/SWR metering becomes
+  stale as described below.
+- The firmware is asked to reboot, start an OTA update, or recover the USB bus.
+
+While keyed, the firmware waits up to 1.5 seconds for CAT poll replies on the FTX-1 and 300 ms on the
+FTDX10. The keyed telemetry write budgets are 1.2 seconds and 300 ms respectively.
 It sends TX off when a supported radio is identified, even with remote TX disabled. USB recovery, reboot, and OTA wait for
 confirmed receive after a device-controlled transmission. During idle, automatic USB recovery can run
 without CAT, but defers if a recent CAT report shows a transmission. If CAT is physically unavailable
@@ -621,14 +632,16 @@ the meantime. Use the radio's local controls to stop transmission if the CAT con
 
 ### Browser microphone
 
-Authorize TX, select Microphone, and choose Enable microphone. The browser asks for permission on
+On the signed-in page, enter the separate TX password and choose Authorize TX. Select Microphone
+and choose Enable microphone. The browser asks for permission on
 that button. The level meter and gain control work in receive, without sending audio to the radio.
 Use USB or LSB. Set SSB MOD SOURCE to USB or AUTO on the FTX-1. AUTO selects USB for CAT PTT.
 On the FTDX10 use SSB MOD SOURCE REAR and REAR SELECT USB. The companion reads these menus and refuses microphone TX until they are
 confirmed. Set the radio's modulation gain locally and use the microphone slider while watching ALC.
 
 Hold PTT or Space on the focused page. Touch-and-hold PTT is supported on mobile. The browser sends
-microphone audio only while it holds PTT and the firmware confirms it is the keyed owner. RX playback
+microphone audio only while it holds PTT and the firmware confirms that its authenticated WebSocket
+is the keyed owner. RX playback
 is muted during remote TX and resumes after confirmed RX or after USB input restarts if it was paused. A release, focus loss, or ended microphone track releases PTT. Audio
 packets never refresh the control heartbeat. The other automatic stops described above apply to voice.
 
@@ -654,10 +667,9 @@ window clears the transient flag. A persistent flag or missing confirmation stop
 the window. The measured SWR limit and rise detector stay active throughout. After RX is confirmed,
 the TX state remains stopping until the USB audio output finishes cleanup.
 
-The panel and `/status` show both raw meters. SWR conversions use provisional, model-specific
-[FTX-1](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftx1/ftx1.h)
-and [FTDX10](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftdx10.h) Hamlib reference points.
-Check these against the radio and known loads on the bench before relying on the numeric ratio.
+The panel and `/status` show both raw meters. The radio's own Hi-SWR protection is the first line of
+defense. The companion's numeric cutoff follows each radio's indicator scale using the existing
+RM6 conversion table. See the [RigExpert bench measurements](docs/tx-plan.md#swr-bench-reference-for-requirement-110).
 In `/status`, the TX audio counters show the output sample rate, missed audio task deadlines and
 bytes accepted by the USB driver. The `pcm_peak` value is the maximum absolute sample in
 successfully completed USB packets since the audio output started. FTDX10 scope frames with an

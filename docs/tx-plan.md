@@ -113,6 +113,8 @@ not merge yourself.
    build or a mock.
 9. **Update the README** security section in the same PR that adds the capability: what can transmit, how
    it is enabled, every automatic stop. Keep "Do not expose it to the Internet".
+10. **Use each radio's SWR indicator scale.** Keep the existing FTX-1 and FTDX10 RM6 tables and
+    the default 3.0:1 cutoff on those scales.
 
 Owner's hardware test rule for every TX phase: **dummy load, minimum power, the owner at the radio**.
 
@@ -135,6 +137,26 @@ Rules for the menu items: **do not write them automatically in this plan.** The 
 the gain on the radio. The page may read them (`EXnnnnnn;` read form, add to the allow-list as read-only,
 per profile) and warn when the current mode has no USB modulation. On FTX-1 in SSB, AUTO selects USB
 when CAT keys the transmitter.
+
+### SWR bench reference for requirement 1.10
+
+The radio's own Hi-SWR protection is the first line of defense. The companion uses each radio's
+indicator scale for its numeric SWR cutoff. Eugene's RigExpert measurements below record the
+difference between the reference SWR and the companion display. They do not redefine the existing
+RM6 conversion tables or the default 3.0:1 cutoff.
+
+| Radio | TX power | RigExpert SWR | SWR shown in Companion | RM6 raw |
+| --- | --- | --- | --- | --- |
+| FTX-1 | — | 2.0:1 | 1.30:1 | 35 |
+| FTX-1 | — | 3.0:1 | 1.83:1 | 82 |
+| FTX-1 | — | 5.4:1 | 2.98:1 | 139 |
+| FTDX10 | 5 W | 1.5:1 | 1.35:1 | 39 |
+| FTDX10 | 5 W | 2.0:1 | 1.84:1 | 77 |
+| FTDX10 | 5 W | 2.5:1 | 2.16:1 | 95 |
+| FTDX10 | 5 W | 3.0:1 | 2.81:1 | 119 |
+| FTDX10 | 50 W | 3.0:1 | 2.95:1 | — |
+
+A dash indicates a value that was not recorded in the supplied measurements.
 
 ---
 
