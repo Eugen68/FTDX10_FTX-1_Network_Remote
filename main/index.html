@@ -4214,7 +4214,7 @@ function applyRigProfile(d) {
   voiceSource = d.connected ? d.tx_voice_source : 0;
   micSource.textContent = voiceSource === 2 ? '' : voiceSource !== 1 ? 'Waiting for SSB modulation source'
     : d.rig === 'FTDX10' ? 'Set SSB MOD SOURCE to REAR and REAR SELECT to USB'
-    : 'Set SSB MOD SOURCE to USB';
+    : 'Set SSB MOD SOURCE to USB or AUTO';
   updateTxControls();
   txPanel.hidden = !d.tx_enabled;
   if (txPanel.hidden && txSocket) {

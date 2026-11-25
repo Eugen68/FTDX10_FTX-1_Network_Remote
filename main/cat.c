@@ -1481,6 +1481,10 @@ static cat_voice_source_t voice_source(void)
         (rear_select && (!s_ssb_menu_us[1] || now - s_ssb_menu_us[1] > VOICE_MENU_MAX_AGE_US))) {
         return CAT_VOICE_SOURCE_UNKNOWN;
     }
+    // FTX-1 AUTO selects USB modulation when the transmitter is keyed by CAT.
+    if (s_rig->rig == CAT_RIG_FTX1 && s_ssb_menu[0] == '3') {
+        return CAT_VOICE_SOURCE_USB;
+    }
     return s_ssb_menu[0] == '1' && (!rear_select || s_ssb_menu[1] == '1')
         ? CAT_VOICE_SOURCE_USB : CAT_VOICE_SOURCE_OTHER;
 }
@@ -1493,7 +1497,10 @@ const char *cat_voice_mode_error(bool starting)
     xSemaphoreGive(s_lock);
     if (mode != '1' && mode != '2') return "Select USB or LSB for microphone TX";
     if (source == CAT_VOICE_SOURCE_UNKNOWN) return "Waiting for SSB modulation source";
-    if (source != CAT_VOICE_SOURCE_USB) return "Set SSB modulation source to USB";
+    if (source != CAT_VOICE_SOURCE_USB) {
+        return s_rig->rig == CAT_RIG_FTX1 ? "Set SSB MOD SOURCE to USB or AUTO"
+                                         : "Set SSB modulation source to USB";
+    }
     return NULL;
 }
 

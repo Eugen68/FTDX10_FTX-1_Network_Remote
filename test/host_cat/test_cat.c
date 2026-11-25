@@ -497,7 +497,13 @@ int main(void) {
     CHECK(cat_voice_mode_error(true) != NULL, "FTX-1 MIC source refuses browser voice");
     handle_cat_packet("EX0101131;");
     CHECK(cat_voice_mode_error(true) == NULL, "FTX-1 USB source permits browser voice");
-    CHECK(ok("EX010113;") && !ok("EX0101131;"), "FTX-1 SSB source is read only");
+    handle_cat_packet("EX0101132;");
+    CHECK(cat_voice_mode_error(true) != NULL, "FTX-1 Bluetooth refuses browser voice");
+    handle_cat_packet("EX0101133;");
+    CHECK(cat_voice_mode_error(true) == NULL, "FTX-1 AUTO selects USB for CAT voice");
+    g_now_us += VOICE_MENU_MAX_AGE_US + 1;
+    CHECK(cat_voice_mode_error(true) != NULL, "stale FTX-1 AUTO cannot authorize voice");
+    CHECK(ok("EX010113;") && !ok("EX0101131;") && !ok("EX0101133;"), "FTX-1 SSB source is read only");
     use("0761");
     s_ssb_menu_us[0] = s_ssb_menu_us[1] = 0;
     handle_cat_packet("EX0101131;");

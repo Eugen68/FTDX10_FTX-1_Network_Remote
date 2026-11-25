@@ -623,8 +623,8 @@ the meantime. Use the radio's local controls to stop transmission if the CAT con
 
 Authorize TX, select Microphone, and choose Enable microphone. The browser asks for permission on
 that button. The level meter and gain control work in receive, without sending audio to the radio.
-Use USB or LSB. Set SSB MOD SOURCE to USB on the FTX-1. On the FTDX10 use SSB MOD SOURCE REAR and
-REAR SELECT USB. The companion reads these menus and refuses microphone TX until they are
+Use USB or LSB. Set SSB MOD SOURCE to USB or AUTO on the FTX-1. AUTO selects USB for CAT PTT.
+On the FTDX10 use SSB MOD SOURCE REAR and REAR SELECT USB. The companion reads these menus and refuses microphone TX until they are
 confirmed. Set the radio's modulation gain locally and use the microphone slider while watching ALC.
 
 Hold PTT or Space on the focused page. Touch-and-hold PTT is supported on mobile. The browser sends

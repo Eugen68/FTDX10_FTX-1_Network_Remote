@@ -133,7 +133,8 @@ Owner's hardware test rule for every TX phase: **dummy load, minimum power, the 
 
 Rules for the menu items: **do not write them automatically in this plan.** The owner sets MOD SOURCE and
 the gain on the radio. The page may read them (`EXnnnnnn;` read form, add to the allow-list as read-only,
-per profile) and warn when MOD SOURCE is not USB in the current mode.
+per profile) and warn when the current mode has no USB modulation. On FTX-1 in SSB, AUTO selects USB
+when CAT keys the transmitter.
 
 ---
 
