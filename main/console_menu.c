@@ -21,6 +21,7 @@
 #include "driver/uart.h"
 #include "app_config.h"
 #include "build_info.h"
+#include "https_identity.h"
 #include "console_menu.h"
 #include <fcntl.h>
 #include <unistd.h>
@@ -283,8 +284,9 @@ void console_menu_run(void)
             "  m: Set TX time limit (10–600 seconds)\r\n"
             "  s: Set SWR limit (1.5–3.0)\r\n"
             "  h: Set Host name (mDNS / DHCP)\r\n"
+            "  c: Regenerate HTTPS certificate\r\n"
             "--------------------------------------------------\r\n"
-            "Enter selection (0-9, h, t, p, m, s): "
+            "Enter selection (0-9, h, t, p, m, s, c): "
         );
 
         char opt[8] = {0};
@@ -430,6 +432,17 @@ void console_menu_run(void)
                 }
                 break;
             }
+            case 'c':
+            case 'C': {
+                console_write_str("Replace the HTTPS certificate for this boot? Type 'yes' to confirm: ");
+                char confirm[8];
+                read_line(confirm, sizeof(confirm), false);
+                if (strcmp(confirm, "yes") == 0) {
+                    https_identity_request_regeneration();
+                    console_write_str("Certificate generation queued. Choose 7 to continue boot.\r\n");
+                }
+                break;
+            }
             case '5': {
                 char msg[768];
                 snprintf(msg, sizeof(msg),
@@ -489,7 +502,7 @@ void console_menu_run(void)
                 break;
             }
             default:
-                console_write_str("Invalid selection. Please enter 0-9 or h.\r\n");
+                console_write_str("Invalid selection. Choose a menu option.\r\n");
                 break;
         }
     }
