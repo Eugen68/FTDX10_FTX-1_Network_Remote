@@ -113,6 +113,8 @@ not merge yourself.
    build or a mock.
 9. **Update the README** security section in the same PR that adds the capability: what can transmit, how
    it is enabled, every automatic stop. Keep "Do not expose it to the Internet".
+10. **Use each radio's SWR indicator scale.** Keep the existing FTX-1 and FTDX10 RM6 tables and
+    the default 3.0:1 cutoff on those scales.
 
 Owner's hardware test rule for every TX phase: **dummy load, minimum power, the owner at the radio**.
 
