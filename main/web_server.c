@@ -672,7 +672,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832];
+    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -692,7 +692,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         const int rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
         // heap_* include PSRAM when it is enabled; int_* are the internal RAM only
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"boot_id\":%lu,\"uptime_s\":%lu,\"heap_free\":%lu,\"heap_min\":%lu,\"heap_block\":%lu,"
+                      ",\"cert_covers_ip\":%s,\"cert_sha256\":\"%s\","
+                      "\"boot_id\":%lu,\"uptime_s\":%lu,\"heap_free\":%lu,\"heap_min\":%lu,\"heap_block\":%lu,"
                       "\"int_free\":%lu,\"int_min\":%lu,\"int_block\":%lu,\"rssi\":%d,"
                       "\"conn_opened\":%u,\"conn_closed\":%u,\"tls_handshake_errors\":%u,"
                       "\"stream\":{\"active\":%s,\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
@@ -702,6 +703,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       "\"age_ms\":%ld,\"last_len\":%lu,\"last_reject\":\"%s\","
                       "\"rej\":{\"length\":%lu,\"not_ftdx10\":%lu,\"vfo_copies\":%lu,\"vfo_range\":%lu,"
                       "\"span\":%lu,\"cat\":%lu},\"clients\":%lu}",
+                      https_identity_covers_ip() ? "true" : "false", https_identity_fingerprint(),
                       (unsigned long)s_boot_id, (unsigned long)(esp_timer_get_time() / 1000000),
                       (unsigned long)esp_get_free_heap_size(),
                       (unsigned long)esp_get_minimum_free_heap_size(),
