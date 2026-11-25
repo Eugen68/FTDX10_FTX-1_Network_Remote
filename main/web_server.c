@@ -26,6 +26,7 @@
 #include "ota.h"
 #include "app_config.h"
 #include "tx.h"
+#include "tx_voice.h"
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
 #include <math.h>
@@ -762,6 +763,14 @@ static esp_err_t status_handler(httpd_req_t *req)
                       cat.usb_test.calls, cat.usb_test.timeouts, cat.usb_test.over_budget, cat.usb_test.max_us,
                       test.active ? "true" : "false", test.left_s, (unsigned long)test.rate, test.reason);
     }
+    if (n > 0 && (size_t)n < sizeof(json)) {
+        const tx_voice_stats_t voice = tx_voice_stats();
+        n--;
+        n += snprintf(json + n, sizeof(json) - n,
+                      ",\"tx_voice\":{\"level_ms\":%u,\"target_ms\":%u,\"underruns\":%u,"
+                      "\"dropped_frames\":%u,\"rate_ppm\":%d}}",
+                      voice.level_ms, voice.target_ms, voice.underruns, voice.dropped_frames, voice.rate_ppm);
+    }
     return send_json(req, json, n, sizeof(json));
 }
 
@@ -979,6 +988,8 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
                 msg->tone = TX_TONE_SINGLE;
             } else if (strcmp(tone, "dual") == 0) {
                 msg->tone = TX_TONE_DUAL;
+            } else if (strcmp(tone, "voice") == 0) {
+                msg->tone = TX_TONE_VOICE;
             } else if (strcmp(tone, "off") != 0) {
                 return false;
             }
@@ -1034,9 +1045,15 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     static uint32_t next_owner;
     tx_ws_session_t *session = req->free_ctx == free_tx_session ? req->sess_ctx : NULL;
     httpd_ws_frame_t frame = {0};
-    uint8_t input[192];
-    if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK ||
-        frame.type != HTTPD_WS_TYPE_TEXT || !frame.final || frame.len == 0 || frame.len >= sizeof(input)) {
+    uint8_t input[TX_VOICE_FRAME_BYTES];
+    if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK) return ESP_FAIL;
+    if (frame.type == HTTPD_WS_TYPE_BINARY) {
+        if (!session || !frame.final || frame.len != TX_VOICE_FRAME_BYTES) return ESP_FAIL;
+        frame.payload = input;
+        if (httpd_ws_recv_frame(req, &frame, frame.len) != ESP_OK) return ESP_FAIL;
+        return tx_submit_voice(session->owner, input, frame.len) ? ESP_OK : ESP_FAIL;
+    }
+    if (frame.type != HTTPD_WS_TYPE_TEXT || !frame.final || frame.len == 0 || frame.len >= 192) {
         ESP_LOGW(TAG, "TX WebSocket rejected: invalid control frame");
         return ESP_FAIL;
     }

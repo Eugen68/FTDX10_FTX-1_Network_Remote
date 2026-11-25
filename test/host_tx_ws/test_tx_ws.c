@@ -8,13 +8,14 @@
 #include "cat.h"
 #include "esp_log.h"
 #include "tx.h"
+#include "tx_voice.h"
 
 typedef struct {
     void *sess_ctx;
     void (*free_ctx)(void *);
 } httpd_req_t;
 
-enum { HTTPD_WS_TYPE_TEXT };
+enum { HTTPD_WS_TYPE_TEXT, HTTPD_WS_TYPE_BINARY };
 typedef struct {
     unsigned type;
     bool final;
@@ -23,6 +24,9 @@ typedef struct {
 } httpd_ws_frame_t;
 
 static const char *message;
+static uint8_t binary[TX_VOICE_FRAME_BYTES] = {3, 2};
+static bool sending_binary;
+static uint32_t voice_owner;
 static char reply[512];
 static unsigned auth_checks, key_requests;
 static uint32_t acquired_owner, released_owner;
@@ -32,9 +36,12 @@ static esp_err_t httpd_ws_recv_frame(httpd_req_t *req, httpd_ws_frame_t *frame, 
 {
     (void)req;
     if (!size) {
-        frame->type = HTTPD_WS_TYPE_TEXT;
-        frame->len = strlen(message);
+        frame->type = sending_binary ? HTTPD_WS_TYPE_BINARY : HTTPD_WS_TYPE_TEXT;
+        frame->len = sending_binary ? sizeof(binary) : strlen(message);
         frame->final = true;
+    } else if (sending_binary) {
+        assert(size == sizeof(binary));
+        memcpy(frame->payload, binary, size);
     } else {
         assert(size == strlen(message));
         memcpy(frame->payload, message, size);
@@ -76,6 +83,12 @@ void tx_release(uint32_t owner, const char *reason)
     assert(reason != NULL);
     released_owner = owner;
 }
+bool tx_submit_voice(uint32_t owner, const uint8_t *frame, size_t length)
+{
+    assert(length == TX_VOICE_FRAME_BYTES && frame[0] == 3 && frame[1] == 2);
+    voice_owner = owner;
+    return true;
+}
 void tx_heartbeat(uint32_t owner) { (void)owner; }
 tx_state_t tx_get_state(void)
 {
@@ -97,6 +110,9 @@ int main(void)
     assert(tx_ws_handler(&req) == ESP_FAIL);
     assert(key_requests == 0 && acquired_owner == 0 && auth_checks == 0);
     assert(req.sess_ctx == &http_marker && req.free_ctx == http_marker_closed);
+    sending_binary = true;
+    assert(tx_ws_handler(&req) == ESP_FAIL && voice_owner == 0);
+    sending_binary = false;
 
     message = "{\"t\":\"tx_auth\",\"pass\":\"wrong-password\"}";
     assert(tx_ws_handler(&req) == ESP_OK);
@@ -121,6 +137,9 @@ int main(void)
     assert(tx_ws_handler(&req) == ESP_FAIL && key_requests == 1);
     message = "{\"t\":\"ptt\",\"on\":false,\"tone\":\"dual\"}";
     assert(tx_ws_handler(&req) == ESP_FAIL && key_requests == 1);
+    sending_binary = true;
+    assert(tx_ws_handler(&req) == ESP_OK && voice_owner == acquired_owner && voice_owner != 0);
+    sending_binary = false;
     req.free_ctx(req.sess_ctx);
     assert(released_owner == acquired_owner);
     puts("WebSocket session and PTT refusal tests passed");
