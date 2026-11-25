@@ -3,7 +3,8 @@
 
 unsigned tx_swr_value(cat_rig_t rig, unsigned raw)
 {
-    // Provisional meter reference points. Confirm both scales on the bench.
+    // Tables follow each radio's SWR indicator scale (docs/tx-plan.md, requirement 1.10).
+    // The radio's Hi-SWR protection remains the first line of defense.
     static const unsigned ftx1[][2] = {{12,100}, {39,135}, {65,150}, {89,200}, {242,500}};
     static const unsigned ftdx10[][2] = {{0,100}, {26,120}, {52,150}, {89,200}, {126,300},
                                          {173,400}, {236,500}, {255,2500}};

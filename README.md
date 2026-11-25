@@ -213,8 +213,7 @@ idf.py build
 idf.py -p PORT flash monitor
 ```
 
-> **Note**: Running `idf.py set-target` or `idf.py fullclean` regenerates the TLS certificate (`build/certs/network_remote/`).
-> Accept the certificate in the browser again afterwards.
+> A clean build regenerates the embedded HTTPS fallback. The device certificate is kept in NVS.
 
 ## Changing the flash size
 
@@ -383,7 +382,7 @@ Enter Host name without ".local" [Current: trx-remote] (a-z, 0-9, '-'; DEFAULT t
 
 ### Notes
 
-- **Certificate name**: the certificate SAN (`trx-remote.local`, `trx-remote`, `ftx-1c.local`) is fixed at build time. With a different host name the browser shows a name-mismatch warning in addition to the self-signed one. You can still proceed after checking it; to avoid the warning, see "Using a certificate for another host name" under "Self-signed certificate".
+- **Certificate name**: the device certificate covers `trx-remote.local` and `trx-remote`. A custom host name can show a name-mismatch warning.
 - **Duplicate names**: if another device with the same name is on the LAN, mDNS may automatically rename this one, for example `trx-remote-2.local`. When you use several units, give each a different host name.
 - **Browser state**: a new host name is a different site for the browser, so you have to log in (Basic authentication) and accept the certificate again.
 - macOS, iOS, Windows 10 and later, and recent Linux (avahi) resolve `.local` out of the box.
@@ -556,22 +555,11 @@ The `X-Requested-With: ftx1` header is required as CSRF protection (without it t
 
 ## Self-signed certificate
 
-The self-signed certificate for HTTPS (EC P-256, valid for 2 years, SAN: `trx-remote.local`, `trx-remote`, `ftx-1c.local`) is
-generated automatically with `openssl` into `build/certs/network_remote/` at build time and embedded in the firmware.
+On the first successful Wi-Fi boot, the board creates an EC P-256 key and a self-signed certificate. It stores the pair in the `https_identity` NVS namespace and reuses it after power cycles and app-only updates. The certificate covers `trx-remote.local` and `trx-remote`. It is valid for ten years from the firmware build date in UTC so it can be issued offline. The serial log prints generation time and the active certificate’s SHA-256 fingerprint.
 
-- The private key and the certificate are in `build/certs/network_remote/`, which is in `.gitignore`, so they are not committed.
-- Running `idf.py fullclean` or `idf.py set-target` regenerates the certificate, and you must accept the browser warning again.
-- As long as you rebuild in the same build directory, the same certificate is used.
-- TLS 1.2 / 1.3 as provided by mbedTLS is negotiated.
-- Because it is self-signed, browsers show a warning. Trust it only when you are connecting to your own device on your own LAN.
+Accept or trust the certificate for your board on each browser or client. This trust can carry over to later firmware updates while the client uses the same address and the NVS identity is preserved. Access by IP can show a name-mismatch warning. The private key is stored in NVS and can be read by anyone with raw flash access unless flash/NVS encryption is enabled.
 
-### Using a certificate for another host name
-
-Changing the host name in the serial menu does not change the certificate SAN. To avoid the name-mismatch warning, regenerate the certificate too:
-
-1. In [`main/CMakeLists.txt`](main/CMakeLists.txt), change `CN=` in `-subj` and `-addext "subjectAltName=..."` to the new host name (for example `DNS:radio-shack.local,DNS:radio-shack`).
-2. Delete `build/certs/network_remote`, rebuild, and flash the firmware.
-3. Set the same host name with `h` in the serial menu, then save and restart.
+To replace the key and certificate, choose `c` (**Regenerate HTTPS certificate**) in the serial menu, confirm with `yes`, then choose `7` to continue boot. Confirm the new certificate after rotation. The built-in certificate is used only when the device cannot use or save its own identity.
 
 ## Security notes
 
@@ -698,7 +686,7 @@ Automatic USB recovery monitors the input stream. Discovery leaves the output st
 ### Remaining risks
 
 - Secure Boot, flash encryption, and NVS encryption are not supported. Someone who gets the device physically may be able to read the passwords in NVS.
-- The HTTPS private key is embedded in the firmware. Because the certificate is self-signed, the warning must be accepted the first time.
+- The board stores its private HTTPS key in NVS. The firmware embeds a fallback certificate and key for boot failures.
 - Consider replacing it with a certificate from a trusted CA before real use.
 - **Do not expose it to the Internet.** Do not make this device reachable from outside, for example by port forwarding on your router. The firmware takes a reasonable level of security into account, but it is not designed on the assumption that it faces the Internet. Use it only on a trusted LAN.
 - If you want to use it away from home, do not open a port; use a way into your LAN that is safe, such as a VPN.

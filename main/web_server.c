@@ -18,6 +18,7 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_https_server.h"
+#include "https_identity.h"
 #include "esp_system.h"
 #include "esp_random.h"
 #include "build_info.h"
@@ -1666,7 +1667,7 @@ esp_err_t web_server_start(void)
     config.httpd.max_uri_handlers = 16;
 
     httpd_handle_t server = NULL;
-    ESP_RETURN_ON_ERROR(httpd_ssl_start(&server, &config), TAG, "httpd_ssl_start");
+    ESP_RETURN_ON_ERROR(https_identity_start(&server, &config), TAG, "HTTPS server start");
 
     static const httpd_uri_t uris[] = {
         {.uri = "/",           .method = HTTP_GET,  .handler = index_handler},

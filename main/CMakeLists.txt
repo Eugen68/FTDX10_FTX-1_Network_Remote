@@ -27,7 +27,7 @@ if(NOT EXISTS "${CERT_FILE}" OR NOT EXISTS "${KEY_FILE}")
     file(CHMOD "${KEY_FILE}" PERMISSIONS OWNER_READ OWNER_WRITE)
 endif()
 
-idf_component_register(SRCS "web_auth.c" "console_menu.c" "app_config.c" "main.c" "usb_audio.c" "wifi_sta.c" "web_server.c" "ota.c" "cat.c" "tx.c" "tx_swr.c" "tx_tone.c" "tx_voice.c" "acc_scope.c" "acc_frame.c" "build_info.c"
+idf_component_register(SRCS "web_auth.c" "console_menu.c" "app_config.c" "main.c" "usb_audio.c" "wifi_sta.c" "web_server.c" "https_identity.c" "ota.c" "cat.c" "tx.c" "tx_swr.c" "tx_tone.c" "tx_voice.c" "acc_scope.c" "acc_frame.c" "build_info.c"
                     INCLUDE_DIRS "."
                     PRIV_REQUIRES esp-tls esp_wifi esp_netif esp_event nvs_flash esp_https_server espressif__mdns lwip
                                   app_update esp_app_format mbedtls esp_timer espressif__usb espressif__usb_host_cdc_acm
@@ -39,6 +39,18 @@ idf_component_register(SRCS "web_auth.c" "console_menu.c" "app_config.c" "main.c
 # or embedded page changes, so the build time shown in the GUI is always current.
 # (set_source_files_properties is not scriptable, so skip it during IDF's requirements scan.)
 if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    # Base the validity dates on UTC at configure time without requiring a device clock.
+    string(TIMESTAMP HTTPS_CERT_YEAR "%Y" UTC)
+    string(TIMESTAMP HTTPS_CERT_MONTH "%m" UTC)
+    string(TIMESTAMP HTTPS_CERT_DAY "%d" UTC)
+    math(EXPR HTTPS_CERT_EXPIRY_YEAR "${HTTPS_CERT_YEAR} + 10")
+    set(HTTPS_CERT_EXPIRY_DAY "${HTTPS_CERT_DAY}")
+    if(HTTPS_CERT_MONTH STREQUAL "02" AND HTTPS_CERT_DAY STREQUAL "29")
+        set(HTTPS_CERT_EXPIRY_DAY "28")
+    endif()
+    set_property(SOURCE https_identity.c APPEND PROPERTY COMPILE_DEFINITIONS
+        HTTPS_CERT_NOT_BEFORE="${HTTPS_CERT_YEAR}${HTTPS_CERT_MONTH}${HTTPS_CERT_DAY}000000"
+        HTTPS_CERT_NOT_AFTER="${HTTPS_CERT_EXPIRY_YEAR}${HTTPS_CERT_MONTH}${HTTPS_CERT_EXPIRY_DAY}000000")
     # Redirect the managed UAC component's ring calls only. The application
     # provides an explicit PSRAM backing store for the 16 KiB TX ring.
     idf_component_get_property(uac_target espressif__usb_host_uac COMPONENT_LIB)
