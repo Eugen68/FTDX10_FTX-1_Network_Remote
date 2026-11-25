@@ -321,7 +321,7 @@ int main(void) {
         poll_keyed((void *)1, s_rig, &poll);
         CHECK(strcmp(g_sent, i ? "TX;RI0;FT;MD0;" : "RI0;TX;FT;MD0;MD1;") == 0,
               "only TX status is outstanding on %s", s_rig->name);
-        CHECK(g_write_timeout_ms == 1200, "keyed poll uses the longer write budget");
+        CHECK(g_write_timeout_ms == (i ? 300 : 1200), "keyed poll uses the model-specific write budget");
         CHECK(cat_enqueue("FA;") == ESP_ERR_INVALID_STATE, "ordinary commands cannot queue during TX");
         CHECK(cat_tx((void *)1, "FA;") == ESP_ERR_INVALID_STATE, "ordinary writes cannot reach USB during TX");
         g_sent[0] = '\0';
@@ -490,6 +490,31 @@ int main(void) {
     cat_set_usb_test(true);
     CHECK(cat_get_write_stats().usb_test.calls == 0, "reset USB test counters on start");
     cat_set_usb_test(false);
+    use("0840");
+    handle_cat_packet("FT0;");
+    handle_cat_packet("MD02;");
+    handle_cat_packet("EX0101130;");
+    CHECK(cat_voice_mode_error(true) != NULL, "FTX-1 MIC source refuses browser voice");
+    handle_cat_packet("EX0101131;");
+    CHECK(cat_voice_mode_error(true) == NULL, "FTX-1 USB source permits browser voice");
+    handle_cat_packet("EX0101132;");
+    CHECK(cat_voice_mode_error(true) != NULL, "FTX-1 Bluetooth refuses browser voice");
+    handle_cat_packet("EX0101133;");
+    CHECK(cat_voice_mode_error(true) == NULL, "FTX-1 AUTO selects USB for CAT voice");
+    g_now_us += VOICE_MENU_MAX_AGE_US + 1;
+    CHECK(cat_voice_mode_error(true) != NULL, "stale FTX-1 AUTO cannot authorize voice");
+    CHECK(ok("EX010113;") && !ok("EX0101131;") && !ok("EX0101133;"), "FTX-1 SSB source is read only");
+    use("0761");
+    s_ssb_menu_us[0] = s_ssb_menu_us[1] = 0;
+    handle_cat_packet("EX0101131;");
+    CHECK(cat_voice_mode_error(true) != NULL, "FTDX10 rear select must be confirmed");
+    handle_cat_packet("EX0101140;");
+    CHECK(cat_voice_mode_error(true) != NULL, "FTDX10 REAR DATA source refuses browser voice");
+    handle_cat_packet("EX0101141;");
+    CHECK(cat_voice_mode_error(true) == NULL, "FTDX10 REAR USB permits browser voice");
+    CHECK(ok("EX010114;") && !ok("EX0101141;"), "FTDX10 REAR SELECT is read only");
+    handle_cat_packet("MD0C;");
+    CHECK(cat_voice_mode_error(false) != NULL, "voice stops if radio leaves SSB");
     printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     return fails != 0;
 }

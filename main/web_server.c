@@ -26,6 +26,7 @@
 #include "ota.h"
 #include "app_config.h"
 #include "tx.h"
+#include "tx_voice.h"
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
 #include <math.h>
@@ -60,6 +61,8 @@
 #define DECIM_MAX_CHANNELS   2
 #define WAV_HEADER_SIZE      44
 
+extern const char tx_mic_js_start[] asm("_binary_tx_mic_js_start");
+extern const char tx_mic_js_end[] asm("_binary_tx_mic_js_end");
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
 extern const char map_html_start[] asm("_binary_map_html_start");
@@ -576,6 +579,14 @@ static esp_err_t index_handler(httpd_req_t *req)
     return httpd_resp_send(req, index_html_start, index_html_end - index_html_start - 1);
 }
 
+static esp_err_t tx_mic_handler(httpd_req_t *req)
+{
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) return ESP_OK;
+    web_auth_set_common_headers(req);
+    httpd_resp_set_type(req, "text/javascript; charset=utf-8");
+    return httpd_resp_send(req, tx_mic_js_start, tx_mic_js_end - tx_mic_js_start - 1);
+}
+
 static esp_err_t map_handler(httpd_req_t *req)
 {
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
@@ -670,7 +681,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       "\"stream\":{\"active\":%s,\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
                       "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu,"
                       "\"usb_bus_resets\":%lu,\"rx_paused\":%s},"
-                      "\"acc\":{\"enabled\":%s,\"fps\":%lu,\"frames\":%lu,\"accepted\":%lu,\"rejected\":%lu,"
+                      "\"acc\":{\"enabled\":%s,\"fps\":%lu,\"frames\":%lu,\"accepted\":%lu,\"rejected\":%lu,\"vfo_range_tx\":%lu,"
                       "\"age_ms\":%ld,\"last_len\":%lu,\"last_reject\":\"%s\","
                       "\"rej\":{\"length\":%lu,\"not_ftdx10\":%lu,\"vfo_copies\":%lu,\"vfo_range\":%lu,"
                       "\"span\":%lu,\"cat\":%lu},\"clients\":%lu}",
@@ -691,7 +702,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)s_st_rate, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10),
                       (unsigned long)usb_audio_bus_resets(), usb_audio_rx_paused() ? "true" : "false",
                       acc.enabled ? "true" : "false", (unsigned long)acc.fps, (unsigned long)acc.frames,
-                      (unsigned long)acc.accepted, (unsigned long)acc.rejected,
+                      (unsigned long)acc.accepted, (unsigned long)acc.rejected, (unsigned long)acc.vfo_range_tx,
                       acc.age_ms == UINT32_MAX ? -1L : (long)acc.age_ms, (unsigned long)acc.last_len, acc_reason,
                       (unsigned long)acc.rej[1], (unsigned long)acc.rej[2], (unsigned long)acc.rej[3],
                       (unsigned long)acc.rej[4], (unsigned long)acc.rej[5], (unsigned long)acc.rej[6],
@@ -734,12 +745,12 @@ static esp_err_t status_handler(httpd_req_t *req)
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"tx\":{\"state\":\"%s\",\"owner\":%lu,\"left_s\":%u,\"reason\":\"%s\","
-                      "\"stopping\":%s,\"off_attempts\":%u,\"off_error\":%d,"
+                      "\"stopping\":%s,\"rx_confirmed\":%s,\"off_attempts\":%u,\"off_error\":%d,"
                       "\"audio_rate\":%u,\"underruns\":%u,\"written_bytes\":%u,"
                       "\"completed_bytes\":%u,\"completed_packets\":%u,\"failed_packets\":%u,\"pcm_peak\":%u,\"submit_error\":%d,"
                       "\"swr\":%s,\"swr_raw\":%u,\"po\":%s,\"po_raw\":%u}}",
                       phase, (unsigned long)tx.owner, tx.left_s, tx_reason(&tx, reason),
-                      tx.stopping ? "true" : "false", tx.off_attempts, tx.off_error,
+                      tx.stopping ? "true" : "false", tx.rx_confirmed ? "true" : "false", tx.off_attempts, tx.off_error,
                       audio.audio_rate, audio.underruns, audio.written_bytes,
                       transfers.completed_bytes, transfers.completed_packets, transfers.failed_packets,
                       transfers.pcm_peak, transfers.submit_error,
@@ -761,6 +772,14 @@ static esp_err_t status_handler(httpd_req_t *req)
                       cat.meters.calls, cat.meters.timeouts, cat.meters.over_budget, cat.meters.max_us,
                       cat.usb_test.calls, cat.usb_test.timeouts, cat.usb_test.over_budget, cat.usb_test.max_us,
                       test.active ? "true" : "false", test.left_s, (unsigned long)test.rate, test.reason);
+    }
+    if (n > 0 && (size_t)n < sizeof(json)) {
+        const tx_voice_stats_t voice = tx_voice_stats();
+        n--;
+        n += snprintf(json + n, sizeof(json) - n,
+                      ",\"tx_voice\":{\"level_ms\":%u,\"target_ms\":%u,\"underruns\":%u,"
+                      "\"dropped_frames\":%u,\"rate_ppm\":%d}}",
+                      voice.level_ms, voice.target_ms, voice.underruns, voice.dropped_frames, voice.rate_ppm);
     }
     return send_json(req, json, n, sizeof(json));
 }
@@ -809,8 +828,8 @@ static esp_err_t cat_handler(httpd_req_t *req)
     if (n > 0 && (size_t)n < sizeof(json)) {
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\"}",
-                      app_config_tx_enabled() ? "true" : "false",
+                      ",\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\"}",
+                      (unsigned)st.voice_source, app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
                       st.tx_radio_known ? "true" : "false", (unsigned long)st.write_error_seq, write_error);
     }
@@ -979,6 +998,8 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
                 msg->tone = TX_TONE_SINGLE;
             } else if (strcmp(tone, "dual") == 0) {
                 msg->tone = TX_TONE_DUAL;
+            } else if (strcmp(tone, "voice") == 0) {
+                msg->tone = TX_TONE_VOICE;
             } else if (strcmp(tone, "off") != 0) {
                 return false;
             }
@@ -1034,9 +1055,19 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     static uint32_t next_owner;
     tx_ws_session_t *session = req->free_ctx == free_tx_session ? req->sess_ctx : NULL;
     httpd_ws_frame_t frame = {0};
-    uint8_t input[192];
-    if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK ||
-        frame.type != HTTPD_WS_TYPE_TEXT || !frame.final || frame.len == 0 || frame.len >= sizeof(input)) {
+    uint8_t input[TX_VOICE_PACKET_BYTES];
+    if (httpd_ws_recv_frame(req, &frame, 0) != ESP_OK) return ESP_FAIL;
+    if (frame.type == HTTPD_WS_TYPE_BINARY) {
+        if (!session || !frame.final || !tx_voice_packet_size_valid(frame.len)) return ESP_FAIL;
+        frame.payload = input;
+        if (httpd_ws_recv_frame(req, &frame, frame.len) != ESP_OK) return ESP_FAIL;
+        if (!tx_submit_voice(session->owner, input, frame.len)) return ESP_FAIL;
+        // A burst of pending TLS records can keep httpd continuously runnable.
+        // Block for one tick so lower priority tasks, including IDLE0, can run.
+        vTaskDelay(1);
+        return ESP_OK;
+    }
+    if (frame.type != HTTPD_WS_TYPE_TEXT || !frame.final || frame.len == 0 || frame.len >= 192) {
         ESP_LOGW(TAG, "TX WebSocket rejected: invalid control frame");
         return ESP_FAIL;
     }
@@ -1095,10 +1126,11 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     char json[512], reason[32];
     const int n = snprintf(json, sizeof(json),
                            "{\"t\":\"tx\",\"state\":\"%s\",\"left_s\":%u,\"reason\":\"%s\","
-                           "\"on_air\":%s,\"stopping\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\","
+                           "\"on_air\":%s,\"stopping\":%s,\"rx_confirmed\":%s,\"rx_paused\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\","
                            "\"swr_x100\":%u,\"swr_raw\":%u,\"po_raw\":%u,\"po_valid\":%s}",
                            phase, state.left_s, tx_reason(&state, reason), state.on_air ? "true" : "false",
-                           state.stopping ? "true" : "false", tx_vfo,
+                           state.stopping ? "true" : "false", state.rx_confirmed ? "true" : "false",
+                           usb_audio_rx_paused() ? "true" : "false", tx_vfo,
                            session ? "true" : "false", session && state.owner == session->owner ? "true" : "false",
                            error, state.swr, state.swr_raw, state.po_raw, state.po_valid ? "true" : "false");
     if (n < 0 || (size_t)n >= sizeof(json)) {
@@ -1664,6 +1696,7 @@ esp_err_t web_server_start(void)
 
     static const httpd_uri_t uris[] = {
         {.uri = "/",           .method = HTTP_GET,  .handler = index_handler},
+        {.uri = "/tx_mic.js",  .method = HTTP_GET,  .handler = tx_mic_handler},
         {.uri = "/map",        .method = HTTP_GET,  .handler = map_handler},
         {.uri = "/status",     .method = HTTP_GET,  .handler = status_handler},
         {.uri = "/status",     .method = HTTP_POST, .handler = usb_test_handler},

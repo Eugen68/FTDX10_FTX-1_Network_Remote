@@ -537,6 +537,8 @@
   .scope-rec-btn { margin-right: .2rem; }
   .scope-rec-btn:hover { background: #7f1d1d; border-color: #ef4444; }
   .scope-rec-btn.flash { background: #dc2626; color: #fff; border-color: #fca5a5; }
+  #txPtt { touch-action: none; user-select: none; -webkit-touch-callout: none; }
+  #txMicLevel { width: 6rem; vertical-align: middle; }
   .scope-mute-btn { margin-right: .2rem; }
   .scope-vol { width: 56px; height: 10px; margin-right: .4rem; accent-color: #38bdf8; }
   .ft8-dtcorr { width: 3.6em; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .65rem; }
@@ -1546,11 +1548,21 @@
     <label>TX audio
       <select id="txTone">
         <option value="off">PTT only</option>
+        <option value="voice">Microphone</option>
         <option value="single">Test tone 1,000 Hz</option>
         <option value="dual">Two-tone 700 + 1,900 Hz</option>
       </select>
     </label>
-    <label>Level <input id="txLevel" type="number" value="-24" min="-60" max="-6" step="1"> dBFS</label>
+    <label id="txToneLevel">Level <input id="txLevel" type="number" value="-24" min="-60" max="-6" step="1"> dBFS</label>
+    <span id="txMicControls" hidden>
+      <button id="txMicToggle" type="button">Enable microphone</button>
+      <label>Mic gain <input id="txMicGain" type="range" min="-36" max="0" value="-12" step="1">
+        <output id="txMicGainValue">−12 dB</output>
+      </label>
+      <label>Mic level <meter id="txMicLevel" min="0" max="1" high="0.8" optimum="0.6" value="0"></meter></label>
+      <output id="txMicInfo" role="status"></output>
+      <output id="txMicSource" role="status"></output>
+    </span>
     <button id="txPtt" type="button" disabled aria-pressed="false">Hold to talk</button>
     <span id="txInfo" role="status"></span>
     <output id="txMeters"></output>
@@ -1575,9 +1587,11 @@
 <script>
 let rebooting = false;
 let devicePoll = Promise.resolve();
+let txNetworkQuiet = false;
 
 function pollDeviceJson(uri) {
   const request = devicePoll.then(async () => {
+    if (txNetworkQuiet) return null;
     const res = await fetch(uri, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
@@ -1624,11 +1638,12 @@ let ctx = null;
 let scopeAnalysers = [null, null]; // [MAIN(left), SUB(right)]
 let speakerGains = [null, null];   // per-channel speaker gain nodes (mute switches)
 const speakerMuted = [false, false];
+let remoteTxMuted = false;
 const speakerVolume = [1, 1];        // PC playback volume per channel, 0 - 4 (the sliders; a limiter stops clipping)
 const SPEAKER_VOL_KEYS = ['ftx1.volMain', 'ftx1.volSub'];
 
 function applySpeakerMute(i) {
-  if (speakerGains[i]) speakerGains[i].gain.value = speakerMuted[i] ? 0 : speakerVolume[i];
+  if (speakerGains[i]) speakerGains[i].gain.value = remoteTxMuted || speakerMuted[i] ? 0 : speakerVolume[i];
 }
 
 ['Main', 'Sub'].forEach((name, i) => {
@@ -1930,6 +1945,10 @@ function accOnRecord(dv, off, points) {
 async function accStreamLoop() {
   const ctrl = accState.ctrl;
   while (accState.ctrl === ctrl && !ctrl.signal.aborted) {
+    if (txNetworkQuiet) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      continue;
+    }
     try {
       const fps = BG_AUDIO ? 12 : 25;
       const res = await fetch('/scope.bin?fps=' + fps, { signal: ctrl.signal, cache: 'no-store' });
@@ -1963,7 +1982,7 @@ async function accStreamLoop() {
 }
 
 function accManage() {
-  if (accWanted() && !accState.ctrl) {
+  if (accWanted() && !accState.ctrl && !txNetworkQuiet) {
     accState.ctrl = new AbortController();
     accStreamLoop();
   } else if (!accWanted() && accState.ctrl) {
@@ -2496,6 +2515,10 @@ streamRateSel.addEventListener('change', () => {
 
 async function start() {
   isUserStopped = false;
+  if (txNetworkQuiet) {
+    scheduleReconnect();
+    return;
+  }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   const myAbort = abort = new AbortController();
   btnPlay.textContent = 'PWR OFF / STOP';
@@ -2674,6 +2697,10 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     if (!isUserStopped) {
+      if (txNetworkQuiet) {
+        scheduleReconnect();
+        return;
+      }
       console.log('Reconnecting audio stream...');
       start();
     }
@@ -3835,13 +3862,14 @@ freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
     list.appendChild(row);
   }
   async function poll() {
-    if (rebooting || busy || !section.open || pause.checked) return;
+    if (rebooting || txNetworkQuiet || busy || !section.open || pause.checked) return;
     busy = true;
     try {
       const nearBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 20;
       for (let i = 0; i < 4; i++) {   // catch up after a pause, 64 entries per answer
         if (rebooting) return;
         const d = await pollDeviceJson('/catlog?since=' + seq);
+        if (!d) break;
         if (d.seq < seq) { list.textContent = ''; }          // the device rebooted: start over
         d.e.forEach(add);
         seq = d.seq;
@@ -3879,10 +3907,153 @@ const txInfo = document.getElementById('txInfo');
 const txTone = document.getElementById('txTone');
 const txLevel = document.getElementById('txLevel');
 const txMeters = document.getElementById('txMeters');
+const micControls = document.getElementById('txMicControls');
+const micToggle = document.getElementById('txMicToggle');
+const micGain = document.getElementById('txMicGain');
+const micGainValue = document.getElementById('txMicGainValue');
+const micLevel = document.getElementById('txMicLevel');
+const micInfo = document.getElementById('txMicInfo');
+const micSource = document.getElementById('txMicSource');
 let txSocket = null;
 let txAuthenticated = false;
 let txHeld = false;
 let txHeartbeat = null;
+let txPress = 0;
+let txKeyRequested = false;
+
+let txKeyed = false;
+let txStopping = false;
+let txOwnsKey = false;
+let voiceSource = 0;
+let mic = null;
+let micOpening = false;
+let micGeneration = 0;
+let pendingMicFrame = null;
+
+function updateTxControls() {
+  const voice = txTone.value === 'voice';
+  micControls.hidden = !voice;
+  document.getElementById('txToneLevel').hidden = voice || txTone.value === 'off';
+  micToggle.disabled = !txAuthenticated || micOpening;
+  ptt.disabled = !txAuthenticated || txStopping ||
+    (voice && !txHeld && (!mic || voiceSource !== 2));
+}
+
+function stopMic() {
+  ++micGeneration;
+  pendingMicFrame = null;
+  if (mic) {
+    mic.node.port.onmessage = null;
+    mic.stream.getTracks().forEach(track => track.stop());
+    mic.ctx.close().catch(() => {});
+    mic = null;
+  }
+  micLevel.value = 0;
+  micToggle.textContent = 'Enable microphone';
+  updateTxControls();
+}
+
+function sendMicFrame(pcm, peak) {
+  micLevel.value = Math.min(1, peak);
+  if (!txHeld || !txOwnsKey || !txKeyed || txStopping || document.hidden || !document.hasFocus() ||
+      txTone.value !== 'voice' || txSocket?.readyState !== WebSocket.OPEN) return;
+  // Send two consecutive 20 ms captures in one TLS/WebSocket message.
+  // Keep at most one capture locally and discard a pair under backpressure.
+  if (!pendingMicFrame) {
+    pendingMicFrame = pcm;
+    return;
+  }
+  const first = pendingMicFrame;
+  pendingMicFrame = null;
+  const bytes = 2 + 2 * (first.length + pcm.length);
+  if (txSocket.bufferedAmount >= bytes) return;
+  const data = new ArrayBuffer(bytes);
+  const view = new DataView(data);
+  view.setUint8(0, 3);
+  view.setUint8(1, 2);
+  for (let i = 0; i < first.length; ++i) view.setInt16(2 + i * 2, first[i], true);
+  for (let i = 0; i < pcm.length; ++i) view.setInt16(2 + (first.length + i) * 2, pcm[i], true);
+  txSocket.send(data);
+}
+
+async function enableMic() {
+  if (!txAuthenticated || micOpening || mic) return;
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) {
+    micInfo.textContent = 'Microphone requires trusted HTTPS and AudioWorklet support';
+    return;
+  }
+  const generation = ++micGeneration;
+  micOpening = true;
+  updateTxControls();
+  let stream, captureContext;
+  try {
+    captureContext = new AudioContext();
+    // Mobile Chrome expects resume() to originate in the button gesture.
+    const ready = captureContext.resume();
+    ready.catch(() => {});
+    stream = await navigator.mediaDevices.getUserMedia({audio: {
+      channelCount: 1, echoCancellation: true, noiseSuppression: false, autoGainControl: false,
+    }});
+    await ready;
+    await captureContext.audioWorklet.addModule('/tx_mic.js');
+    if (generation !== micGeneration || !txAuthenticated || txTone.value !== 'voice' || document.hidden) return;
+    const node = new AudioWorkletNode(captureContext, 'tx-microphone', {
+      channelCount: 1, channelCountMode: 'explicit', outputChannelCount: [1],
+    });
+    const source = captureContext.createMediaStreamSource(stream);
+    node.port.onmessage = ({data}) => {
+      if (generation === micGeneration) sendMicFrame(data.pcm, data.peak);
+    };
+    // Keep the capture graph rendering. The worklet writes silence to its output.
+    source.connect(node).connect(captureContext.destination);
+    mic = {ctx: captureContext, stream, node};
+    stream.getAudioTracks().forEach(track => track.addEventListener('ended', () => {
+      releasePtt();
+      stopMic();
+      micInfo.textContent = 'Microphone disconnected';
+    }, {once: true}));
+    micGain.dispatchEvent(new Event('input'));
+    micInfo.textContent = 'Microphone ready';
+    micToggle.textContent = 'Disable microphone';
+  } catch (error) {
+    if (generation === micGeneration) {
+      micInfo.textContent = error.name === 'NotAllowedError' ? 'Microphone permission denied'
+        : 'Microphone unavailable: ' + error.name;
+    }
+  } finally {
+    if (mic?.ctx !== captureContext) {
+      stream?.getTracks().forEach(track => track.stop());
+      captureContext?.close().catch(() => {});
+    }
+    micOpening = false;
+    updateTxControls();
+  }
+}
+
+micToggle.addEventListener('click', () => {
+  if (mic) {
+    releasePtt();
+    stopMic();
+    micInfo.textContent = '';
+  } else {
+    enableMic();
+  }
+});
+micGain.addEventListener('input', () => {
+  micGainValue.value = micGain.value + ' dB';
+  mic?.node.port.postMessage({gain: 10 ** (micGain.valueAsNumber / 20)});
+});
+txTone.addEventListener('change', () => {
+  if (txTone.value !== 'voice') stopMic();
+  updateTxControls();
+});
+
+function muteReceptionForTx(muted) {
+  if (remoteTxMuted === muted) return;
+  remoteTxMuted = muted;
+  speakerGains.forEach((_, i) => applySpeakerMute(i));
+  bgAudio.muted = muted;
+}
 
 function showTransmitState(onAir, txVfo) {
   ptt.classList.toggle('is-transmitting', onAir);
@@ -3897,19 +4068,43 @@ function sendTx(message) {
 function releasePtt() {
   if (!txHeld) return;
   txHeld = false;
+  pendingMicFrame = null;
+  ++txPress;
   ptt.setAttribute('aria-pressed', 'false');
-  sendTx({t: 'ptt', on: false});
+  if (txKeyRequested) {
+    sendTx({t: 'ptt', on: false});
+  } else {
+    txNetworkQuiet = txKeyed || txStopping;
+  }
 }
 
-function pressPtt() {
+async function pressPtt() {
   if (!txAuthenticated || ptt.disabled || txHeld || !document.hasFocus() || document.hidden) return;
-  if (txTone.value !== 'off' && (!txLevel.value || !txLevel.validity.valid)) {
+  const tone = txTone.value;
+  const isTestTone = tone === 'single' || tone === 'dual';
+  if (isTestTone && (!txLevel.value || !txLevel.validity.valid)) {
     txInfo.textContent = 'Enter a level from −60 to −6 dBFS';
     return;
   }
+  const dbfs = isTestTone ? txLevel.valueAsNumber : -24;
+  const press = ++txPress;
+  const socket = txSocket;
   txHeld = true;
+  txNetworkQuiet = true;
   ptt.setAttribute('aria-pressed', 'true');
-  sendTx({t: 'ptt', on: true, tone: txTone.value, dbfs: txTone.value === 'off' ? -24 : txLevel.valueAsNumber});
+
+  // New HTTPS sessions can block the ESP32's WebSocket handler during TLS handshake.
+  // Let the current poll finish, then keep PTT and status on the open WebSocket.
+  await devicePoll;
+  if (press !== txPress) return;
+  if (socket !== txSocket || socket?.readyState !== WebSocket.OPEN || ptt.disabled ||
+      tone !== txTone.value || !document.hasFocus() || document.hidden) {
+    releasePtt();
+    return;
+  }
+  txKeyRequested = true;
+  muteReceptionForTx(true);
+  sendTx({t: 'ptt', on: true, tone, dbfs});
 }
 
 txConnect.addEventListener('click', () => {
@@ -3931,7 +4126,14 @@ txConnect.addEventListener('click', () => {
     const state = JSON.parse(event.data);
     if (state.t !== 'tx') return;
     txAuthenticated = state.auth;
-    ptt.disabled = !state.auth || state.stopping === true;
+    const wasKeyedByUs = txKeyed && txOwnsKey;
+    txKeyed = state.state === 'KEYED';
+    txStopping = state.stopping === true;
+    txOwnsKey = state.owner === true;
+    if (!txKeyed || !txOwnsKey || txStopping) pendingMicFrame = null;
+    const receptionReady = state.rx_confirmed === true && state.rx_paused === false;
+    muteReceptionForTx(state.on_air === true || (!receptionReady && (txKeyed || txStopping)));
+    updateTxControls();
     showTransmitState(state.on_air === true, state.tx_vfo);
     txTone.disabled = txLevel.disabled = state.state === 'KEYED';
     txMeters.textContent = state.state === 'KEYED' || state.po_raw || state.swr_raw
@@ -3942,17 +4144,22 @@ txConnect.addEventListener('click', () => {
     if (!state.auth) {
       socket.close();
     } else if (!txHeartbeat) {
-      txHeartbeat = setInterval(() => sendTx({t: txHeld && !document.hidden && document.hasFocus() ? 'hb' : 'status'}), 250);
+      txHeartbeat = setInterval(() => sendTx({t: txHeld && txKeyRequested && !document.hidden && document.hasFocus() ? 'hb' : 'status'}), 250);
     }
-    if (state.error || state.stopping) releasePtt();
+    if (state.error || txStopping || (wasKeyedByUs && !txKeyed)) releasePtt();
+    if (!txHeld && !txKeyed && !txStopping) txKeyRequested = false;
+    txNetworkQuiet = txHeld || txKeyRequested || txKeyed || txStopping;
   });
   socket.addEventListener('close', () => {
     clearInterval(txHeartbeat);
     txHeartbeat = null;
     txSocket = null;
     pass = '';
-    txAuthenticated = false;
+    txAuthenticated = txKeyed = txStopping = txOwnsKey = false;
     releasePtt();
+    txKeyRequested = txNetworkQuiet = false;
+    stopMic();
+    muteReceptionForTx(false);
     showTransmitState(false);
     txTone.disabled = txLevel.disabled = false;
     txMeters.textContent = '';
@@ -3967,10 +4174,15 @@ txConnect.addEventListener('click', () => {
 ptt.addEventListener('pointerdown', e => {
   if (e.button === 0) {
     e.preventDefault();
+    if (e.pointerType === 'touch' || e.pointerType === 'pen') ptt.setPointerCapture(e.pointerId);
     pressPtt();
   }
 });
-ptt.addEventListener('pointerleave', releasePtt);
+ptt.addEventListener('pointerleave', e => {
+  if (!ptt.hasPointerCapture(e.pointerId)) releasePtt();
+});
+ptt.addEventListener('lostpointercapture', releasePtt);
+ptt.addEventListener('contextmenu', e => e.preventDefault());
 window.addEventListener('pointerup', releasePtt);
 window.addEventListener('pointercancel', releasePtt);
 window.addEventListener('blur', releasePtt);
@@ -3979,7 +4191,11 @@ window.addEventListener('pagehide', () => {
   txSocket?.close();
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) releasePtt();
+  if (document.hidden) {
+    releasePtt();
+    stopMic();
+    micInfo.textContent = '';
+  }
 });
 window.addEventListener('keydown', e => {
   if (e.code !== 'Space' || e.repeat || !txAuthenticated ||
@@ -3995,6 +4211,11 @@ window.addEventListener('keyup', e => {
 });
 
 function applyRigProfile(d) {
+  voiceSource = d.connected ? d.tx_voice_source : 0;
+  micSource.textContent = voiceSource === 2 ? '' : voiceSource !== 1 ? 'Waiting for SSB modulation source'
+    : d.rig === 'FTDX10' ? 'Set SSB MOD SOURCE to REAR and REAR SELECT to USB'
+    : 'Set SSB MOD SOURCE to USB or AUTO';
+  updateTxControls();
   txPanel.hidden = !d.tx_enabled;
   if (txPanel.hidden && txSocket) {
     releasePtt();
@@ -4042,12 +4263,16 @@ const SM_POLL_MS = 400;
 let lastCatWriteError = 0;
 
 async function smPoll() {
-  if (rebooting) {
+  if (rebooting || txNetworkQuiet) {
     setTimeout(smPoll, SM_POLL_MS);
     return;
   }
   try {
     const d = await pollDeviceJson('/cat');
+    if (!d) {
+      setTimeout(smPoll, SM_POLL_MS);
+      return;
+    }
     const now = Date.now();
     applyRigProfile(d);
     if (Number.isInteger(d.write_error_seq) && d.write_error_seq !== lastCatWriteError) {
@@ -4338,7 +4563,7 @@ function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
 // ---- Firmware build time (shown in the rig header) ----
 pollDeviceJson('/status')
   .then((s) => {
-    if (typeof s.build === 'string' && /^[A-Za-z0-9 :]{1,32}$/.test(s.build)) {
+    if (typeof s?.build === 'string' && /^[A-Za-z0-9 :]{1,32}$/.test(s.build)) {
       const ver = typeof s.version === 'string' && /^[0-9.]{1,12}$/.test(s.version) ? 'V' + s.version + '  ' : '';
       document.getElementById('buildInfo').textContent = ver + 'BUILD ' + s.build;
     }

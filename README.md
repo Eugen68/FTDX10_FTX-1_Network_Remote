@@ -619,6 +619,23 @@ without CAT, but defers if a recent CAT report shows a transmission. If CAT is p
 while keyed, the firmware retries TX off when the link returns and blocks further PTT and power-cycles in
 the meantime. Use the radio's local controls to stop transmission if the CAT connection stays down.
 
+### Browser microphone
+
+Authorize TX, select Microphone, and choose Enable microphone. The browser asks for permission on
+that button. The level meter and gain control work in receive, without sending audio to the radio.
+Use USB or LSB. Set SSB MOD SOURCE to USB or AUTO on the FTX-1. AUTO selects USB for CAT PTT.
+On the FTDX10 use SSB MOD SOURCE REAR and REAR SELECT USB. The companion reads these menus and refuses microphone TX until they are
+confirmed. Set the radio's modulation gain locally and use the microphone slider while watching ALC.
+
+Hold PTT or Space on the focused page. Touch-and-hold PTT is supported on mobile. The browser sends
+microphone audio only while it holds PTT and the firmware confirms it is the keyed owner. RX playback
+is muted during remote TX and resumes after confirmed RX or after USB input restarts if it was paused. A release, focus loss, or ended microphone track releases PTT. Audio
+packets never refresh the control heartbeat. The other automatic stops described above apply to voice.
+
+`/status.tx_voice` reports the buffered milliseconds, the adaptive prefill target, underruns, discarded
+frames and clock adjustment in parts per million. Empty playback produces silence. Enable microphone
+only on the trusted HTTPS page. Stop the microphone with Disable microphone or by leaving the tab.
+
 ### USB test tone and SWR protection
 
 The test tone defaults to −24 dBFS, with an adjustable range of −60 to −6 dBFS. The level of the two-tone
@@ -642,7 +659,10 @@ The panel and `/status` show both raw meters. SWR conversions use provisional, m
 and [FTDX10](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftdx10.h) Hamlib reference points.
 Check these against the radio and known loads on the bench before relying on the numeric ratio.
 In `/status`, the TX audio counters show the output sample rate, missed audio task deadlines and
-bytes accepted by the USB driver. The 16 KiB TX staging ring uses PSRAM, with its control block in internal RAM.
+bytes accepted by the USB driver. The `pcm_peak` value is the maximum absolute sample in
+successfully completed USB packets since the audio output started. FTDX10 scope frames with an
+out-of-range VFO during CAT TX are discarded and counted in `acc.vfo_range_tx`. In receive, the
+same validation error is counted in `acc.rej.vfo_range`. The 16 KiB TX staging ring uses PSRAM, with its control block in internal RAM.
 The UAC driver allocates USB transfer buffers when the output stream starts.
 
 `/status.cat_write` reports write counts, timeouts, maximum elapsed microseconds and calls exceeding the

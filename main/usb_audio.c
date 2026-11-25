@@ -31,6 +31,7 @@
 #include "usb/uac_host.h"
 #include "esp_timer.h"
 #include "tx.h"
+#include "tx_voice.h"
 #include "usb_audio.h"
 
 // Above the stream's USB reader (6), the web server and LwIP (18), below the Wi-Fi driver (23): the
@@ -558,18 +559,22 @@ bool usb_audio_tx_idle(void)
 
 static void restore_rx(bool channel_available)
 {
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    if (s_rx_paused) {
-        const esp_err_t err = !channel_available || !s_mic_handle
-                              ? ESP_ERR_INVALID_STATE : uac_host_device_start(s_mic_handle, &s_rx_format);
-        if (err != ESP_OK) {
-            s_streaming = false;
-            ESP_LOGW(TAG, "USB audio RX restore failed: %s", esp_err_to_name(err));
-        } else {
-            ESP_LOGI(TAG, "USB audio RX restored after TX");
-        }
-        s_rx_paused = false;
+    // Called under s_output_lock. With independent RX there is nothing to
+    // restore, so do not contend with the continuous RX reader for s_lock.
+    if (!atomic_load(&s_rx_paused)) {
+        return;
     }
+
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const esp_err_t err = !channel_available || !s_mic_handle
+                          ? ESP_ERR_INVALID_STATE : uac_host_device_start(s_mic_handle, &s_rx_format);
+    if (err != ESP_OK) {
+        s_streaming = false;
+        ESP_LOGW(TAG, "USB audio RX restore failed: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "USB audio RX restored after TX");
+    }
+    atomic_store(&s_rx_paused, false);
     xSemaphoreGive(s_lock);
 }
 
@@ -714,12 +719,15 @@ static void tx_audio_task(void *arg)
             atomic_store(&s_tx_rate, 0);
         }
 
+        const bool voice = (request & 3) == TX_TONE_VOICE;
         unsigned blocks = 1;
         if (request && !active && s_output_prepared && s_output_handle &&
             request == atomic_load(&s_tx_request)) {
             active = request;
-            tx_tone_fill(pcm, s_tx_play_rate, s_tx_format.channels,
-                         (tx_tone_t)(request & 3), -(int)((request >> 2) & 63));
+            if (!voice) {
+                tx_tone_fill(pcm, s_tx_play_rate, s_tx_format.channels,
+                             (tx_tone_t)(request & 3), -(int)((request >> 2) & 63));
+            }
             bytes = (s_tx_play_rate / 100) * s_tx_format.channels * sizeof(pcm[0]);
             atomic_store(&s_tx_rate, s_tx_play_rate);
             tick = xTaskGetTickCount();
@@ -743,6 +751,10 @@ static void tx_audio_task(void *arg)
             }
             last_write_us = now;
             for (unsigned i = 0; i < blocks && active == atomic_load(&s_tx_request); ++i) {
+                if (voice) {
+                    tx_voice_render(pcm, s_tx_play_rate, s_tx_format.channels);
+                    if (active != atomic_load(&s_tx_request)) break;
+                }
                 const esp_err_t err = uac_host_device_write(s_output_handle, (uint8_t *)pcm, bytes, 0);
                 if (err != ESP_OK) {
                     if (err != ESP_ERR_TIMEOUT) {

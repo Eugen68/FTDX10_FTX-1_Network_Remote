@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "usb_audio.h"
 #include "tx_swr.h"
+#include "tx_voice.h"
 
 #define HEARTBEAT_US 1500000LL
 #define CONFIRM_US 1500000LL
@@ -63,7 +64,9 @@ static void stop_locked(const char *reason)
     }
 
     usb_audio_tx_request(TX_TONE_OFF, 0);
+    if (s_tone == TX_TONE_VOICE) tx_voice_stop();
     if (s_off_sent && cat_radio_rx_after(s_off_sent)) {
+        s_state.rx_confirmed = true;
         ESP_LOGI("tx", "RX confirmed after %u TX0 attempt(s)", s_state.off_attempts);
         if (s_tone != TX_TONE_OFF) {
             usb_audio_tx_finished();
@@ -104,7 +107,7 @@ bool tx_key(uint32_t owner)
 
 bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
 {
-    if (tone < TX_TONE_OFF || tone > TX_TONE_DUAL || dbfs < TX_TONE_MIN_DBFS || dbfs > TX_TONE_MAX_DBFS) {
+    if (tone < TX_TONE_OFF || tone > TX_TONE_VOICE || dbfs < TX_TONE_MIN_DBFS || dbfs > TX_TONE_MAX_DBFS) {
         tx_release(owner, "Invalid TX audio settings");
         return false;
     }
@@ -118,6 +121,7 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
         cat_state_t radio;
         cat_get_state(&radio);
         const char *mode_error = cat_ptt_mode_error(0);
+        if (!mode_error && tone == TX_TONE_VOICE) mode_error = cat_voice_mode_error(true);
         if (tone != TX_TONE_OFF && !usb_audio_tx_available()) {
             refusal = "USB TX audio unavailable";
         } else if (!usb_audio_tx_idle()) {
@@ -125,12 +129,15 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
                                                       : "USB TX audio not ready";
         } else if (mode_error) {
             refusal = mode_error;
+        } else if (tone == TX_TONE_VOICE && !tx_voice_start()) {
+            refusal = "USB voice buffer unavailable";
         } else if (tone != TX_TONE_OFF && usb_audio_tx_prepare(radio.rig == CAT_RIG_FTX1, 0) != ESP_OK) {
             refusal = "USB TX audio start failed";
         } else if (tone != TX_TONE_OFF &&
                    (esp_timer_get_time() - s_heartbeat >= HEARTBEAT_US ||
                     !usb_audio_tx_available() || !usb_audio_get_format(NULL) ||
-                    !cat_radio_rx_after(0) || cat_ptt_mode_error(0))) {
+                    !cat_radio_rx_after(0) || cat_ptt_mode_error(0) ||
+                    (tone == TX_TONE_VOICE && cat_voice_mode_error(true)))) {
             usb_audio_tx_finished();
             refusal = "PTT conditions changed during USB audio setup";
         } else {
@@ -151,6 +158,22 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
     }
     xSemaphoreGive(s_lock);
     return keyed;
+}
+
+bool tx_submit_voice(uint32_t owner, const uint8_t *frame, size_t length)
+{
+    if (!tx_voice_packet_size_valid(length) || frame[0] != 3 || frame[1] != TX_VOICE_RATE / 8000) {
+        return false;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (owner && owner == s_state.owner && s_state.phase == TX_KEYED && !s_stopping &&
+        s_tone == TX_TONE_VOICE && esp_timer_get_time() - s_heartbeat < HEARTBEAT_US) {
+        for (size_t offset = 2; offset < length; offset += 2 * TX_VOICE_SAMPLES) {
+            tx_voice_push(frame + offset);
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return true;
 }
 
 void tx_heartbeat(uint32_t owner)
@@ -309,6 +332,7 @@ static void watchdog_tick(void)
                 if (!reason) {
                     reason = cat_ptt_mode_error(s_keyed_at);
                 }
+                if (!reason && s_tone == TX_TONE_VOICE) reason = cat_voice_mode_error(false);
                 if (!reason) {
                     const cat_tx_meters_t meters = cat_get_tx_meters();
                     const int64_t meter_now = esp_timer_get_time();

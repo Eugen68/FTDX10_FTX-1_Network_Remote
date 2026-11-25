@@ -41,10 +41,15 @@ static unsigned po_raw, swr_raw;
 static bool meters_missing;
 static unsigned stale_diagnostics_reads;
 static unsigned on_writes, off_writes;
+static unsigned voice_frames;
+bool tx_voice_start(void) { return true; }
+void tx_voice_stop(void) {}
+void tx_voice_push(const uint8_t pcm[2 * TX_VOICE_SAMPLES]) { (void)pcm; ++voice_frames; }
 static const char *fault;
 static const char *mode_error;
 
 const char *cat_ptt_mode_error(int64_t keyed_at) { return mode_error; }
+const char *cat_voice_mode_error(bool starting) { return NULL; }
 
 bool app_config_tx_enabled(void) { return enabled; }
 void app_config_get(app_config_t *cfg) { *cfg = (app_config_t){.tx_max_seconds = 10, .swr_max = 30}; }
@@ -321,7 +326,7 @@ int main(void)
     radio_on = false;
     rx_us = ++g_now_us;
     watchdog_tick();
-    assert(cleanup_pending && tx_get_state().stopping && !tx_get_state().on_air);
+    assert(cleanup_pending && tx_get_state().stopping && !tx_get_state().on_air && tx_get_state().rx_confirmed);
     assert(!tx_acquire(1) && !tx_acquire(2));
     assert(strcmp(tx_get_state().reason, "High SWR") == 0);
     g_now_us += CONFIRM_US + 1;
@@ -335,6 +340,20 @@ int main(void)
     assert(tx_acquire(1) && tx_key_tone(1, TX_TONE_SINGLE, -24));
     defer_audio_cleanup = false;
     tx_release(1, "Released");
+    confirm_rx();
+    assert(tx_acquire(1) && tx_key_tone(1, TX_TONE_VOICE, -24));
+    uint8_t frame[TX_VOICE_FRAME_BYTES] = {3, 2};
+    assert(tx_submit_voice(2, frame, sizeof(frame)) && voice_frames == 0);
+    assert(!tx_submit_voice(1, frame, sizeof(frame) - 1) && voice_frames == 0);
+    uint8_t packet[TX_VOICE_PACKET_BYTES] = {3, 2};
+    assert(!tx_submit_voice(1, packet, sizeof(packet) - 1));
+    assert(tx_submit_voice(1, packet, sizeof(packet)) && voice_frames == 2);
+    g_now_us += HEARTBEAT_US - 1;
+    assert(tx_submit_voice(1, frame, sizeof(frame)) && voice_frames == 3);
+    ++g_now_us;
+    assert(tx_submit_voice(1, frame, sizeof(frame)) && voice_frames == 3);
+    watchdog_tick();
+    assert(tx_get_state().stopping && strcmp(tx_get_state().reason, "Heartbeat lost") == 0);
     confirm_rx();
     puts("all TX state tests passed");
 }

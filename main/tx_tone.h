@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef enum { TX_TONE_OFF, TX_TONE_SINGLE, TX_TONE_DUAL } tx_tone_t;
+typedef enum { TX_TONE_OFF, TX_TONE_SINGLE, TX_TONE_DUAL, TX_TONE_VOICE } tx_tone_t;
 #define TX_TONE_DEFAULT_DBFS (-24)
 #define TX_TONE_MIN_DBFS (-60)
 #define TX_TONE_MAX_DBFS (-6)

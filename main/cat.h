@@ -39,7 +39,10 @@ typedef enum {
     CAT_TX_VFO_SUB,
 } cat_tx_vfo_t;
 
+typedef enum { CAT_VOICE_SOURCE_UNKNOWN, CAT_VOICE_SOURCE_OTHER, CAT_VOICE_SOURCE_USB } cat_voice_source_t;
+
 typedef struct {
+    cat_voice_source_t voice_source;
     bool connected;         /*!< A CAT port is open and answering */
     cat_rig_t rig;          /*!< Detected radio model */
     char rig_name[12];      /*!< "FTX-1", "FTDX10", "UNKNOWN" or "" */
@@ -149,6 +152,7 @@ bool cat_radio_tx(void);
 esp_err_t cat_ptt(bool on);
 const char *cat_ptt_fault(int64_t started, int64_t grace_us);
 const char *cat_ptt_mode_error(int64_t keyed_at);
+const char *cat_voice_mode_error(bool starting);
 
 /*
  * There is deliberately no function that sends a free-form CAT string. Every command is built here from

@@ -133,7 +133,8 @@ Owner's hardware test rule for every TX phase: **dummy load, minimum power, the 
 
 Rules for the menu items: **do not write them automatically in this plan.** The owner sets MOD SOURCE and
 the gain on the radio. The page may read them (`EXnnnnnn;` read form, add to the allow-list as read-only,
-per profile) and warn when MOD SOURCE is not USB in the current mode.
+per profile) and warn when the current mode has no USB modulation. On FTX-1 in SSB, AUTO selects USB
+when CAT keys the transmitter.
 
 ---
 
@@ -202,7 +203,8 @@ Goal: know whether the radio exposes a UAC **output** (speaker) interface and it
 ### Phase 3: voice from the browser microphone
 
 - Page: port `MicCapture` from ftx1-pult `web/worklets.js` (AudioWorklet, 16 kHz, 20 ms frames, Float32 →
-  int16). Send binary frames over `/ws` only while KEYED and owner: `[0x03][rate/8000][int16 LE …]`,
+  int16). Group two captures in one binary message over `/ws` only while KEYED and owner:
+  `[0x03][rate/8000][int16 LE …]`,
   respecting `bufferedAmount`. Microphone permission is asked only when the TX panel is first used.
   `getUserMedia` constraints: echoCancellation true, noiseSuppression false, autoGainControl false.
 - Mute the RX playback in the page while KEYED (feedback), restore after.
