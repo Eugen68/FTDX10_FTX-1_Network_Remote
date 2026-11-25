@@ -619,6 +619,23 @@ without CAT, but defers if a recent CAT report shows a transmission. If CAT is p
 while keyed, the firmware retries TX off when the link returns and blocks further PTT and power-cycles in
 the meantime. Use the radio's local controls to stop transmission if the CAT connection stays down.
 
+### Browser microphone
+
+Authorize TX, select Microphone, and choose Enable microphone. The browser asks for permission on
+that button. The level meter and gain control work in receive, without sending audio to the radio.
+Use USB or LSB. Set SSB MOD SOURCE to USB on the FTX-1. On the FTDX10 use SSB MOD SOURCE REAR and
+REAR SELECT USB. The companion reads these menus and refuses microphone TX until they are
+confirmed. Set the radio's modulation gain locally and use the microphone slider while watching ALC.
+
+Hold PTT or Space on the focused page. Touch-and-hold PTT is supported on mobile. The browser sends
+microphone audio only while it holds PTT and the firmware confirms it is the keyed owner. RX playback
+is muted during remote TX. A release, focus loss, or ended microphone track releases PTT. Audio
+packets never refresh the control heartbeat. The other automatic stops described above apply to voice.
+
+`/status.tx_voice` reports the buffered milliseconds, the adaptive prefill target, underruns, discarded
+frames and clock adjustment in parts per million. Empty playback produces silence. Enable microphone
+only on the trusted HTTPS page. Stop the microphone with Disable microphone or by leaving the tab.
+
 ### USB test tone and SWR protection
 
 The test tone defaults to −24 dBFS, with an adjustable range of −60 to −6 dBFS. The level of the two-tone

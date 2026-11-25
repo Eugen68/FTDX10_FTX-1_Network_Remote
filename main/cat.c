@@ -81,6 +81,7 @@
 #define CAT_TASK_PRIORITY   4
 #define POLL_PERIOD_MS      100
 #define RADIO_STATUS_MAX_AGE_US 1500000LL  // BUSY/TX is polled every five iterations
+#define VOICE_MENU_MAX_AGE_US 15000000LL
 #define ANSWER_TIMEOUT_MS   300
 #define TX_TIMEOUT_MS       200
 #define KEYED_WRITE_TIMEOUT_MS 1200
@@ -120,6 +121,8 @@ static unsigned s_usb_test_generation;
 static bool s_usb_test_active;
 static int64_t s_tx_vfo_status_us;
 static int64_t s_mode_status_us[2];
+static int64_t s_ssb_menu_us[2];
+static char s_ssb_menu[2];
 static char s_reported_mode[2];
 static int64_t s_last_ptt_status_us;
 static char s_ptt_mode;
@@ -700,6 +703,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_tx_meters = (cat_tx_meters_t){0};
         s_tx_vfo_status_us = 0;
         memset(s_mode_status_us, 0, sizeof(s_mode_status_us));
+        memset(s_ssb_menu_us, 0, sizeof(s_ssb_menu_us));
         s_state.tx_vfo = CAT_TX_VFO_UNKNOWN;
         s_last_ptt_status_us = 0;
         s_ptt_mode = 0;
@@ -903,6 +907,22 @@ static void handle_cat_packet(const char *pkt)
 
     int gain_val = 0;
     int64_t now_pkt_us = esp_timer_get_time();
+
+    // Both radios use one digit for SSB MOD SOURCE; only the FTDX10
+    // uses the second item for REAR SELECT (the FTX-1 uses it for gain).
+    if (strlen(pkt) == 10 && strncmp(pkt, "EX01011", 7) == 0 && pkt[9] == ';') {
+        const bool ftdx10 = s_rig->rig == CAT_RIG_FTDX10;
+        const int item = pkt[7] == '3' && (ftdx10 || s_rig->rig == CAT_RIG_FTX1) ? 0
+                         : pkt[7] == '4' && ftdx10 ? 1 : -1;
+        if (item >= 0 && pkt[8] >= '0' && pkt[8] <= (ftdx10 ? '1' : '3') &&
+            xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+            s_ssb_menu[item] = pkt[8];
+            s_ssb_menu_us[item] = now_pkt_us;
+            s_last_answer_us = now_pkt_us;
+            xSemaphoreGive(s_lock);
+        }
+        return;
+    }
 
     if (parse_gain(pkt, "AG0", &gain_val)) {
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -1280,6 +1300,9 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
         // 4. Periodic slow refresh / sync every 5 seconds (50 iterations)
         if ((poll_count % 50) == 0) {
             send_poll(dev, rig->sync_all);
+            if (rig->can_tx && app_config_tx_enabled()) {
+                send_poll(dev, rig->rig == CAT_RIG_FTDX10 ? "EX010113;EX010114;" : "EX010113;");
+            }
         }
         poll_count++;
 
@@ -1443,10 +1466,36 @@ esp_err_t cat_init(void)
     return ESP_OK;
 }
 
+// Called with s_lock. A stale or missing readback cannot authorize voice.
+static cat_voice_source_t voice_source(void)
+{
+    const bool rear_select = s_rig->rig == CAT_RIG_FTDX10;
+    const int64_t now = esp_timer_get_time();
+    if (!s_ssb_menu_us[0] || now - s_ssb_menu_us[0] > VOICE_MENU_MAX_AGE_US ||
+        (rear_select && (!s_ssb_menu_us[1] || now - s_ssb_menu_us[1] > VOICE_MENU_MAX_AGE_US))) {
+        return CAT_VOICE_SOURCE_UNKNOWN;
+    }
+    return s_ssb_menu[0] == '1' && (!rear_select || s_ssb_menu[1] == '1')
+        ? CAT_VOICE_SOURCE_USB : CAT_VOICE_SOURCE_OTHER;
+}
+
+const char *cat_voice_mode_error(bool starting)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const char mode = s_reported_mode[s_state.tx_vfo == CAT_TX_VFO_SUB];
+    const cat_voice_source_t source = starting ? voice_source() : CAT_VOICE_SOURCE_USB;
+    xSemaphoreGive(s_lock);
+    if (mode != '1' && mode != '2') return "Select USB or LSB for microphone TX";
+    if (source == CAT_VOICE_SOURCE_UNKNOWN) return "Waiting for SSB modulation source";
+    if (source != CAT_VOICE_SOURCE_USB) return "Set SSB modulation source to USB";
+    return NULL;
+}
+
 void cat_get_state(cat_state_t *state)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *state = s_state;
+    state->voice_source = voice_source();
     const int64_t now = esp_timer_get_time();
     state->tx_radio_known = s_state.connected && !s_disconnected && s_last_tx_status_us > 0 &&
                             now - s_last_tx_status_us <= RADIO_STATUS_MAX_AGE_US;

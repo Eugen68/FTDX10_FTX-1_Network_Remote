@@ -120,6 +120,7 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
         cat_state_t radio;
         cat_get_state(&radio);
         const char *mode_error = cat_ptt_mode_error(0);
+        if (!mode_error && tone == TX_TONE_VOICE) mode_error = cat_voice_mode_error(true);
         if (tone != TX_TONE_OFF && !usb_audio_tx_available()) {
             refusal = "USB TX audio unavailable";
         } else if (!usb_audio_tx_idle()) {
@@ -134,7 +135,8 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
         } else if (tone != TX_TONE_OFF &&
                    (esp_timer_get_time() - s_heartbeat >= HEARTBEAT_US ||
                     !usb_audio_tx_available() || !usb_audio_get_format(NULL) ||
-                    !cat_radio_rx_after(0) || cat_ptt_mode_error(0))) {
+                    !cat_radio_rx_after(0) || cat_ptt_mode_error(0) ||
+                    (tone == TX_TONE_VOICE && cat_voice_mode_error(true)))) {
             usb_audio_tx_finished();
             refusal = "PTT conditions changed during USB audio setup";
         } else {
@@ -327,6 +329,7 @@ static void watchdog_tick(void)
                 if (!reason) {
                     reason = cat_ptt_mode_error(s_keyed_at);
                 }
+                if (!reason && s_tone == TX_TONE_VOICE) reason = cat_voice_mode_error(false);
                 if (!reason) {
                     const cat_tx_meters_t meters = cat_get_tx_meters();
                     const int64_t meter_now = esp_timer_get_time();

@@ -31,7 +31,7 @@ idf_component_register(SRCS "web_auth.c" "web_session_diag.c" "console_menu.c" "
                     PRIV_REQUIRES esp-tls esp_wifi esp_netif esp_event nvs_flash esp_https_server espressif__mdns lwip
                                   app_update esp_app_format mbedtls esp_timer espressif__usb espressif__usb_host_cdc_acm
                                   esp_driver_usb_serial_jtag esp_driver_uart esp_driver_gpio esp_driver_spi esp_ringbuf
-                    EMBED_TXTFILES "index.html" "map.html" "${CERT_FILE}" "${KEY_FILE}"
+                    EMBED_TXTFILES "tx_mic.js" "index.html" "map.html" "${CERT_FILE}" "${KEY_FILE}"
                     )
 
 # build_info.c carries __DATE__ / __TIME__; force it to be recompiled whenever any other source
@@ -56,7 +56,7 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
     endforeach()
 
     file(GLOB BUILD_STAMP_DEPS "${CMAKE_CURRENT_LIST_DIR}/*.c" "${CMAKE_CURRENT_LIST_DIR}/*.h"
-                               "${CMAKE_CURRENT_LIST_DIR}/*.html")
+                               "${CMAKE_CURRENT_LIST_DIR}/*.html" "${CMAKE_CURRENT_LIST_DIR}/*.js")
     list(REMOVE_ITEM BUILD_STAMP_DEPS "${CMAKE_CURRENT_LIST_DIR}/build_info.c")
     set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/build_info.c"
                                 PROPERTIES OBJECT_DEPENDS "${BUILD_STAMP_DEPS}")

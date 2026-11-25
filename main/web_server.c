@@ -61,6 +61,8 @@
 #define DECIM_MAX_CHANNELS   2
 #define WAV_HEADER_SIZE      44
 
+extern const char tx_mic_js_start[] asm("_binary_tx_mic_js_start");
+extern const char tx_mic_js_end[] asm("_binary_tx_mic_js_end");
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
 extern const char map_html_start[] asm("_binary_map_html_start");
@@ -577,6 +579,14 @@ static esp_err_t index_handler(httpd_req_t *req)
     return httpd_resp_send(req, index_html_start, index_html_end - index_html_start - 1);
 }
 
+static esp_err_t tx_mic_handler(httpd_req_t *req)
+{
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) return ESP_OK;
+    web_auth_set_common_headers(req);
+    httpd_resp_set_type(req, "text/javascript; charset=utf-8");
+    return httpd_resp_send(req, tx_mic_js_start, tx_mic_js_end - tx_mic_js_start - 1);
+}
+
 static esp_err_t map_handler(httpd_req_t *req)
 {
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
@@ -818,8 +828,8 @@ static esp_err_t cat_handler(httpd_req_t *req)
     if (n > 0 && (size_t)n < sizeof(json)) {
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\"}",
-                      app_config_tx_enabled() ? "true" : "false",
+                      ",\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\"}",
+                      (unsigned)st.voice_source, app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
                       st.tx_radio_known ? "true" : "false", (unsigned long)st.write_error_seq, write_error);
     }
@@ -1681,6 +1691,7 @@ esp_err_t web_server_start(void)
 
     static const httpd_uri_t uris[] = {
         {.uri = "/",           .method = HTTP_GET,  .handler = index_handler},
+        {.uri = "/tx_mic.js",  .method = HTTP_GET,  .handler = tx_mic_handler},
         {.uri = "/map",        .method = HTTP_GET,  .handler = map_handler},
         {.uri = "/status",     .method = HTTP_GET,  .handler = status_handler},
         {.uri = "/status",     .method = HTTP_POST, .handler = usb_test_handler},
