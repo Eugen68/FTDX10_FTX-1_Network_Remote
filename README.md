@@ -7,7 +7,7 @@
 
 **English** | [日本語](README.ja.md)
 
-![FTDX10 / FTX-1 Network Remote browser UI: S-meters, VFO display, scope and FT8 decoder (callsigns in the screenshot are dummies)](docs/screenshot.png)
+![FTDX10 / FTX-1 Network Remote web interface with VFO controls, S-meter, ACC spectrum and waterfall, and FT8 decoder](docs/network-remote-screenshot.png)
 
 Propagation never sits still, and sometimes you just can't stop wondering what the bands are doing right now. Is 20 m open? Is that station still coming through?
 You'd like to know, but getting up and walking to the shack, let alone settling in front of the radio, feels like too much effort.
