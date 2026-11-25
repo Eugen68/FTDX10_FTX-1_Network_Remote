@@ -46,7 +46,8 @@ typedef struct {
     bool enabled;                      /*!< The SPI slave runs (an FTDX10 was detected since boot) */
     uint32_t frames;                   /*!< Transfers received */
     uint32_t accepted;                 /*!< Frames that passed every check */
-    uint32_t rejected;                 /*!< Frames dropped by a check */
+    uint32_t rejected;                 /*!< Frames counted as validation errors */
+    uint32_t vfo_range_tx;             /*!< Out-of-range VFO frames ignored while CAT reports TX */
     uint32_t fps;                      /*!< Accepted frames in the last second */
     uint32_t age_ms;                   /*!< Since the last accepted frame (UINT32_MAX = never) */
     uint32_t last_len;                 /*!< Length of the last transfer, bytes */

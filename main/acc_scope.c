@@ -152,6 +152,10 @@ static void acc_task(void *arg)
                 s_stats.accepted++;
                 s_last_accept_ms = now_ms;
                 window_accepted++;
+            } else if (why == ACC_REJ_VFO_RANGE && st.connected && st.rig == CAT_RIG_FTDX10 &&
+                       (st.tx_cat || st.tx_radio)) {
+                // Track the overlap with TX without exposing an invalid scope row.
+                s_stats.vfo_range_tx++;
             } else {
                 s_stats.rejected++;
                 if ((int)why < 7) {

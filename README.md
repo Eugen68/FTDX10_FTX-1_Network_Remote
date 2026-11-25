@@ -659,7 +659,10 @@ The panel and `/status` show both raw meters. SWR conversions use provisional, m
 and [FTDX10](https://github.com/Hamlib/Hamlib/blob/master/rigs/yaesu/ftdx10.h) Hamlib reference points.
 Check these against the radio and known loads on the bench before relying on the numeric ratio.
 In `/status`, the TX audio counters show the output sample rate, missed audio task deadlines and
-bytes accepted by the USB driver. The 16 KiB TX staging ring uses PSRAM, with its control block in internal RAM.
+bytes accepted by the USB driver. The `pcm_peak` value is the maximum absolute sample in
+successfully completed USB packets since the audio output started. FTDX10 scope frames with an
+out-of-range VFO during CAT TX are discarded and counted in `acc.vfo_range_tx`. In receive, the
+same validation error is counted in `acc.rej.vfo_range`. The 16 KiB TX staging ring uses PSRAM, with its control block in internal RAM.
 The UAC driver allocates USB transfer buffers when the output stream starts.
 
 `/status.cat_write` reports write counts, timeouts, maximum elapsed microseconds and calls exceeding the

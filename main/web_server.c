@@ -681,7 +681,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       "\"stream\":{\"active\":%s,\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
                       "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu,"
                       "\"usb_bus_resets\":%lu,\"rx_paused\":%s},"
-                      "\"acc\":{\"enabled\":%s,\"fps\":%lu,\"frames\":%lu,\"accepted\":%lu,\"rejected\":%lu,"
+                      "\"acc\":{\"enabled\":%s,\"fps\":%lu,\"frames\":%lu,\"accepted\":%lu,\"rejected\":%lu,\"vfo_range_tx\":%lu,"
                       "\"age_ms\":%ld,\"last_len\":%lu,\"last_reject\":\"%s\","
                       "\"rej\":{\"length\":%lu,\"not_ftdx10\":%lu,\"vfo_copies\":%lu,\"vfo_range\":%lu,"
                       "\"span\":%lu,\"cat\":%lu},\"clients\":%lu}",
@@ -702,7 +702,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)s_st_rate, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10),
                       (unsigned long)usb_audio_bus_resets(), usb_audio_rx_paused() ? "true" : "false",
                       acc.enabled ? "true" : "false", (unsigned long)acc.fps, (unsigned long)acc.frames,
-                      (unsigned long)acc.accepted, (unsigned long)acc.rejected,
+                      (unsigned long)acc.accepted, (unsigned long)acc.rejected, (unsigned long)acc.vfo_range_tx,
                       acc.age_ms == UINT32_MAX ? -1L : (long)acc.age_ms, (unsigned long)acc.last_len, acc_reason,
                       (unsigned long)acc.rej[1], (unsigned long)acc.rej[2], (unsigned long)acc.rej[3],
                       (unsigned long)acc.rej[4], (unsigned long)acc.rej[5], (unsigned long)acc.rej[6],

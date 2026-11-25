@@ -13,30 +13,26 @@ static void tx_transfer_done(usb_transfer_t *transfer)
     unsigned bytes = 0, completed = 0, failed = 0;
     if (transfer->status == USB_TRANSFER_STATUS_COMPLETED) {
         const int16_t *pcm = (const int16_t *)transfer->data_buffer;
-        unsigned peak = atomic_load(&s_pcm_peak);
+        const unsigned previous_peak = atomic_load(&s_pcm_peak);
+        unsigned peak = previous_peak;
         for (int i = 0; i < transfer->num_isoc_packets; ++i) {
             const usb_isoc_packet_desc_t *packet = &transfer->isoc_packet_desc[i];
             if (packet->status == USB_TRANSFER_STATUS_COMPLETED &&
                 packet->actual_num_bytes == packet->num_bytes) {
                 bytes += packet->actual_num_bytes;
                 ++completed;
-                // Verify that completed OUT packets contain a signal. Inspect
-                // samples only until the first non-silent packet per tone.
-                if (peak == 0) {
-                    for (int j = 0; j < packet->actual_num_bytes / (int)sizeof(*pcm); ++j) {
-                        const int sample = pcm[j];
-                        const unsigned magnitude = sample < 0 ? -sample : sample;
-                        if (magnitude > peak) {
-                            peak = magnitude;
-                        }
-                    }
-                    atomic_store(&s_pcm_peak, peak);
+                // Measure only PCM that actually completed on the USB endpoint.
+                for (int j = 0; j < packet->actual_num_bytes / (int)sizeof(*pcm); ++j) {
+                    const int sample = pcm[j];
+                    const unsigned magnitude = sample < 0 ? -sample : sample;
+                    if (magnitude > peak) peak = magnitude;
                 }
             } else {
                 ++failed;
             }
             pcm += packet->num_bytes / (int)sizeof(*pcm);
         }
+        if (peak > previous_peak) atomic_store(&s_pcm_peak, peak);
     } else if (transfer->status != USB_TRANSFER_STATUS_CANCELED &&
                transfer->status != USB_TRANSFER_STATUS_NO_DEVICE) {
         failed = transfer->num_isoc_packets;
