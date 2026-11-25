@@ -1587,9 +1587,11 @@
 <script>
 let rebooting = false;
 let devicePoll = Promise.resolve();
+let txNetworkQuiet = false;
 
 function pollDeviceJson(uri) {
   const request = devicePoll.then(async () => {
+    if (txNetworkQuiet) return null;
     const res = await fetch(uri, { cache: 'no-store', signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
@@ -1943,6 +1945,10 @@ function accOnRecord(dv, off, points) {
 async function accStreamLoop() {
   const ctrl = accState.ctrl;
   while (accState.ctrl === ctrl && !ctrl.signal.aborted) {
+    if (txNetworkQuiet) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+      continue;
+    }
     try {
       const fps = BG_AUDIO ? 12 : 25;
       const res = await fetch('/scope.bin?fps=' + fps, { signal: ctrl.signal, cache: 'no-store' });
@@ -1976,7 +1982,7 @@ async function accStreamLoop() {
 }
 
 function accManage() {
-  if (accWanted() && !accState.ctrl) {
+  if (accWanted() && !accState.ctrl && !txNetworkQuiet) {
     accState.ctrl = new AbortController();
     accStreamLoop();
   } else if (!accWanted() && accState.ctrl) {
@@ -2509,6 +2515,10 @@ streamRateSel.addEventListener('change', () => {
 
 async function start() {
   isUserStopped = false;
+  if (txNetworkQuiet) {
+    scheduleReconnect();
+    return;
+  }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   const myAbort = abort = new AbortController();
   btnPlay.textContent = 'PWR OFF / STOP';
@@ -2687,6 +2697,10 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     if (!isUserStopped) {
+      if (txNetworkQuiet) {
+        scheduleReconnect();
+        return;
+      }
       console.log('Reconnecting audio stream...');
       start();
     }
@@ -3848,13 +3862,14 @@ freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
     list.appendChild(row);
   }
   async function poll() {
-    if (rebooting || busy || !section.open || pause.checked) return;
+    if (rebooting || txNetworkQuiet || busy || !section.open || pause.checked) return;
     busy = true;
     try {
       const nearBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 20;
       for (let i = 0; i < 4; i++) {   // catch up after a pause, 64 entries per answer
         if (rebooting) return;
         const d = await pollDeviceJson('/catlog?since=' + seq);
+        if (!d) break;
         if (d.seq < seq) { list.textContent = ''; }          // the device rebooted: start over
         d.e.forEach(add);
         seq = d.seq;
@@ -3903,6 +3918,8 @@ let txSocket = null;
 let txAuthenticated = false;
 let txHeld = false;
 let txHeartbeat = null;
+let txPress = 0;
+let txKeyRequested = false;
 
 let txKeyed = false;
 let txStopping = false;
@@ -4040,22 +4057,42 @@ function sendTx(message) {
 function releasePtt() {
   if (!txHeld) return;
   txHeld = false;
+  ++txPress;
   ptt.setAttribute('aria-pressed', 'false');
-  sendTx({t: 'ptt', on: false});
+  if (txKeyRequested) {
+    sendTx({t: 'ptt', on: false});
+  } else {
+    txNetworkQuiet = txKeyed || txStopping;
+  }
 }
 
-function pressPtt() {
+async function pressPtt() {
   if (!txAuthenticated || ptt.disabled || txHeld || !document.hasFocus() || document.hidden) return;
-  const isTestTone = txTone.value === 'single' || txTone.value === 'dual';
+  const tone = txTone.value;
+  const isTestTone = tone === 'single' || tone === 'dual';
   if (isTestTone && (!txLevel.value || !txLevel.validity.valid)) {
     txInfo.textContent = 'Enter a level from −60 to −6 dBFS';
     return;
   }
+  const dbfs = isTestTone ? txLevel.valueAsNumber : -24;
+  const press = ++txPress;
+  const socket = txSocket;
   txHeld = true;
+  txNetworkQuiet = true;
   ptt.setAttribute('aria-pressed', 'true');
-  // Mute immediately to keep the first microphone frame clear of local RX audio.
+
+  // New HTTPS sessions can block the ESP32's WebSocket handler during TLS handshake.
+  // Let the current poll finish, then keep PTT and status on the open WebSocket.
+  await devicePoll;
+  if (press !== txPress) return;
+  if (socket !== txSocket || socket?.readyState !== WebSocket.OPEN || ptt.disabled ||
+      tone !== txTone.value || !document.hasFocus() || document.hidden) {
+    releasePtt();
+    return;
+  }
+  txKeyRequested = true;
   muteReceptionForTx(true);
-  sendTx({t: 'ptt', on: true, tone: txTone.value, dbfs: isTestTone ? txLevel.valueAsNumber : -24});
+  sendTx({t: 'ptt', on: true, tone, dbfs});
 }
 
 txConnect.addEventListener('click', () => {
@@ -4094,9 +4131,11 @@ txConnect.addEventListener('click', () => {
     if (!state.auth) {
       socket.close();
     } else if (!txHeartbeat) {
-      txHeartbeat = setInterval(() => sendTx({t: txHeld && !document.hidden && document.hasFocus() ? 'hb' : 'status'}), 250);
+      txHeartbeat = setInterval(() => sendTx({t: txHeld && txKeyRequested && !document.hidden && document.hasFocus() ? 'hb' : 'status'}), 250);
     }
     if (state.error || txStopping || (wasKeyedByUs && !txKeyed)) releasePtt();
+    if (!txHeld && !txKeyed && !txStopping) txKeyRequested = false;
+    txNetworkQuiet = txHeld || txKeyRequested || txKeyed || txStopping;
   });
   socket.addEventListener('close', () => {
     clearInterval(txHeartbeat);
@@ -4105,6 +4144,7 @@ txConnect.addEventListener('click', () => {
     pass = '';
     txAuthenticated = txKeyed = txStopping = txOwnsKey = false;
     releasePtt();
+    txKeyRequested = txNetworkQuiet = false;
     stopMic();
     muteReceptionForTx(false);
     showTransmitState(false);
@@ -4210,12 +4250,16 @@ const SM_POLL_MS = 400;
 let lastCatWriteError = 0;
 
 async function smPoll() {
-  if (rebooting) {
+  if (rebooting || txNetworkQuiet) {
     setTimeout(smPoll, SM_POLL_MS);
     return;
   }
   try {
     const d = await pollDeviceJson('/cat');
+    if (!d) {
+      setTimeout(smPoll, SM_POLL_MS);
+      return;
+    }
     const now = Date.now();
     applyRigProfile(d);
     if (Number.isInteger(d.write_error_seq) && d.write_error_seq !== lastCatWriteError) {
@@ -4506,7 +4550,7 @@ function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
 // ---- Firmware build time (shown in the rig header) ----
 pollDeviceJson('/status')
   .then((s) => {
-    if (typeof s.build === 'string' && /^[A-Za-z0-9 :]{1,32}$/.test(s.build)) {
+    if (typeof s?.build === 'string' && /^[A-Za-z0-9 :]{1,32}$/.test(s.build)) {
       const ver = typeof s.version === 'string' && /^[0-9.]{1,12}$/.test(s.version) ? 'V' + s.version + '  ' : '';
       document.getElementById('buildInfo').textContent = ver + 'BUILD ' + s.build;
     }
