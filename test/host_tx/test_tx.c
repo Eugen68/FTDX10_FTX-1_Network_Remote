@@ -34,8 +34,6 @@ static bool defer_audio_cleanup, cleanup_pending;
 static cat_rig_t radio_model = CAT_RIG_FTDX10;
 static bool prepare_fails, prepare_changes_mode, prepare_shared;
 static unsigned preparations, cleanups;
-static bool usb_test_counting;
-static uint32_t prepared_rate;
 static tx_tone_t audio_request;
 static unsigned po_raw, swr_raw;
 static bool meters_missing;
@@ -59,12 +57,11 @@ bool usb_audio_tx_idle(void) { return output_idle; }
 bool usb_audio_tx_cleanup_pending(void) { return cleanup_pending; }
 void usb_audio_tx_request(tx_tone_t tone, int dbfs) { audio_request = tone; }
 void cat_get_state(cat_state_t *state) { *state = (cat_state_t){.rig = radio_model}; }
-esp_err_t usb_audio_tx_prepare(bool shared, uint32_t rate)
+esp_err_t usb_audio_tx_prepare(bool shared)
 {
     assert(!radio_on && output_idle);
     ++preparations;
     prepare_shared = shared;
-    prepared_rate = rate;
     if (prepare_changes_mode) {
         mode_error = "Mode changed";
     }
@@ -72,7 +69,7 @@ esp_err_t usb_audio_tx_prepare(bool shared, uint32_t rate)
 }
 void usb_audio_tx_finished(void)
 {
-    assert((s_usb_test_deadline || !radio_on) && audio_request == TX_TONE_OFF);
+    assert(!radio_on && audio_request == TX_TONE_OFF);
     ++cleanups;
     if (defer_audio_cleanup) {
         cleanup_pending = true;
@@ -96,7 +93,6 @@ cat_write_stats_t cat_get_write_stats(void)
     ++stale_diagnostics_reads;
     return (cat_write_stats_t){.meters = {.calls = 6, .timeouts = 1, .max_us = 10000}};
 }
-void cat_set_usb_test(bool active) { usb_test_counting = active; }
 size_t cat_log_recent_tx_meters(uint32_t through_ms, cat_log_entry_t *entries, size_t max)
 {
     assert(through_ms == (uint32_t)(g_now_us / 1000) && max >= 1);
@@ -294,26 +290,8 @@ int main(void)
     assert(audio_request == TX_TONE_OFF && cleanups == 2);
     confirm_rx();
     assert(cleanups == 3);
-    const unsigned before_test_on = on_writes, before_test_off = off_writes;
-    assert(tx_usb_test_start(44100) == ESP_OK);
-    assert(tx_usb_test_state().active && tx_usb_test_state().left_s == 20 && tx_usb_test_state().rate == 44100);
-    assert(usb_test_counting && prepare_shared && prepared_rate == 44100 && audio_request == TX_TONE_SINGLE);
-    assert(tx_get_state().phase == TX_IDLE && !tx_acquire(1));
-    assert(!tx_begin_usb_recovery() && !tx_quiesce("Reboot"));
-    g_now_us += USB_TEST_US - 1;
-    watchdog_tick();
-    assert(tx_usb_test_state().active);
-    ++g_now_us;
-    watchdog_tick();
-    assert(!tx_usb_test_state().active && !usb_test_counting && audio_request == TX_TONE_OFF);
-    assert(cleanups == 4 && on_writes == before_test_on && off_writes == before_test_off);
-    rx_us = g_now_us;
-    assert(tx_usb_test_start(48000) == ESP_OK && prepared_rate == 48000);
-    radio_on = true;
-    watchdog_tick();
-    assert(!tx_usb_test_state().active && strcmp(tx_usb_test_state().reason,"Radio entered TX") == 0);
-    assert(on_writes == before_test_on && off_writes == before_test_off);
     // Safety unkey should preserve the stop reason and reject re-key before cleanup.
+    const unsigned off_before = off_writes;
     radio_on = false;
     radio_model = CAT_RIG_FTDX10;
     rx_us = ++g_now_us;
@@ -322,7 +300,7 @@ int main(void)
     fault = "High SWR";
     watchdog_tick();
     assert(tx_get_state().stopping && audio_request == TX_TONE_OFF);
-    assert(off_writes == before_test_off + 1 && !cleanup_pending);
+    assert(off_writes == off_before + 1 && !cleanup_pending);
     radio_on = false;
     rx_us = ++g_now_us;
     watchdog_tick();
@@ -331,7 +309,7 @@ int main(void)
     assert(strcmp(tx_get_state().reason, "High SWR") == 0);
     g_now_us += CONFIRM_US + 1;
     watchdog_tick();
-    assert(off_writes == before_test_off + 1);
+    assert(off_writes == off_before + 1);
     output_idle = true;
     cleanup_pending = false;
     watchdog_tick();

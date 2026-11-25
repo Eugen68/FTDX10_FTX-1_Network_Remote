@@ -59,7 +59,7 @@ void usb_audio_tx_reset_transfer_stats(void);
 usb_tx_transfer_stats_t usb_audio_tx_transfer_stats(void);
 bool usb_audio_tx_available(void);
 bool usb_audio_tx_idle(void);
-esp_err_t usb_audio_tx_prepare(bool share_rx_channel, uint32_t test_rate);
+esp_err_t usb_audio_tx_prepare(bool share_rx_channel);
 bool usb_audio_tx_cleanup_pending(void);
 void usb_audio_tx_finished(void);
 bool usb_audio_rx_paused(void);

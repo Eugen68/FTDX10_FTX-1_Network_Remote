@@ -633,7 +633,8 @@ is muted during remote TX and resumes after confirmed RX or after USB input rest
 packets never refresh the control heartbeat. The other automatic stops described above apply to voice.
 
 `/status.tx_voice` reports the buffered milliseconds, the adaptive prefill target, underruns, discarded
-frames and clock adjustment in parts per million. Empty playback produces silence. Enable microphone
+frames and clock adjustment in parts per million. The adjustment uses an approximately one-second
+exponential average of the buffer error. Empty playback produces silence. Enable microphone
 only on the trusted HTTPS page. Stop the microphone with Disable microphone or by leaving the tab.
 
 ### USB test tone and SWR protection

@@ -592,26 +592,12 @@ static void finish_audio_tx(void)
     atomic_store(&s_tx_clean, err == ESP_OK);
 }
 
-esp_err_t usb_audio_tx_prepare(bool share_rx_channel, uint32_t test_rate)
+esp_err_t usb_audio_tx_prepare(bool share_rx_channel)
 {
     xSemaphoreTake(s_output_lock, portMAX_DELAY);
     if (!s_tx_clean || !s_tx_available || !s_output_handle) {
         xSemaphoreGive(s_output_lock);
         return ESP_ERR_INVALID_STATE;
-    }
-
-    uac_host_stream_config_t stream = s_tx_format;
-    if (test_rate) {
-        // The FTX-1 stereo alternate advertises both rates on the same endpoint.
-        bool supported = false;
-        for (unsigned i = 0; i < s_output_format.rate_count; ++i) {
-            supported |= s_output_format.rates[i] == test_rate;
-        }
-        if (!supported) {
-            xSemaphoreGive(s_output_lock);
-            return ESP_ERR_NOT_SUPPORTED;
-        }
-        stream.sample_freq = test_rate;
     }
 
     const bool pause_rx = share_rx_channel || s_output_format.endpoints > 1;
@@ -639,9 +625,9 @@ esp_err_t usb_audio_tx_prepare(bool share_rx_channel, uint32_t test_rate)
     ESP_LOGI(TAG, "USB TX start: endpoints=%u bmAttributes=0x%02x sync_type=%u rx_paused=%s",
              s_output_format.endpoints, s_output_format.attributes,
              (s_output_format.attributes >> 2) & 3, pause_rx ? "yes" : "no");
-    const esp_err_t err = uac_host_device_start(s_output_handle, &stream);
+    const esp_err_t err = uac_host_device_start(s_output_handle, &s_tx_format);
     if (err == ESP_OK) {
-        s_tx_play_rate = stream.sample_freq;
+        s_tx_play_rate = s_tx_format.sample_freq;
         s_output_prepared = true;
     } else {
         ESP_LOGW(TAG, "USB TX audio start failed: %s", esp_err_to_name(err));
