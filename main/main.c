@@ -9,6 +9,7 @@
 
 #include "esp_log.h"
 #include "app_config.h"
+#include "build_info.h"
 #include "acc_scope.h"
 #include "cat.h"
 #include "tx.h"
@@ -27,7 +28,7 @@ void app_main(void)
     // Ensure stdout is unbuffered so messages appear immediately
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("\r\n\r\n========================================\r\n");
-    printf("   FTX-1 Companion app_main started!   \r\n");
+    printf("   " NETWORK_REMOTE_NAME " app_main started!   \r\n");
     printf("========================================\r\n\r\n");
     fflush(stdout);
 
@@ -57,12 +58,12 @@ void app_main(void)
     ESP_ERROR_CHECK(web_server_start());
     ota_confirm_running();   // reached only when Wi-Fi and the web server came up
 
-    // Advertise https://<hostname>.local/ on the LAN (default: ftx-1c.local)
+    // Advertise https://<hostname>.local/ on the LAN (default: trx-remote.local)
     app_config_t cfg;
     app_config_get(&cfg);
     ESP_ERROR_CHECK(mdns_init());
     ESP_ERROR_CHECK(mdns_hostname_set(cfg.hostname));
-    ESP_ERROR_CHECK(mdns_instance_name_set("FTX-1 USB Audio"));
+    ESP_ERROR_CHECK(mdns_instance_name_set(NETWORK_REMOTE_NAME));
     ESP_ERROR_CHECK(mdns_service_add(NULL, "_https", "_tcp", 443, NULL, 0));
     ESP_LOGI(TAG, "Open https://%s.local/", cfg.hostname);
 }

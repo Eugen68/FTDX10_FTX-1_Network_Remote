@@ -27,10 +27,25 @@ int main(void)
     for (unsigned i = 0; i < 45; ++i) tx_voice_push(frame);
     assert(tx_voice_stats().level_ms <= 600 && tx_voice_stats().dropped_frames > 0);
     tx_voice_render(out, 48000, 1);
-    assert(out[0] != 0 && out[479] != 0 && tx_voice_stats().rate_ppm == 5000);
+    assert(out[0] != 0 && out[479] != 0);
+    const int first_ppm = tx_voice_stats().rate_ppm;
+    assert(first_ppm > 0 && first_ppm < 500);
+    for (unsigned i = 0; i < 100; ++i) {
+        if ((i & 1) == 0) tx_voice_push(frame);
+        tx_voice_render(out, 48000, 1);
+    }
+    assert(tx_voice_stats().rate_ppm > first_ppm && tx_voice_stats().rate_ppm <= 5000);
     tx_voice_stop();
     assert(tx_voice_stats().level_ms == 0 && tx_voice_stats().rate_ppm == 0);
     assert(tx_voice_start());
     assert(tx_voice_stats().target_ms == 80 && tx_voice_stats().underruns == 0);
-    puts("Voice prefill, resampling, underrun, backlog and reset passed");
+    assert(tx_voice_stats().rate_ppm == 0);
+    // At normal playout, an extra packet moves the correction gradually.
+    for (unsigned i = 0; i < 4; ++i) tx_voice_push(frame);
+    tx_voice_render(out, 48000, 1);
+    assert(tx_voice_stats().rate_ppm == 0);
+    tx_voice_push(frame);
+    tx_voice_render(out, 48000, 1);
+    assert(tx_voice_stats().rate_ppm > 0 && tx_voice_stats().rate_ppm < 50);
+    puts("Voice prefill, resampling, rate smoothing, underrun, backlog and reset passed");
 }

@@ -20,6 +20,7 @@ static _Atomic(SemaphoreHandle_t) s_lock;
 static int16_t *s_ring;
 static unsigned s_read, s_used, s_target = MIN_PREFILL, s_phase;
 static bool s_playing;
+static float s_filtered_error;
 static float s_fir[PHASES][TAPS];
 static tx_voice_stats_t s_stats;
 
@@ -51,6 +52,7 @@ bool tx_voice_start(void)
     s_read = s_used = s_phase = 0;
     s_target = MIN_PREFILL;
     s_playing = false;
+    s_filtered_error = 0;
     s_stats = (tx_voice_stats_t){0};
     xSemaphoreGive(s_lock);
     return true;
@@ -62,6 +64,7 @@ void tx_voice_stop(void)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_read = s_used = s_phase = 0;
     s_playing = false;
+    s_filtered_error = 0;
     s_stats.rate_ppm = 0;
     xSemaphoreGive(s_lock);
 }
@@ -74,6 +77,8 @@ void tx_voice_push(const uint8_t pcm[2 * TX_VOICE_SAMPLES])
         s_read = (s_read + discard) % CAPACITY;
         s_used -= discard;
         s_phase = 0;
+        s_filtered_error = 0;
+        s_stats.rate_ppm = 0;
         s_stats.dropped_frames += (discard + TX_VOICE_SAMPLES - 1) / TX_VOICE_SAMPLES;
     }
     unsigned pos = (s_read + s_used) % CAPACITY;
@@ -91,7 +96,11 @@ void tx_voice_render(int16_t *pcm, unsigned rate, unsigned channels)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (!s_playing) s_playing = s_used >= s_target;
     const int error = (int)s_used - (int)s_target;
-    int ppm = error * 8;
+    if (s_playing) {
+        // One update per 10 ms output block, with an approximately 1 s time constant.
+        s_filtered_error += 0.01f * (error - s_filtered_error);
+    }
+    int ppm = (int)(s_filtered_error * 8);
     if (ppm > 5000) ppm = 5000;
     if (ppm < -5000) ppm = -5000;
     s_stats.rate_ppm = s_playing ? ppm : 0;
@@ -120,6 +129,7 @@ void tx_voice_render(int16_t *pcm, unsigned rate, unsigned channels)
         if (i < samples) {
             s_playing = false;
             s_read = s_used = s_phase = 0;
+            s_filtered_error = 0;
             s_stats.rate_ppm = 0;
             ++s_stats.underruns;
             if (s_target < MAX_PREFILL) s_target += TX_VOICE_SAMPLES;

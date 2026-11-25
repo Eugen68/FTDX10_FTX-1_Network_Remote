@@ -87,8 +87,9 @@ esp_err_t app_config_load(app_config_t *cfg)
         strlcpy(cfg->hostname, def_hostname, sizeof(cfg->hostname));
     }
 
-    // A stored value that is not a valid label would break DHCP / mDNS; use the default instead
-    if (!app_config_hostname_is_valid(cfg->hostname)) {
+    // Treat the old factory default as the new default without rewriting NVS.
+    // Valid custom names continue to use their saved value.
+    if (!app_config_hostname_is_valid(cfg->hostname) || strcmp(cfg->hostname, "ftx-1c") == 0) {
         strlcpy(cfg->hostname, def_hostname, sizeof(cfg->hostname));
     }
 

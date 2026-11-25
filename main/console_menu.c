@@ -20,6 +20,7 @@
 #include "driver/gpio.h"
 #include "driver/uart.h"
 #include "app_config.h"
+#include "build_info.h"
 #include "console_menu.h"
 #include <fcntl.h>
 #include <unistd.h>
@@ -258,7 +259,7 @@ void console_menu_run(void)
     console_write_str(
         "\r\n"
         "**************************************************\r\n"
-        "*       FTX-1 Companion Configuration Menu       *\r\n"
+        "* " NETWORK_REMOTE_NAME " Configuration Menu *\r\n"
         "**************************************************\r\n"
     );
 
@@ -526,7 +527,7 @@ bool console_menu_check_and_run(int timeout_seconds)
     char msg[512];
     snprintf(msg, sizeof(msg),
         "\r\n=================================================================\r\n"
-        " FTX-1 Companion Booting (SSID: \"%s\")\r\n"
+        " " NETWORK_REMOTE_NAME " Booting (SSID: \"%s\")\r\n"
         " Press [BOOT button] or [Enter] within %d seconds for Config Menu...\r\n"
         "=================================================================\r\n",
         cfg.wifi_ssid, timeout_seconds

@@ -1,13 +1,13 @@
 | Supported Targets | ESP32-S3 |
 | ----------------- | -------- |
 
-# FTX-1 Network Companion
+# FTDX10 / FTX-1 Network Remote
 
 *Built for hams by a lazy ham*
 
 [English](README.md) | **日本語**
 
-![FTX-1 Network Companion のブラウザ画面: S メーター、VFO 表示、スコープ、FT8 デコーダー（画面内のコールサインはダミーです）](docs/screenshot.png)
+![FTDX10 / FTX-1 Network Remote のブラウザ画面: S メーター、VFO 表示、スコープ、FT8 デコーダー（画面内のコールサインはダミーです）](docs/screenshot.png)
 
 日々刻々と変わる電波伝搬のコンディションが、気になって仕方がない。そんな時がありませんか。
 今のバンドは開けているのか、あの局はまだ聞こえているのか。確かめたいけれど、リグのある部屋まで腰を上げるのも、ましてアンテナの前に陣取るのも億劫だ――。
@@ -16,6 +16,10 @@
 立ち上がるのは、部屋のソファの上、あるいは夕食後のコーヒーの傍らで構いません。ものぐさな HAM にこそ、うってつけの一台です。
 
 なお、ネットワーク越しに電波を出させることはできないよう、意図して設計してあります（詳細は「電波を送信させないための制限」）。ここは「聴くための道具」です。
+
+## Based on FTX-1 Network Companion by pizzamax
+
+[FTX-1 Network Companion by pizzamax](https://github.com/pizzamax/FTX-1_Network_Companion) をベースにしています。ライセンスと帰属表示は `LICENSE` と `NOTICE` を参照してください。
 
 ## 概要
 
@@ -140,7 +144,7 @@ Dev Container を使うと「インストール済みの ESP-IDF v6.1 + openssl 
 
 ```bash
 # 1. リポジトリを取得
-git clone <このリポジトリの URL>
+git clone https://github.com/Eugen68/FTDX10_FTX-1_Network_Remote
 
 # 2. VS Code でこのフォルダを開き、「コンテナで再度開く」を選択するだけ
 #    初回は Docker イメージ（espressif/idf:v6.1）のダウンロードに数分かかります
@@ -172,8 +176,8 @@ git clone -b v6.1 --recursive https://github.com/espressif/esp-idf.git
 cd esp-idf && ./install.sh esp32s3
 
 # 2. リポジトリを取得
-git clone <このリポジトリの URL>
-cd ftx1_companion
+git clone https://github.com/Eugen68/FTDX10_FTX-1_Network_Remote
+cd FTDX10_FTX-1_Network_Remote
 
 # 3. ESP-IDF 環境を有効化
 source ~/esp/esp-idf/export.sh        # bash / zsh
@@ -187,7 +191,12 @@ idf.py -p PORT flash monitor
 ```
 
 > **注意**: `idf.py set-target` や `idf.py fullclean` を実行すると、
-> TLS 証明書（`build/certs/`）が作り直されます。その後ブラウザで再度証明書を承認してください。
+> TLS 証明書（`build/certs/network_remote/`）が作り直されます。その後ブラウザで再度証明書を承認してください。
+
+Windows で設定を保持して更新する場合は、`build/network_remote.bin` を
+`network_remote_ota.bin` としてコピーし、`ota_data_initial.bin` と
+`tools/scrie_firmware.bat` を同じフォルダに置いてオプション 1 を選びます。
+新規ボード用の結合イメージは `network_remote-merged.bin` です。
 
 ## フラッシュサイズの変更
 
@@ -242,11 +251,11 @@ Dev Container の中から USB シリアルポートが見えないときは、�
 ```bash
 # コンテナの中（ビルドと、書き込み用のファイルの作成）
 idf.py build
-idf.py merge-bin     # build/merged-binary.bin ができます
+idf.py merge-bin -o network_remote-merged.bin  # build/network_remote-merged.bin ができます
 
 # PC 側（コンテナの外）。esptool を一度だけインストールして書き込みます
 python3 -m pip install esptool
-python3 -m esptool --chip esp32s3 -p PORT write-flash 0x0 build/merged-binary.bin
+python3 -m esptool --chip esp32s3 -p PORT write-flash 0x0 build/network_remote-merged.bin
 ```
 
 書き込みのあとは、Tera Term など好きなシリアルモニタ（115200 bps）で ESP32-S3 のポートを開いてください。
@@ -261,7 +270,7 @@ Wi-Fi の接続先やパスワードなどの設定は、ESP32-S3 の **NVS**（
 
 ```text
 **************************************************
-*       FTX-1 Companion Configuration Menu       *
+*       FTDX10 / FTX-1 Network Remote Configuration Menu       *
 **************************************************
 
 ==================================================
@@ -273,7 +282,7 @@ Wi-Fi の接続先やパスワードなどの設定は、ESP32-S3 の **NVS**（
  4) OTA Password     : (empty / disabled)
  9) Web User ID      : admin
  0) Web Password     : (empty / disabled)
- h) Host name        : ftx-1c.local
+ h) Host name        : trx-remote.local
 ==================================================
 Options:
   1: Set Wi-Fi SSID
@@ -301,7 +310,7 @@ Enter selection (0-9, h):
 
 - `9`: Web 用の ID（既定は `admin`）
 - `3` / `4`: OTA 更新用の ID とパスワード（パスワードは 12 文字以上）
-- `h`: ホスト名（初期値は `ftx-1c`。詳しくは下記「ホスト名（mDNS）」参照）
+- `h`: ホスト名（初期値は `trx-remote`。詳しくは下記「ホスト名（mDNS）」参照）
 
 最後に `6` を入力して「Save to NVS and Restart device」を実行します。**`6` で保存するまで、設定は反映されません。**
 
@@ -313,9 +322,9 @@ Enter selection (0-9, h):
 
 ### 3. ブラウザで動作を確認する
 
-1. 再起動すると Wi-Fi に接続し、シリアルモニタのログに `Got IP: x.x.x.x` と `Open https://ftx-1c.local/` が表示されます。
+1. 再起動すると Wi-Fi に接続し、シリアルモニタのログに `Got IP: x.x.x.x` と `Open https://trx-remote.local/` が表示されます。
 2. FTX-1 の電源を入れ、ESP32-S3 の **USB-OTG ポート**を FTX-1 の USB につなぎます（「接続のしかた」を参照）。
-3. 同じ LAN の PC / Mac のブラウザで、`https://ftx-1c.local/`（または `https://<ログに表示された IP>/`）を開きます。`http://` ではなく `https://` です。
+3. 同じ LAN の PC / Mac のブラウザで、`https://trx-remote.local/`（または `https://<ログに表示された IP>/`）を開きます。`http://` ではなく `https://` です。
 4. 自己署名の証明書のため、**警告が表示されます**。LAN 内の自分の機器なので、内容を確認して続行（承認）してください（「自己署名証明書」の節を参照）。
 5. ID とパスワードを聞かれます。ID は `admin`（`9` で変えていれば、その ID）、パスワードは `0` で設定した Web パスワードです。
 6. **POWER / PLAY** ボタンを押すと、受信音の再生が始まります。ボタンの表示が `PWR OFF / STOP` に変わり、止めるときは同じボタンをもう一度押します。
@@ -324,9 +333,12 @@ Enter selection (0-9, h):
 
 ## ホスト名（mDNS）
 
-NVS にホスト名が保存されていない状態（初回起動時や、メニューの `8` で設定を消去した後）の初期ホスト名は `ftx-1c` です。
-**mDNS**（Multicast DNS。同じ LAN の中で、DNS サーバーなしに「名前.local」でつなげる仕組み）により `https://ftx-1c.local/` で到達できます（[`espressif/mdns`](https://components.espressif.com/components/espressif/mdns) を使用）。
+NVS にホスト名が保存されていない状態（初回起動時や、メニューの `8` で設定を消去した後）の初期ホスト名は `trx-remote` です。
+**mDNS**（Multicast DNS。同じ LAN の中で、DNS サーバーなしに「名前.local」でつなげる仕組み）により `https://trx-remote.local/` で到達できます（[`espressif/mdns`](https://components.espressif.com/components/espressif/mdns) を使用）。
 同じ名前は DHCP のホスト名（ルーターのクライアント一覧に表示される名前）にも使われます。
+
+アップデート後、旧初期値 `ftx-1c` は起動時に `trx-remote` として扱われます。
+設定済みのカスタム名は維持されます。
 
 ### ホスト名の変更（シリアルメニュー）
 
@@ -336,20 +348,20 @@ NVS にホスト名が保存されていない状態（初回起動時や、メ�
 
 ```text
 Enter selection (0-9, h): h
-Enter Host name without ".local" [Current: ftx-1c] (a-z, 0-9, '-'; DEFAULT to reset; Enter to keep): radio-shack
+Enter Host name without ".local" [Current: trx-remote] (a-z, 0-9, '-'; DEFAULT to reset; Enter to keep): radio-shack
 -> Host name set to: radio-shack.local
 ```
 
 - 使える文字は小文字 `a-z`・`0-9`・`-` のみで、先頭と末尾に `-` は使えず、63 文字以内です。大文字・`_`・空白・`.` を含む名前は「Rejected」と表示されて拒否され、元の値が残ります。
-- `DEFAULT` と入力すると初期値 `ftx-1c` に戻ります（`8` の「Erase NVS configuration」でも他の設定と一緒に初期値へ戻ります）。
-- NVS の値が何らかの理由で不正だった場合は、起動時に `ftx-1c` へ自動的に置き換えられます。
+- `DEFAULT` と入力すると初期値 `trx-remote` に戻ります（`8` の「Erase NVS configuration」でも他の設定と一緒に初期値へ戻ります）。
+- NVS の値が何らかの理由で不正だった場合は、起動時に `trx-remote` へ自動的に置き換えられます。
 - 変更後の URL は、起動ログの `Open https://<ホスト名>.local/` でも確認できます。
 - アクセス先の URL（ブックマーク、`ffplay` や `curl` のコマンドなど）は新しいホスト名に書き換えてください。以前の名前では到達できなくなります。
 
 ### 注意点
 
-- **証明書の名前**: 証明書の SAN（`ftx-1c` / `ftx-1c.local`）はビルド時に決まります。ホスト名を変更すると、ブラウザは自己署名の警告に加えて「名前が一致しない」旨の警告も表示します。内容を確認して承認すれば使えますが、警告を出したくない場合は下記「自己署名証明書」の「別のホスト名の証明書を使う」を参照してください。
-- **名前の重複**: 同じ名前の機器が LAN にある場合は、mDNS が `ftx-1c-2.local` のように自動で別名にすることがあります。複数台使うときは、台ごとに別のホスト名を設定してください。
+- **証明書の名前**: 証明書の SAN（`trx-remote.local`, `trx-remote`, `ftx-1c.local`）はビルド時に決まります。ホスト名を変更すると、ブラウザは自己署名の警告に加えて「名前が一致しない」旨の警告も表示します。内容を確認して承認すれば使えますが、警告を出したくない場合は下記「自己署名証明書」の「別のホスト名の証明書を使う」を参照してください。
+- **名前の重複**: 同じ名前の機器が LAN にある場合は、mDNS が `trx-remote-2.local` のように自動で別名にすることがあります。複数台使うときは、台ごとに別のホスト名を設定してください。
 - **ブラウザの状態**: ホスト名が変わると別のサイトとして扱われるため、ブラウザでの Basic 認証や証明書の承認はもう一度必要になります。
 - macOS / iOS / Windows 10 以降 / 最近の Linux（avahi）は標準で `.local` を解決できます。
 - 解決できない環境では、ログに出る IP アドレスで直接アクセスしてください。
@@ -373,7 +385,7 @@ Enter Host name without ".local" [Current: ftx-1c] (a-z, 0-9, '-'; DEFAULT to re
 外部プレーヤーの例（48 kHz / 16 bit / モノラルの場合）:
 
 ```
-ffplay -nodisp -tls_verify 0 https://ftx-1c.local/stream.wav
+ffplay -nodisp -tls_verify 0 https://trx-remote.local/stream.wav
 ```
 
 ## 疑似スケルチ（ブラウザ側）
@@ -469,7 +481,7 @@ ESP32-S3 内部での FT8 オンデバイス即時デコード（メモリ試算
 source ~/esp/esp-idf/export.sh   # Dev Container 内では不要
 idf.py build
 read -rs PW   # パスワードを入力（コマンド履歴に残りません）
-curl -k -u "ota:$PW" -H "X-Requested-With: ftx1" -X POST --data-binary @build/ftx1_companion.bin https://ftx-1c.local/ota
+curl -k -u "ota:$PW" -H "X-Requested-With: ftx1" -X POST --data-binary @build/network_remote.bin https://trx-remote.local/ota
 unset PW
 ```
 
@@ -488,10 +500,10 @@ unset PW
 
 ## 自己署名証明書
 
-HTTPS 用の自己署名証明書（EC P-256、有効期間 2 年、SAN: `ftx-1c` / `ftx-1c.local`）は、
-ビルド時に `openssl` で `build/certs/` へ自動生成され、ファームウェアに埋め込まれます。
+HTTPS 用の自己署名証明書（EC P-256、有効期間 2 年、SAN: `trx-remote.local`, `trx-remote`, `ftx-1c.local`）は、
+ビルド時に `openssl` で `build/certs/network_remote/` へ自動生成され、ファームウェアに埋め込まれます。
 
-- 秘密鍵と証明書は `build/certs/` に置かれ、`.gitignore` 済みなのでコミットされません。
+- 秘密鍵と証明書は `build/certs/network_remote/` に置かれ、`.gitignore` 済みなのでコミットされません。
 - `idf.py fullclean` や `idf.py set-target` を実行すると証明書も作り直され、ブラウザの警告を再度承認する必要があります。
 - 同じビルドディレクトリで再ビルドするかぎり、同じ証明書が使われます。
 - TLS のバージョンは mbedTLS が提供する 1.2 / 1.3 がネゴシエートされます。
@@ -502,7 +514,7 @@ HTTPS 用の自己署名証明書（EC P-256、有効期間 2 年、SAN: `ftx-1c
 シリアルメニューでホスト名を変えても、証明書の SAN は変わりません。名前不一致の警告を避けたい場合は、証明書も作り直します。
 
 1. [`main/CMakeLists.txt`](main/CMakeLists.txt) の `-subj` の `CN=` と `-addext "subjectAltName=..."` を新しいホスト名に書き換えます（例: `DNS:radio-shack.local,DNS:radio-shack`）。
-2. `build/certs` を削除して再ビルドし、ファームウェアを書き込みます。
+2. `build/certs/network_remote` を削除して再ビルドし、ファームウェアを書き込みます。
 3. シリアルメニューの `h` で同じホスト名を設定し、保存して再起動します。
 
 ## セキュリティ上の注意
@@ -575,7 +587,7 @@ HTTPS 用の自己署名証明書（EC P-256、有効期間 2 年、SAN: `ftx-1c
   - `heap_min` が数 KB まで下がっている: 内部 RAM の不足です。TLS バッファを必要なときだけ確保する設定（`CONFIG_MBEDTLS_DYNAMIC_BUFFER`）を既定で有効にしています。
   - `stream.max_send_ms` が約 330 ms（リングバッファ 64 KB 分）を超える、または `rssi` が -75 dBm より悪い: Wi-Fi の電波状況を確認してください。
   - ブラウザのコンソールで `audioDiag` を実行すると、受信待ち（`maxReadMs`）とブラウザ側の処理時間（`maxProcMs`）を見られます。
-- `ftx-1c.local` が開けない: 同じ LAN／サブネットにあるか確認し、ログの IP アドレスで直接開けるか試してください。
+- `trx-remote.local` が開けない: 同じ LAN／サブネットにあるか確認し、ログの IP アドレスで直接開けるか試してください。
 - ブラウザが接続を拒否する: `http://` ではなく `https://` で開いているか確認してください。
 - デバイスが認識されない: UAC 1.0 でない、またはハブ経由の給電不足の可能性があります。
 - VFO A / VFO B の周波数表示とスコープ（ウォーターフォール）の位置が一致しない: ごくまれに起こります。そんなときは優しい心を持って、**A→B (A=B)** ボタンを押して設定し直してください。
@@ -588,7 +600,7 @@ HTTPS 用の自己署名証明書（EC P-256、有効期間 2 年、SAN: `ftx-1c
 | [`main/app_config.c`](main/app_config.c) | NVS（不揮発性ストレージ）による Wi-Fi / OTA 認証情報の保持と読み出し |
 | [`main/console_menu.c`](main/console_menu.c) | USB UART シリアル対話型設定メニュー（SSID・パスワード・OTA設定） |
 | [`main/usb_audio.c`](main/usb_audio.c) | USB Host と [`espressif/usb_host_uac`](https://components.espressif.com/components/espressif/usb_host_uac) による入力デバイスの検出・ストリーム開始・取得 |
-| [`main/wifi_sta.c`](main/wifi_sta.c) | Wi-Fi ステーション接続（DHCP ホスト名、初期値 `ftx-1c`） |
+| [`main/wifi_sta.c`](main/wifi_sta.c) | Wi-Fi ステーション接続（DHCP ホスト名、初期値 `trx-remote`） |
 | [`main/web_server.c`](main/web_server.c) | HTTPS サーバー（再生ページ、ステータス、PCM / WAV ストリーム）。サーバーとストリームのタスクは、Wi-Fi・USB のあるコア 0 を避け、コア 1 で動かします |
 | [`main/ota.c`](main/ota.c) | OTA 更新（`POST /ota`、Basic 認証、ロールバック） |
 | [`main/cat.c`](main/cat.c) | CAT 制御（CP210x USB シリアル経由、BUSY / S メーター / 周波数 / モード / ボリューム / スケルチの読み出しと設定） |
@@ -614,7 +626,7 @@ HTTPS 用の自己署名証明書（EC P-256、有効期間 2 年、SAN: `ftx-1c
 
 ### ネットワーク
 
-- **mDNS**: IP アドレスの代わりに、`ftx-1c.local` のような名前で機器に届けられるようにする仕組みです。
+- **mDNS**: IP アドレスの代わりに、`trx-remote.local` のような名前で機器に届けられるようにする仕組みです。
 - **DHCP**: ルーターが、IP アドレスを自動で割り当てる機能です。
 - **LAN**: 家庭内のネットワークです。
 - **TLS / HTTPS**: ブラウザと機器の通信を暗号化する仕組みです。

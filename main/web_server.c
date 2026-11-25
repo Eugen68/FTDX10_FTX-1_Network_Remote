@@ -30,14 +30,12 @@
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
 #include <math.h>
-#include "mbedtls/platform_util.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
 #include "usb_audio.h"
 #include "web_auth.h"
 #include "web_server.h"
-#include "web_session_diag.h"
 
 #define WEB_CORE             0
 #define STREAM_CHUNK_BYTES   4096
@@ -638,6 +636,25 @@ static char safe_mode_char(char c)
     return ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z')) ? c : ' ';
 }
 
+static atomic_uint s_tls_opened, s_tls_closed, s_tls_handshake_errors;
+
+static void count_tls_events(esp_https_server_user_cb_arg_t *event)
+{
+    switch (event->user_cb_state) {
+    case HTTPD_SSL_USER_CB_SESS_CREATE:
+        atomic_fetch_add(&s_tls_opened, 1);
+        break;
+    case HTTPD_SSL_USER_CB_SESS_CLOSE:
+        atomic_fetch_add(&s_tls_closed, 1);
+        break;
+    case HTTPD_SSL_USER_CB_SESS_ERROR:
+        atomic_fetch_add(&s_tls_handshake_errors, 1);
+        break;
+    default:
+        break;
+    }
+}
+
 static const char *tx_reason(const tx_state_t *tx, char formatted[32])
 {
     if (!tx->stop_swr) {
@@ -658,11 +675,11 @@ static esp_err_t status_handler(httpd_req_t *req)
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
-                     "{\"streaming\":true,\"sample_rate\":%lu,\"channels\":%u,\"bits\":%u,\"bytes_per_sample\":%u,\"version\":\"%s\",\"build\":\"%s\"",
+                     "{\"name\":\"" NETWORK_REMOTE_NAME "\",\"streaming\":true,\"sample_rate\":%lu,\"channels\":%u,\"bits\":%u,\"bytes_per_sample\":%u,\"version\":\"%s\",\"build\":\"%s\"",
                      (unsigned long)fmt.sample_rate, fmt.channels, fmt.bit_resolution, fmt.subframe_size,
                      FTX1_VERSION, build_info_get());
     } else {
-        n = snprintf(json, sizeof(json), "{\"streaming\":false,\"version\":\"%s\",\"build\":\"%s\"", FTX1_VERSION, build_info_get());
+        n = snprintf(json, sizeof(json), "{\"name\":\"" NETWORK_REMOTE_NAME "\",\"streaming\":false,\"version\":\"%s\",\"build\":\"%s\"", FTX1_VERSION, build_info_get());
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         acc_scope_stats_t acc;
@@ -670,14 +687,13 @@ static esp_err_t status_handler(httpd_req_t *req)
         char acc_reason[2 * sizeof(acc.reason) + 1];
         json_escape(acc.reason, acc_reason, sizeof(acc_reason));
         const uint64_t usb_in_dhz = usb_input_rate_dhz();
-        const web_session_stats_t sessions = web_session_stats();
         wifi_ap_record_t ap;
         const int rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
         // heap_* include PSRAM when it is enabled; int_* are the internal RAM only
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"boot_id\":%lu,\"uptime_s\":%lu,\"heap_free\":%lu,\"heap_min\":%lu,\"heap_block\":%lu,"
                       "\"int_free\":%lu,\"int_min\":%lu,\"int_block\":%lu,\"rssi\":%d,"
-                      "\"conn_opened\":%u,\"conn_closed\":%u,\"conn_lru_purges\":%u,\"tls_handshake_errors\":%u,"
+                      "\"conn_opened\":%u,\"conn_closed\":%u,\"tls_handshake_errors\":%u,"
                       "\"stream\":{\"active\":%s,\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
                       "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu,"
                       "\"usb_bus_resets\":%lu,\"rx_paused\":%s},"
@@ -693,7 +709,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
                       (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                       rssi,
-                      sessions.opened, sessions.closed, sessions.lru_purges, sessions.handshake_errors,
+                      atomic_load(&s_tls_opened), atomic_load(&s_tls_closed), atomic_load(&s_tls_handshake_errors),
                       atomic_load(&s_stream_active) ? "true" : "false",
                       (unsigned long)s_st_starts, (unsigned long)s_st_chunks,
                       (unsigned long)s_st_usb_timeouts, (unsigned long)s_st_slow_sends,
@@ -758,20 +774,15 @@ static esp_err_t status_handler(httpd_req_t *req)
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const cat_write_stats_t cat = cat_get_write_stats();
-        const tx_usb_test_state_t test = tx_usb_test_state();
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"cat_write\":{\"budget_ms\":%u,\"keyed_poll_budget_ms\":%u,"
                       "\"all\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
                       "\"keyed\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
-                      "\"meters\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
-                      "\"usb_test\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u}},"
-                      "\"usb_test\":{\"active\":%s,\"left_s\":%u,\"rate\":%lu,\"reason\":\"%s\"}}",
+                      "\"meters\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u}}}",
                       cat.budget_ms, cat.keyed_poll_budget_ms, cat.all.calls, cat.all.timeouts, cat.all.over_budget, cat.all.max_us,
                       cat.keyed.calls, cat.keyed.timeouts, cat.keyed.over_budget, cat.keyed.max_us,
-                      cat.meters.calls, cat.meters.timeouts, cat.meters.over_budget, cat.meters.max_us,
-                      cat.usb_test.calls, cat.usb_test.timeouts, cat.usb_test.over_budget, cat.usb_test.max_us,
-                      test.active ? "true" : "false", test.left_s, (unsigned long)test.rate, test.reason);
+                      cat.meters.calls, cat.meters.timeouts, cat.meters.over_budget, cat.meters.max_us);
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const tx_voice_stats_t voice = tx_voice_stats();
@@ -1280,42 +1291,6 @@ static bool read_body(httpd_req_t *req, char *buf, size_t buf_size)
     return strlen(buf) == total;   // an embedded NUL would hide data from the parser
 }
 
-static esp_err_t usb_test_handler(httpd_req_t *req)
-{
-    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, true)) {
-        return ESP_OK;
-    }
-    char query[32];
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
-        (strcmp(query, "usb_test=1") != 0 && strcmp(query, "usb_test=1&rate=44100") != 0)) {
-        httpd_resp_set_hdr(req, "Connection", "close");
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Expected USB test query");
-    }
-
-    char body[192];
-    tx_ws_message_t auth = {0};
-    const bool parsed = read_body(req, body, sizeof(body)) &&
-                        parse_tx_message(body, &auth) && strcmp(auth.type, "tx_auth") == 0;
-    mbedtls_platform_zeroize(body, sizeof(body));
-    const bool authorized = parsed && web_auth_tx_check(req, auth.pass);
-    mbedtls_platform_zeroize(&auth, sizeof(auth));
-    web_auth_set_common_headers(req);
-    if (!authorized) {
-        httpd_resp_set_hdr(req, "Connection", "close");
-        httpd_resp_set_status(req, "403 Forbidden");
-        return httpd_resp_sendstr(req, "TX authorization refused");
-    }
-
-    const esp_err_t err = tx_usb_test_start(strcmp(query, "usb_test=1") == 0 ? 48000 : 44100);
-    if (err != ESP_OK) {
-        httpd_resp_set_status(req, "409 Conflict");
-        return httpd_resp_sendstr(req, esp_err_to_name(err));
-    }
-    httpd_resp_set_status(req, "202 Accepted");
-    httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, "{\"usb_test\":\"started\",\"duration_s\":20}");
-}
-
 static bool content_type_is_json(httpd_req_t *req)
 {
     char type[48];
@@ -1434,7 +1409,6 @@ static esp_err_t reboot_handler(httpd_req_t *req)
     web_auth_set_common_headers(req);
     httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_set_type(req, "application/json");
-    web_session_close_reason(req, "reboot");
     ESP_LOGI(TAG, "Reboot requested via web API");
     httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"Rebooting...\"}", HTTPD_RESP_USE_STRLEN);
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -1564,7 +1538,7 @@ static esp_err_t wav_handler(httpd_req_t *req)
 }
 
 // ---- Plain HTTP on port 80: only a redirect to HTTPS ---------------------------------------------------
-// Typing just the IP address (or ftx-1c.local) makes a browser try http:// first, where nothing answered.
+// Typing just the IP address (or trx-remote.local) makes a browser try http:// first, where nothing answered.
 // This server answers every request with 301 to the same host over https, and does nothing else: no page,
 // no data, no authentication (the HTTPS server asks for it).
 
@@ -1667,7 +1641,7 @@ esp_err_t web_server_start(void)
 {
     s_boot_id = esp_random();
     httpd_ssl_config_t config = HTTPD_SSL_CONFIG_DEFAULT();
-    config.user_cb = web_session_tls_event;
+    config.user_cb = count_tls_events;
     config.servercert = servercert_pem_start;
     config.servercert_len = servercert_pem_end - servercert_pem_start;
     config.prvtkey_pem = prvtkey_pem_start;
@@ -1699,7 +1673,6 @@ esp_err_t web_server_start(void)
         {.uri = "/tx_mic.js",  .method = HTTP_GET,  .handler = tx_mic_handler},
         {.uri = "/map",        .method = HTTP_GET,  .handler = map_handler},
         {.uri = "/status",     .method = HTTP_GET,  .handler = status_handler},
-        {.uri = "/status",     .method = HTTP_POST, .handler = usb_test_handler},
         {.uri = "/cat",        .method = HTTP_GET,  .handler = cat_handler},
         {.uri = "/cat",        .method = HTTP_POST, .handler = cat_post_handler},
         {.uri = "/reboot",     .method = HTTP_POST, .handler = reboot_handler},
@@ -1714,8 +1687,6 @@ esp_err_t web_server_start(void)
         ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &uris[i]), TAG, "register handler");
     }
     ESP_RETURN_ON_ERROR(ota_register(server), TAG, "register ota");
-    ESP_RETURN_ON_ERROR(httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, web_session_unknown_route), TAG, "trace 404");
-    ESP_RETURN_ON_ERROR(httpd_register_err_handler(server, HTTPD_405_METHOD_NOT_ALLOWED, web_session_unknown_route), TAG, "trace 405");
     ESP_LOGI(TAG, "HTTPS server started on port %d", config.port_secure);
     redirect_server_start();
     web_auth_log_startup();

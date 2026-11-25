@@ -2,7 +2,8 @@
 # Generated at configure time into the build directory (already git-ignored), so the private
 # key can never be committed. Note: `idf.py fullclean` / `set-target` removes it and the next
 # build issues a new certificate, so the browser warning has to be accepted again.
-set(CERT_DIR "${CMAKE_BINARY_DIR}/certs")
+# Use a new directory so an existing build cannot reuse the old host certificate.
+set(CERT_DIR "${CMAKE_BINARY_DIR}/certs/network_remote")
 set(CERT_FILE "${CERT_DIR}/servercert.pem")
 set(KEY_FILE "${CERT_DIR}/prvtkey.pem")
 
@@ -16,8 +17,8 @@ if(NOT EXISTS "${CERT_FILE}" OR NOT EXISTS "${KEY_FILE}")
     execute_process(
         COMMAND ${OPENSSL_EXECUTABLE} req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes
                 -keyout "${KEY_FILE}" -out "${CERT_FILE}" -days 730
-                -subj "/O=FTX-1 USB Audio Streamer/CN=ftx-1c.local"
-                -addext "subjectAltName=DNS:ftx-1c.local,DNS:ftx-1c"
+                -subj "/O=FTDX10 FTX-1 Network Remote/CN=trx-remote.local"
+                -addext "subjectAltName=DNS:trx-remote.local,DNS:trx-remote,DNS:ftx-1c.local"
         RESULT_VARIABLE cert_result
         ERROR_VARIABLE cert_error)
     if(NOT cert_result EQUAL 0)
@@ -26,7 +27,7 @@ if(NOT EXISTS "${CERT_FILE}" OR NOT EXISTS "${KEY_FILE}")
     file(CHMOD "${KEY_FILE}" PERMISSIONS OWNER_READ OWNER_WRITE)
 endif()
 
-idf_component_register(SRCS "web_auth.c" "web_session_diag.c" "console_menu.c" "app_config.c" "main.c" "usb_audio.c" "wifi_sta.c" "web_server.c" "ota.c" "cat.c" "tx.c" "tx_swr.c" "tx_tone.c" "tx_voice.c" "acc_scope.c" "acc_frame.c" "build_info.c"
+idf_component_register(SRCS "web_auth.c" "console_menu.c" "app_config.c" "main.c" "usb_audio.c" "wifi_sta.c" "web_server.c" "ota.c" "cat.c" "tx.c" "tx_swr.c" "tx_tone.c" "tx_voice.c" "acc_scope.c" "acc_frame.c" "build_info.c"
                     INCLUDE_DIRS "."
                     PRIV_REQUIRES esp-tls esp_wifi esp_netif esp_event nvs_flash esp_https_server espressif__mdns lwip
                                   app_update esp_app_format mbedtls esp_timer espressif__usb espressif__usb_host_cdc_acm
@@ -48,12 +49,6 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION)
         xRingbufferCreate=ftx_uac_ring_create
         vRingbufferDelete=ftx_uac_ring_delete
         usb_host_transfer_submit=ftx_uac_transfer_submit)
-
-    # Temporary TLS diagnostics for the repeated handshakes. Remove these
-    # wrappers and their implementations once the cause is confirmed.
-    foreach(symbol httpd_sess_close_lru httpd_sess_close_lru_direct httpd_queue_work httpd_sess_set_recv_override)
-        target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=${symbol}")
-    endforeach()
 
     file(GLOB BUILD_STAMP_DEPS "${CMAKE_CURRENT_LIST_DIR}/*.c" "${CMAKE_CURRENT_LIST_DIR}/*.h"
                                "${CMAKE_CURRENT_LIST_DIR}/*.html" "${CMAKE_CURRENT_LIST_DIR}/*.js")
