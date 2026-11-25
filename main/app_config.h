@@ -25,8 +25,8 @@ extern "C" {
 #define APP_CONFIG_WEB_PASS_MAX_LEN 64
 #define APP_CONFIG_HOSTNAME_MAX_LEN 63   /* one DNS label */
 
-/** Host name used while none is stored in NVS (reachable as https://ftx-1c.local/) */
-#define APP_CONFIG_DEFAULT_HOSTNAME "ftx-1c"
+/** Host name used while none is stored in NVS (reachable as https://trx-remote.local/) */
+#define APP_CONFIG_DEFAULT_HOSTNAME "trx-remote"
 
 /** Shortest accepted OTA / web password when it is entered on the console */
 #define APP_CONFIG_MIN_SECRET_LEN   12

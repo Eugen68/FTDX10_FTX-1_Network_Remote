@@ -17,7 +17,7 @@ extern "C" {
 /**
  * @brief Connect to the Wi-Fi access point stored in NVS and wait for an IP address
  *
- * The host name for DHCP comes from app_config_t.hostname (default "ftx-1c").
+ * The host name for DHCP comes from app_config_t.hostname (default "trx-remote").
  *
  * NVS must be initialised before calling this function. After the first successful
  * connection the station keeps reconnecting automatically.

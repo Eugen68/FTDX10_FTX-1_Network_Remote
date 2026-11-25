@@ -1,15 +1,15 @@
 @echo off
 setlocal
 rem ============================================================
-rem  FTX-1 Companion - scriere firmware pe ESP32-S3 (portul COM)
+rem  FTDX10 / FTX-1 Network Remote - scriere firmware pe ESP32-S3 (portul COM)
 rem  Pune acest fisier in acelasi folder cu:
-rem    ftx1_companion_ota.bin, ota_data_initial.bin
-rem    (si ftx1_companion-merged.bin pentru o placa noua)
+rem    network_remote_ota.bin, ota_data_initial.bin
+rem    (si network_remote-merged.bin pentru o placa noua)
 rem ============================================================
 cd /d "%~dp0"
 
 echo.
-echo  FTX-1 Companion - scriere firmware
+echo  FTDX10 / FTX-1 Network Remote - scriere firmware
 echo  ----------------------------------
 echo  Inainte: inchide Tera Term si scoate cablul spre radio din portul USB.
 echo  Placa se leaga la PC doar pe portul COM.
@@ -77,8 +77,8 @@ set /p "MODE=Alege 1, 2 sau 3 (Enter = 1): "
 if "%MODE%"=="2" goto :full
 if "%MODE%"=="3" goto :parts
 
-if not exist "ftx1_companion_ota.bin" (
-    echo [EROARE] Lipseste ftx1_companion_ota.bin in acest folder.
+if not exist "network_remote_ota.bin" (
+    echo [EROARE] Lipseste network_remote_ota.bin in acest folder.
     goto :end
 )
 if not exist "ota_data_initial.bin" (
@@ -87,11 +87,11 @@ if not exist "ota_data_initial.bin" (
 )
 echo.
 echo Scriu aplicatia pe %PORT% (setarile raman)...
-%PY% -m esptool --chip esp32s3 -p %PORT% -b 460800 write-flash 0xf000 ota_data_initial.bin 0x20000 ftx1_companion_ota.bin
+%PY% -m esptool --chip esp32s3 -p %PORT% -b 460800 write-flash 0xf000 ota_data_initial.bin 0x20000 network_remote_ota.bin
 goto :result
 
 :parts
-for %%F in (bootloader.bin partition-table.bin ota_data_initial.bin ftx1_companion_ota.bin) do (
+for %%F in (bootloader.bin partition-table.bin ota_data_initial.bin network_remote_ota.bin) do (
     if not exist "%%F" (
         echo [EROARE] Lipseste %%F in acest folder.
         goto :end
@@ -99,12 +99,12 @@ for %%F in (bootloader.bin partition-table.bin ota_data_initial.bin ftx1_compani
 )
 echo.
 echo Scriu bootloader, tabela de partitii, otadata si aplicatia pe %PORT% (setarile din NVS raman)...
-%PY% -m esptool --chip esp32s3 -p %PORT% -b 460800 write-flash 0x0 bootloader.bin 0x8000 partition-table.bin 0xf000 ota_data_initial.bin 0x20000 ftx1_companion_ota.bin
+%PY% -m esptool --chip esp32s3 -p %PORT% -b 460800 write-flash 0x0 bootloader.bin 0x8000 partition-table.bin 0xf000 ota_data_initial.bin 0x20000 network_remote_ota.bin
 goto :result
 
 :full
-if not exist "ftx1_companion-merged.bin" (
-    echo [EROARE] Lipseste ftx1_companion-merged.bin in acest folder.
+if not exist "network_remote-merged.bin" (
+    echo [EROARE] Lipseste network_remote-merged.bin in acest folder.
     goto :end
 )
 echo.
@@ -113,7 +113,7 @@ set "OK=n"
 set /p "OK=Continui? (d/n): "
 if /i not "%OK%"=="d" goto :end
 echo Scriu firmware-ul complet pe %PORT%...
-%PY% -m esptool --chip esp32s3 -p %PORT% -b 460800 write-flash 0x0 ftx1_companion-merged.bin
+%PY% -m esptool --chip esp32s3 -p %PORT% -b 460800 write-flash 0x0 network_remote-merged.bin
 
 :result
 if errorlevel 1 (

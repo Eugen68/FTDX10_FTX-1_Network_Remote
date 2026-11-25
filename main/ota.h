@@ -18,7 +18,7 @@ extern "C" {
 /**
  * @brief Register POST /ota on the HTTPS server
  *
- * The request body is the raw application image (build/ftx1_companion.bin). It is protected by HTTP
+ * The request body is the raw application image (build/network_remote.bin). It is protected by HTTP
  * Basic authentication with the OTA credentials saved in NVS (user "ota" unless changed) and, with an
  * empty OTA password, OTA is disabled. After a valid image is written, the device reboots into it.
  */

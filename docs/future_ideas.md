@@ -1,6 +1,6 @@
 # Future Improvement Ideas & Technical Notes
 
-This document collects technical evaluations, architectural notes, and ideas for future improvements to the FTX-1 Network Companion.
+This document collects technical evaluations, architectural notes, and ideas for future improvements to the FTDX10 / FTX-1 Network Remote.
 
 ---
 

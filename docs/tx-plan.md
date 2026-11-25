@@ -16,7 +16,7 @@ HTTPS: receive audio, CAT control, an FT8 decoder in the browser. Today it is **
 documented safety property (README, "Restrictions that keep the radio from transmitting"). This plan adds
 transmit in a way that keeps the radio safe.
 
-**Repository:** `Eugen68/FTX-1_Network_Companion`, default branch `main`. Fork of
+**Repository:** `Eugen68/FTDX10_FTX-1_Network_Remote`, default branch `main`. Fork of
 `pizzamax/FTX-1_Network_Companion` (licence PolyForm Noncommercial 1.0.0; keep `LICENSE` and `NOTICE`).
 
 **Code you will touch**
@@ -50,7 +50,7 @@ transmit in a way that keeps the radio safe.
 
 **Build and test environment**
 
-- ESP-IDF **v6.1**, target `esp32s3`. In the cloud environment `ftx-1_network_companion` it is installed at
+- ESP-IDF **v6.1**, target `esp32s3`. In the build environment it is installed at
   `~/esp/esp-idf` by the environment's setup script; `. ~/esp/esp-idf/export.sh`.
 - `idf.py build` must finish with **no warnings in `main/`**. `idf.py merge-bin` for a full image.
 - `test/host_cat/run.sh` must pass; extend it (see each phase).
@@ -60,7 +60,7 @@ transmit in a way that keeps the radio safe.
   stream honouring `?rate=`). No console errors.
 - You cannot reach the radio. The owner tests on hardware and reports `/status`, the serial log
   (115200 bps on the COM port) and the browser console (`audioDiag`).
-- Deliver firmware to the owner as `build/ftx1_companion.bin` (renamed `ftx1_companion_ota.bin`) plus
+- Deliver firmware to the owner as `build/network_remote.bin` (renamed `network_remote_ota.bin`) plus
   `build/ota_data_initial.bin`; he flashes them with `tools/scrie_firmware.bat` option 1, which keeps the
   Wi-Fi and passwords. **Never** hand him the merged image for an update: it erases NVS.
 - Partitions: `partitions.csv`, two **4 MB** OTA app slots (the app uses about 39 %), NVS at 0x9000, an 8 MB `storage`
@@ -74,8 +74,8 @@ transmit in a way that keeps the radio safe.
   partition table in the PR (16 MB flash allows much larger slots); changing it needs one serial flash.
 
 **Git workflow.** One branch per phase from up-to-date `main` (`tx-phase-1-ptt`, ...). Small commits with
-real messages. Push, open a PR to `main` in `Eugen68/FTX-1_Network_Companion` (via `gh api
-repos/Eugen68/FTX-1_Network_Companion/pulls`), list in the PR what was tested and what needs the radio. Do
+real messages. Push, open a PR to `main` in `Eugen68/FTDX10_FTX-1_Network_Remote` (via `gh api
+repos/Eugen68/FTDX10_FTX-1_Network_Remote/pulls`), list in the PR what was tested and what needs the radio. Do
 not merge yourself.
 
 ---

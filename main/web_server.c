@@ -675,11 +675,11 @@ static esp_err_t status_handler(httpd_req_t *req)
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
-                     "{\"streaming\":true,\"sample_rate\":%lu,\"channels\":%u,\"bits\":%u,\"bytes_per_sample\":%u,\"version\":\"%s\",\"build\":\"%s\"",
+                     "{\"name\":\"" NETWORK_REMOTE_NAME "\",\"streaming\":true,\"sample_rate\":%lu,\"channels\":%u,\"bits\":%u,\"bytes_per_sample\":%u,\"version\":\"%s\",\"build\":\"%s\"",
                      (unsigned long)fmt.sample_rate, fmt.channels, fmt.bit_resolution, fmt.subframe_size,
                      FTX1_VERSION, build_info_get());
     } else {
-        n = snprintf(json, sizeof(json), "{\"streaming\":false,\"version\":\"%s\",\"build\":\"%s\"", FTX1_VERSION, build_info_get());
+        n = snprintf(json, sizeof(json), "{\"name\":\"" NETWORK_REMOTE_NAME "\",\"streaming\":false,\"version\":\"%s\",\"build\":\"%s\"", FTX1_VERSION, build_info_get());
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         acc_scope_stats_t acc;
@@ -1538,7 +1538,7 @@ static esp_err_t wav_handler(httpd_req_t *req)
 }
 
 // ---- Plain HTTP on port 80: only a redirect to HTTPS ---------------------------------------------------
-// Typing just the IP address (or ftx-1c.local) makes a browser try http:// first, where nothing answered.
+// Typing just the IP address (or trx-remote.local) makes a browser try http:// first, where nothing answered.
 // This server answers every request with 301 to the same host over https, and does nothing else: no page,
 // no data, no authentication (the HTTPS server asks for it).
 

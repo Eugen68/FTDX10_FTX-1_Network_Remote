@@ -2,7 +2,8 @@
 # Generated at configure time into the build directory (already git-ignored), so the private
 # key can never be committed. Note: `idf.py fullclean` / `set-target` removes it and the next
 # build issues a new certificate, so the browser warning has to be accepted again.
-set(CERT_DIR "${CMAKE_BINARY_DIR}/certs")
+# Use a new directory so an existing build cannot reuse the old host certificate.
+set(CERT_DIR "${CMAKE_BINARY_DIR}/certs/network_remote")
 set(CERT_FILE "${CERT_DIR}/servercert.pem")
 set(KEY_FILE "${CERT_DIR}/prvtkey.pem")
 
@@ -16,8 +17,8 @@ if(NOT EXISTS "${CERT_FILE}" OR NOT EXISTS "${KEY_FILE}")
     execute_process(
         COMMAND ${OPENSSL_EXECUTABLE} req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes
                 -keyout "${KEY_FILE}" -out "${CERT_FILE}" -days 730
-                -subj "/O=FTX-1 USB Audio Streamer/CN=ftx-1c.local"
-                -addext "subjectAltName=DNS:ftx-1c.local,DNS:ftx-1c"
+                -subj "/O=FTDX10 FTX-1 Network Remote/CN=trx-remote.local"
+                -addext "subjectAltName=DNS:trx-remote.local,DNS:trx-remote,DNS:ftx-1c.local"
         RESULT_VARIABLE cert_result
         ERROR_VARIABLE cert_error)
     if(NOT cert_result EQUAL 0)

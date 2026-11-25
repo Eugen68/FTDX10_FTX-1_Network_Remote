@@ -4,6 +4,8 @@
 
 #pragma once
 
+#define NETWORK_REMOTE_NAME "FTDX10 / FTX-1 Network Remote"
+
 // Firmware version, shown in the GUI header and returned by /status
 #define FTX1_VERSION "1.9.32-yo9va"
 

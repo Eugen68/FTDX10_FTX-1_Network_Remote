@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  Main page of the FTX-1 Network Companion, served by the device at https://<host name>.local/.
+  Main page of the FTDX10 / FTX-1 Network Remote, served by the device at https://<host name>.local/.
   Shows the radio's state (frequency, mode, S meter, ...), sends CAT controls through POST /cat,
   plays the radio's audio from /stream.pcm, and decodes FT8 from that audio in the browser.
   All scripts are inline; the only external resource is the Google Fonts stylesheet.
@@ -9,7 +9,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FTX-1 Companion</title>
+<title>FTDX10 / FTX-1 Network Remote</title>
 <style>
   /* Phones: do not let the browser enlarge text by itself ("font boosting" in Chrome on Android) */
   html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
@@ -1025,7 +1025,7 @@
   <!-- Header -->
   <div class="rig-header">
     <div class="brand-logo">
-      <div class="brand-title" id="brandTitle">FTX-1 Companion</div>
+      <div class="brand-title" id="brandTitle">FTDX10 / FTX-1 Network Remote</div>
       <div class="brand-build" id="buildInfo" title="Firmware build time"></div>
     </div>
     <span id="catCommandError" role="status" hidden></span>
@@ -4225,10 +4225,6 @@ function applyRigProfile(d) {
   const key = [d.rig, d.dual_rx, d.c4fm, d.sq_max, d.freq_max].join('|');
   if (key === rigProfileKey) return;
   rigProfileKey = key;
-
-  const name = d.rig === 'UNKNOWN' ? 'Radio' : d.rig;
-  document.getElementById('brandTitle').textContent = name + ' Companion';
-  document.title = name + ' Companion';
 
   const single = d.dual_rx === false;
   document.body.classList.toggle('single-rx', single);

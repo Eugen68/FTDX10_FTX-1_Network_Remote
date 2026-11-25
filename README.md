@@ -1,13 +1,13 @@
 | Supported Targets | ESP32-S3 |
 | ----------------- | -------- |
 
-# FTX-1 Network Companion
+# FTDX10 / FTX-1 Network Remote
 
 *Built for hams by a lazy ham*
 
 **English** | [日本語](README.ja.md)
 
-![FTX-1 Network Companion browser UI: S-meters, VFO display, scope and FT8 decoder (callsigns in the screenshot are dummies)](docs/screenshot.png)
+![FTDX10 / FTX-1 Network Remote browser UI: S-meters, VFO display, scope and FT8 decoder (callsigns in the screenshot are dummies)](docs/screenshot.png)
 
 Propagation never sits still, and sometimes you just can't stop wondering what the bands are doing right now. Is 20 m open? Is that station still coming through?
 You'd like to know, but getting up and walking to the shack, let alone settling in front of the radio, feels like too much effort.
@@ -16,6 +16,10 @@ This is built for exactly those moments. The rig stays where it is. From anywher
 Do it from the sofa, or next to your after-dinner coffee. For the gloriously lazy ham, it is the right tool.
 
 The firmware starts in receive-only mode. Remote push-to-talk is available on the FTX-1 and FTDX10 after it is enabled in the serial menu. See [Transmit](#transmit).
+
+## Based on FTX-1 Network Companion by pizzamax
+
+This project is based on [FTX-1 Network Companion by pizzamax](https://github.com/pizzamax/FTX-1_Network_Companion). See `LICENSE` and `NOTICE` for licensing and attribution.
 
 ## Overview
 
@@ -163,7 +167,7 @@ build environment on macOS, Linux, and Windows.
 
 ```bash
 # 1. Get the repository
-git clone <URL of this repository>
+git clone https://github.com/Eugen68/FTDX10_FTX-1_Network_Remote
 
 # 2. Open the folder in VS Code and choose "Reopen in Container"
 #    The first run downloads the Docker image (espressif/idf:v6.1), which takes a few minutes
@@ -195,8 +199,8 @@ git clone -b v6.1 --recursive https://github.com/espressif/esp-idf.git
 cd esp-idf && ./install.sh esp32s3
 
 # 2. Get the repository
-git clone <URL of this repository>
-cd ftx1_companion
+git clone https://github.com/Eugen68/FTDX10_FTX-1_Network_Remote
+cd FTDX10_FTX-1_Network_Remote
 
 # 3. Activate the ESP-IDF environment
 source ~/esp/esp-idf/export.sh        # bash / zsh
@@ -209,7 +213,7 @@ idf.py build
 idf.py -p PORT flash monitor
 ```
 
-> **Note**: Running `idf.py set-target` or `idf.py fullclean` regenerates the TLS certificate (`build/certs/`).
+> **Note**: Running `idf.py set-target` or `idf.py fullclean` regenerates the TLS certificate (`build/certs/network_remote/`).
 > Accept the certificate in the browser again afterwards.
 
 ## Changing the flash size
@@ -260,7 +264,7 @@ idf.py -p PORT flash monitor
 
 #### Flashing on Windows with a double click
 
-[`tools/scrie_firmware.bat`](tools/scrie_firmware.bat) (Romanian prompts) installs esptool if needed, lists the COM ports, and either updates the app while **keeping** the Wi-Fi and passwords (`ota_data_initial.bin` at 0xf000 and the app at 0x20000) or writes the whole merged image (which **erases** the settings, for a new board). Put it in the folder with the `.bin` files from `build/`, with the merged image renamed to `ftx1_companion-merged.bin` and the app to `ftx1_companion_ota.bin`.
+[`tools/scrie_firmware.bat`](tools/scrie_firmware.bat) (Romanian prompts) installs esptool if needed, lists the COM ports, and either updates the app while **keeping** the Wi-Fi and passwords (`ota_data_initial.bin` at 0xf000 and the app at 0x20000) or writes the whole merged image (which **erases** the settings, for a new board). Put it in the folder with the `.bin` files from `build/`, with `network_remote-merged.bin` from the merge command below and a copy of `network_remote.bin` named `network_remote_ota.bin`.
 
 > Writing the merged image at 0x0 also overwrites the NVS partition (0x9000), so the settings are lost. To update a configured board, write only the app, or use OTA.
 
@@ -271,11 +275,11 @@ If the USB serial port is not visible from inside the Dev Container, build insid
 ```bash
 # Inside the container (build, and create the file used for flashing)
 idf.py build
-idf.py merge-bin     # creates build/merged-binary.bin
+idf.py merge-bin -o network_remote-merged.bin  # creates build/network_remote-merged.bin
 
 # On the PC side (outside the container). Install esptool once, then flash
 python3 -m pip install esptool
-python3 -m esptool --chip esp32s3 -p PORT write-flash 0x0 build/merged-binary.bin
+python3 -m esptool --chip esp32s3 -p PORT write-flash 0x0 build/network_remote-merged.bin
 ```
 
 After flashing, open the ESP32-S3's port with any serial monitor you like, such as Tera Term (115200 bps).
@@ -290,7 +294,7 @@ After flashing, or at boot, connect a PC to the USB-UART port and open a serial 
 
 ```text
 **************************************************
-*       FTX-1 Companion Configuration Menu       *
+*       FTDX10 / FTX-1 Network Remote Configuration Menu       *
 **************************************************
 
 ==================================================
@@ -302,7 +306,7 @@ After flashing, or at boot, connect a PC to the USB-UART port and open a serial 
  4) OTA Password     : (empty / disabled)
  9) Web User ID      : admin
  0) Web Password     : (empty / disabled)
- h) Host name        : ftx-1c.local
+ h) Host name        : trx-remote.local
 ==================================================
 Options:
   1: Set Wi-Fi SSID
@@ -330,7 +334,7 @@ Then set the following as needed.
 
 - `9`: the web user ID (default `admin`)
 - `3` / `4`: the OTA update user ID and password (the password must be at least 12 characters)
-- `h`: the host name (the default is `ftx-1c`; see "Host name (mDNS)" below)
+- `h`: the host name (the default is `trx-remote`; see "Host name (mDNS)" below)
 
 Finally, enter `6` to run "Save to NVS and Restart device". **Nothing takes effect until you save with `6`.**
 
@@ -342,9 +346,9 @@ Finally, enter `6` to run "Save to NVS and Restart device". **Nothing takes effe
 
 ### 3. Check it in the browser
 
-1. After the restart the device connects to Wi-Fi, and the serial monitor log shows `Got IP: x.x.x.x` and `Open https://ftx-1c.local/`.
+1. After the restart the device connects to Wi-Fi, and the serial monitor log shows `Got IP: x.x.x.x` and `Open https://trx-remote.local/`.
 2. Turn on the FTX-1 and connect the ESP32-S3's **USB-OTG port** to a USB port on the FTX-1 (see "How to connect it").
-3. In a browser on a PC / Mac on the same LAN, open `https://ftx-1c.local/` (or `https://<the IP shown in the log>/`). Use `https://`, not `http://`.
+3. In a browser on a PC / Mac on the same LAN, open `https://trx-remote.local/` (or `https://<the IP shown in the log>/`). Use `https://`, not `http://`.
 4. Because the certificate is self-signed, **a warning appears**. This is your own device on your own LAN, so check the details and continue (accept) (see "Self-signed certificate").
 5. You are asked for a user ID and password. The ID is `admin` (or the ID you set with `9`), and the password is the web password you set with `0`.
 6. Press **POWER / PLAY** to start playing the received audio. The button changes to `PWR OFF / STOP`; press the same button again to stop.
@@ -353,9 +357,11 @@ If it does not work, see "Troubleshooting".
 
 ## Host name (mDNS)
 
-While no host name is stored in NVS (first boot, or after erasing the configuration with `8`), the host name is `ftx-1c`.
-It is reachable at `https://ftx-1c.local/` through **mDNS** (Multicast DNS: a way to reach a device on the same LAN as "name.local" without a DNS server; using [`espressif/mdns`](https://components.espressif.com/components/espressif/mdns)).
+While no host name is stored in NVS (first boot, or after erasing the configuration with `8`), the host name is `trx-remote`.
+It is reachable at `https://trx-remote.local/` through **mDNS** (Multicast DNS: a way to reach a device on the same LAN as "name.local" without a DNS server; using [`espressif/mdns`](https://components.espressif.com/components/espressif/mdns)).
 The same name is also sent as the DHCP host name (the name shown in your router's client list).
+On upgrade, a stored `ftx-1c` factory default is used as `trx-remote` in memory. Custom host names
+are kept.
 
 ### Changing the host name (serial menu)
 
@@ -365,20 +371,20 @@ The same name is also sent as the DHCP host name (the name shown in your router'
 
 ```text
 Enter selection (0-9, h): h
-Enter Host name without ".local" [Current: ftx-1c] (a-z, 0-9, '-'; DEFAULT to reset; Enter to keep): radio-shack
+Enter Host name without ".local" [Current: trx-remote] (a-z, 0-9, '-'; DEFAULT to reset; Enter to keep): radio-shack
 -> Host name set to: radio-shack.local
 ```
 
 - Allowed: lowercase `a-z`, `0-9` and `-`; no `-` at the start or end; up to 63 characters. Names with uppercase letters, `_`, spaces or `.` are rejected ("Rejected" is printed) and the old value is kept.
-- Enter `DEFAULT` to go back to `ftx-1c` (option `8`, "Erase NVS configuration", also resets it together with the other settings).
-- If the stored value is invalid for any reason, it is replaced by `ftx-1c` at boot.
+- Enter `DEFAULT` to go back to `trx-remote` (option `8`, "Erase NVS configuration", also resets it together with the other settings).
+- If the stored value is invalid for any reason, it is replaced by `trx-remote` at boot.
 - The URL is also printed in the boot log as `Open https://<host name>.local/`.
 - Update bookmarks and commands (`ffplay`, `curl`, and so on) to the new name. The old name no longer works.
 
 ### Notes
 
-- **Certificate name**: the certificate SAN (`ftx-1c` / `ftx-1c.local`) is fixed at build time. With a different host name the browser shows a name-mismatch warning in addition to the self-signed one. You can still proceed after checking it; to avoid the warning, see "Using a certificate for another host name" under "Self-signed certificate".
-- **Duplicate names**: if another device with the same name is on the LAN, mDNS may automatically rename this one, for example `ftx-1c-2.local`. When you use several units, give each a different host name.
+- **Certificate name**: the certificate SAN (`trx-remote.local`, `trx-remote`, `ftx-1c.local`) is fixed at build time. With a different host name the browser shows a name-mismatch warning in addition to the self-signed one. You can still proceed after checking it; to avoid the warning, see "Using a certificate for another host name" under "Self-signed certificate".
+- **Duplicate names**: if another device with the same name is on the LAN, mDNS may automatically rename this one, for example `trx-remote-2.local`. When you use several units, give each a different host name.
 - **Browser state**: a new host name is a different site for the browser, so you have to log in (Basic authentication) and accept the certificate again.
 - macOS, iOS, Windows 10 and later, and recent Linux (avahi) resolve `.local` out of the box.
 - Where it does not resolve, use the IP address shown in the log.
@@ -398,12 +404,12 @@ All of them require Basic authentication (see "Security notes" below).
 | `/stream.pcm` | Raw PCM (little endian). The format is reported in the `X-Sample-Rate` / `X-Channels` / `X-Bytes-Per-Sample` headers |
 | `/stream.wav` | With a WAV header (indefinite length). For external players |
 | `POST /ota` | Firmware update (Basic authentication; see "OTA update" below) |
-| `http://…` (port 80) | Redirects every request to the same host over `https://` (so typing just the IP or `ftx-1c.local` works). Serves nothing else and asks for no login |
+| `http://…` (port 80) | Redirects every request to the same host over `https://` (so typing just the IP or `trx-remote.local` works). Serves nothing else and asks for no login |
 
 Example with an external player (48 kHz / 16 bit / mono):
 
 ```
-ffplay -nodisp -tls_verify 0 https://ftx-1c.local/stream.wav
+ffplay -nodisp -tls_verify 0 https://trx-remote.local/stream.wav
 ```
 
 ## The FTDX10's own scope from the ACC socket
@@ -530,7 +536,7 @@ You can rewrite the firmware over the network.
 source ~/esp/esp-idf/export.sh   # not needed inside the Dev Container
 idf.py build
 read -rs PW   # type the password (it is not kept in the command history)
-curl -k -u "ota:$PW" -H "X-Requested-With: ftx1" -X POST --data-binary @build/ftx1_companion.bin https://ftx-1c.local/ota
+curl -k -u "ota:$PW" -H "X-Requested-With: ftx1" -X POST --data-binary @build/network_remote.bin https://trx-remote.local/ota
 unset PW
 ```
 
@@ -550,10 +556,10 @@ The `X-Requested-With: ftx1` header is required as CSRF protection (without it t
 
 ## Self-signed certificate
 
-The self-signed certificate for HTTPS (EC P-256, valid for 2 years, SAN: `ftx-1c` / `ftx-1c.local`) is
-generated automatically with `openssl` into `build/certs/` at build time and embedded in the firmware.
+The self-signed certificate for HTTPS (EC P-256, valid for 2 years, SAN: `trx-remote.local`, `trx-remote`, `ftx-1c.local`) is
+generated automatically with `openssl` into `build/certs/network_remote/` at build time and embedded in the firmware.
 
-- The private key and the certificate are in `build/certs/`, which is in `.gitignore`, so they are not committed.
+- The private key and the certificate are in `build/certs/network_remote/`, which is in `.gitignore`, so they are not committed.
 - Running `idf.py fullclean` or `idf.py set-target` regenerates the certificate, and you must accept the browser warning again.
 - As long as you rebuild in the same build directory, the same certificate is used.
 - TLS 1.2 / 1.3 as provided by mbedTLS is negotiated.
@@ -564,7 +570,7 @@ generated automatically with `openssl` into `build/certs/` at build time and emb
 Changing the host name in the serial menu does not change the certificate SAN. To avoid the name-mismatch warning, regenerate the certificate too:
 
 1. In [`main/CMakeLists.txt`](main/CMakeLists.txt), change `CN=` in `-subj` and `-addext "subjectAltName=..."` to the new host name (for example `DNS:radio-shack.local,DNS:radio-shack`).
-2. Delete `build/certs`, rebuild, and flash the firmware.
+2. Delete `build/certs/network_remote`, rebuild, and flash the firmware.
 3. Set the same host name with `h` in the serial menu, then save and restart.
 
 ## Security notes
@@ -726,7 +732,7 @@ Automatic USB recovery monitors the input stream. Discovery leaves the output st
   - `heap_min` has fallen to a few KB: internal RAM is short. The setting that allocates TLS buffers only when needed (`CONFIG_MBEDTLS_DYNAMIC_BUFFER`) is enabled by default.
   - `stream.max_send_ms` is above about 330 ms (the 64 KB ring buffer), or `rssi` is worse than -75 dBm: check the Wi-Fi signal.
   - Running `audioDiag` in the browser console shows the receive wait (`maxReadMs`) and the browser processing time (`maxProcMs`).
-- `ftx-1c.local` does not open: check that it is on the same LAN / subnet, and try opening the IP address from the log directly.
+- `trx-remote.local` does not open: check that it is on the same LAN / subnet, and try opening the IP address from the log directly.
 - The browser refuses the connection: check that you opened `https://`, not `http://`.
 - The device is not recognized: it may not be UAC 1.0, or a hub may not supply enough power.
 - The scope (waterfall) does not match the frequency shown for VFO A / VFO B: this rarely happens. Please be kind to the rig and press the **A→B (A=B)** button to set the frequencies again.
@@ -739,7 +745,7 @@ Automatic USB recovery monitors the input stream. Discovery leaves the output st
 | [`main/app_config.c`](main/app_config.c) | Wi-Fi / OTA / web credentials kept in NVS (non-volatile storage) |
 | [`main/console_menu.c`](main/console_menu.c) | Interactive configuration menu on the USB UART serial console (SSID, passwords, OTA settings) |
 | [`main/usb_audio.c`](main/usb_audio.c) | USB Host and [`espressif/usb_host_uac`](https://components.espressif.com/components/espressif/usb_host_uac): detects the input device, starts and reads the stream |
-| [`main/wifi_sta.c`](main/wifi_sta.c) | Wi-Fi station connection (DHCP host name `ftx-1c` by default) |
+| [`main/wifi_sta.c`](main/wifi_sta.c) | Wi-Fi station connection (DHCP host name `trx-remote` by default) |
 | [`main/web_server.c`](main/web_server.c) | HTTPS server (player page, status, PCM / WAV streams). The server and the stream task run on core 1, away from Wi-Fi and USB on core 0 |
 | [`main/ota.c`](main/ota.c) | OTA update (`POST /ota`, Basic authentication, rollback) |
 | [`main/cat.c`](main/cat.c) | CAT control (over the CP210x USB serial port: detects the radio from `ID;`, then reads and sets BUSY / S-meter / frequency / mode / volume / squelch with that radio's profile) |
@@ -765,7 +771,7 @@ Short explanations of the technical terms used in this document.
 
 ### Network
 
-- **mDNS**: lets you reach the device by a name such as `ftx-1c.local` instead of an IP address.
+- **mDNS**: lets you reach the device by a name such as `trx-remote.local` instead of an IP address.
 - **DHCP**: the router's function that hands out IP addresses automatically.
 - **LAN**: the network inside your home.
 - **TLS / HTTPS**: encrypts the communication between the browser and the device.
