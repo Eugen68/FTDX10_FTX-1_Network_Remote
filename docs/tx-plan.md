@@ -220,25 +220,36 @@ Goal: know whether the radio exposes a UAC **output** (speaker) interface and it
 
 ### Phase 4: FT8 transmit generated on the device
 
-- Time: SNTP (`esp_netif_sntp`, server configurable, default `pool.ntp.org`); `/status` shows sync state and
-  offset. No FT8 TX while not synced.
-- Vendor **ft8_lib** (MIT, `https://github.com/kgoba/ft8_lib`, the same copy as ftx1-pult
-  `server/ftx/lib`) as an ESP-IDF component `components/ft8_lib` with its `LICENSE`; mention it in
-  `NOTICE`. Use its message packing and `ft8_encode()` to get the 79 tones.
-- GFSK synthesis on the device, ported from ftx1-pult `server/ft8.py` `gfsk()` (BT 2.0, 160 ms symbols, raised
-  cosine ramps), 48 kHz, into a PSRAM buffer (12.64 s ≈ 1.2 MB at 16-bit mono; duplicate to stereo when
-  writing if the device wants 2 channels).
-- Scheduler: key at the slot start (even / odd 15 s slot, chosen in the page) + 0.0 s, audio starts at
-  +0.5 s as WSJT-X does, unkey after the last symbol. Late start allowed only within the first 2 s (send
-  the rest), otherwise wait for the next slot. Uses the Phase 1 state machine (time limit and heartbeat
-  still apply: the page keeps sending heartbeats while FT8 TX is armed).
-- Page: in the FT8 panel, a TX row: message text (validated by the same packer on the device, errors shown),
-  audio frequency (default 1500 Hz, 200–3000), even/odd, "Enable TX" (armed for the next slot), "Halt".
-  Clicking a decoded CQ fills a standard reply. No auto-sequencing in this phase.
-- Remember the DT correction in the page (`ft8DtCorr`, default 0.3 s) only affects display; TX timing uses
-  SNTP time on the device.
-- Owner test: transmit a CQ into a dummy load with a second receiver (or the radio's monitor) decoding it in
-  WSJT-X; DT should be within ±0.2 s.
+- Time: use SNTP (`esp_netif_sntp`, configurable server, default `pool.ntp.org`) as the primary UTC
+  source. If SNTP is unavailable or stale, the active browser may supply UTC over the authenticated
+  control channel. Take several timestamped round trips, prefer the shortest samples and estimate
+  one-way delay from half the round-trip time. Treat browser clock accuracy and network asymmetry as
+  uncertainties. Show the source, sample age, offset estimate and RTT in `/status`. Inhibit FT8 TX
+  when neither source is fresh enough for slot timing.
+- Vendor **ft8_lib** by Karlis Goba (MIT, `https://github.com/kgoba/ft8_lib`, same copy as ftx1-pult
+  `server/ftx/lib`) as `components/ft8_lib`. Include its upstream `LICENSE` and update the existing
+  MIT attribution in `NOTICE` to identify the vendored TX component. Use its message packing and
+  `ft8_encode()` to get the 79 tones.
+- GFSK synthesis on the device, ported from ftx1-pult `server/ft8.py` `gfsk()` (BT 2.0, 160 ms symbols,
+  raised cosine ramps), 48 kHz into PSRAM (12.64 s ≈ 1.2 MB at 16-bit mono; duplicate to stereo when
+  writing if the device wants two channels).
+- Scheduler: use the selected even/odd 15 s UTC slot. Prepare USB audio and key PTT before the first
+  symbol so RF audio starts at **slot +0.5 s**. Measure the USB playback delay on each radio and
+  compensate by submitting samples early. Include the FTX-1 sequence that pauses USB RX before
+  opening USB TX, and restores RX after confirmed unkey. If setup or key confirmation misses the
+  deadline, wait for the next eligible slot so the whole frame is transmitted. Unkey after the last
+  symbol has played.
+- Require the owning page to be active (visible and focused) with a fresh control heartbeat to arm
+  and keep transmitting. Disarm and stop on page blur, hide, disconnect, heartbeat loss or a Phase 1
+  safety trip. Cap a single arming at **three consecutive FT8 transmissions** initially, then require
+  explicit re-arming.
+- Page: in the FT8 panel, a TX row for message text (validated by the packer on the device), audio
+  frequency (default 1500 Hz, 200–3000), even/odd, “Enable TX” and “Halt”. Clicking a decoded CQ
+  fills a standard reply. No auto-sequencing in this phase. The page's `ft8DtCorr` only affects
+  display. TX timing uses the selected UTC source on the device.
+- Owner test: use a dummy load and decode a CQ in WSJT-X on both radios. Verify DT within ±0.2 s,
+  USB delay compensation and return to RX, SNTP loss and browser fallback under network delay, and
+  disarming on page inactivity, lost heartbeat and the consecutive TX cap.
 
 ### Phase 5 (optional, later): FT8 auto-sequencing, logging (ADIF), FT4.
 

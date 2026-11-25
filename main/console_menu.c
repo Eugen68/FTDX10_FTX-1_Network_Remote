@@ -434,7 +434,8 @@ void console_menu_run(void)
             }
             case 'c':
             case 'C': {
-                console_write_str("Replace the HTTPS certificate for this boot? Type 'yes' to confirm: ");
+                console_write_str("Replace the HTTPS certificate saved in NVS? "
+                                  "The new certificate persists across reboots and firmware updates. Type 'yes' to confirm: ");
                 char confirm[8];
                 read_line(confirm, sizeof(confirm), false);
                 if (strcmp(confirm, "yes") == 0) {
