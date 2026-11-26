@@ -19,6 +19,12 @@ void (*g_queue_send_hook)(const void *);
 int64_t g_now_us = 1000000;
 #include "cat.c"   // the real file, built against the stubs in stub/
 #include "tx_swr.h"
+uint8_t g_usb_addrs[10];
+usb_device_desc_t g_usb_desc[128];
+int g_usb_count;
+esp_err_t (*g_cdc_open_hook)(const cdc_acm_host_open_config_t *, cdc_acm_dev_hdl_t *);
+esp_err_t (*g_cdc_close_hook)(cdc_acm_dev_hdl_t);
+esp_err_t (*g_cdc_request_hook)(cdc_acm_dev_hdl_t, uint8_t, uint16_t, uint8_t *);
 uint32_t g_write_timeout_ms;
 int64_t g_write_duration_us;
 esp_err_t g_write_result;
@@ -41,7 +47,7 @@ static bool reject_notch;
 
 static void inject(const char *reply)
 {
-    rx_cb((const uint8_t *)reply, strlen(reply), NULL);
+    rx_cb((const uint8_t *)reply, strlen(reply), (void *)(uintptr_t)atomic_load(&s_cat_session));
 }
 
 static void startup_reply(const char *cmd, size_t len)
@@ -73,6 +79,18 @@ static void startup_reply(const char *cmd, size_t len)
     }
 }
 
+static void usb_added(uint8_t addr)
+{
+    const usb_host_client_event_msg_t event = {.event = USB_HOST_CLIENT_EVENT_NEW_DEV, .new_dev.address = addr};
+    cat_usb_event(&event, NULL);
+}
+
+static void usb_removed(uint8_t addr)
+{
+    const usb_host_client_event_msg_t event = {.event = USB_HOST_CLIENT_EVENT_DEV_REMOVED, .dev_removed.address = addr};
+    cat_usb_event(&event, NULL);
+}
+
 static void test_startup(void)
 {
     s_disconnected = false;
@@ -90,7 +108,7 @@ static void test_startup(void)
           matches_query("ID0840;", 7, "ID;"), "strict numeric ID");
 
     s_cat_addr = 2;
-    cat_new_usb_device((void *)2);
+    usb_added(2);
     g_sent[0] = '\0';
     g_now_us += CAT_SETTLE_US - 1;
     CHECK(cat_tx((void *)1, "ID;") == ESP_ERR_INVALID_STATE && !g_sent[0], "no CAT byte before 3 seconds");
@@ -104,7 +122,7 @@ static void test_startup(void)
     g_sent[0] = '\0';
     CHECK(cat_tx((void *)1, "ID;") == ESP_ERR_INVALID_STATE && !g_sent[0], "no CAT during USB reset");
     cat_usb_reset_end();
-    cat_new_usb_device((void *)2);
+    usb_added(2);
     g_now_us += CAT_SETTLE_US - 1;
     CHECK(cat_tx((void *)1, "ID;") == ESP_ERR_INVALID_STATE && !g_sent[0], "new settling period after reset");
     ++g_now_us;
@@ -133,6 +151,120 @@ static void test_startup(void)
     initialize_reads((void *)1, s_rig);
     CHECK(strstr(g_sent, "AI;") && !strstr(g_sent, "AI1;"), "rejected AI never enables it");
     g_cdc_send_hook = NULL;
+}
+
+static unsigned open_attempts[16], open_attempt_count, closes;
+static uint8_t open_addr;
+static uint32_t mock_baud;
+static bool swap_to_ftx1, fail_first_open, suppress_id;
+
+static esp_err_t swap_open(const cdc_acm_host_open_config_t *config, cdc_acm_dev_hdl_t *out)
+{
+    assert(!open_addr);
+    open_attempts[open_attempt_count++] = config->dev_addr;
+    if (fail_first_open && config->dev_addr == 2) return ESP_ERR_NOT_FOUND;
+    open_addr = config->dev_addr;
+    *out = (void *)(uintptr_t)open_addr;
+    return ESP_OK;
+}
+
+static esp_err_t swap_close(cdc_acm_dev_hdl_t dev)
+{
+    assert(open_addr == (uintptr_t)dev);
+    open_addr = 0;
+    ++closes;
+    return ESP_OK;
+}
+
+static esp_err_t swap_request(cdc_acm_dev_hdl_t dev, uint8_t request, uint16_t length, uint8_t *data)
+{
+    assert(open_addr == (uintptr_t)dev);
+    if (request == CP210X_SET_BAUDRATE && length == sizeof(mock_baud)) memcpy(&mock_baud, data, length);
+    return ESP_OK;
+}
+
+static void swap_reply(const char *cmd, size_t length)
+{
+    assert(cat_usb_ready());
+    if (suppress_id || length != 3 || memcmp(cmd, "ID;", 3) != 0) return;
+    const uint32_t baud = swap_to_ftx1 ? 38400 : 115200;
+    if (mock_baud == baud) inject(swap_to_ftx1 ? "ID0840;" : "ID0761;");
+}
+
+static void test_hot_swap(void)
+{
+    s_disconnected = false;
+    use(NULL);
+    s_last_baud = 115200;
+    g_cdc_open_hook = swap_open;
+    g_cdc_close_hook = swap_close;
+    g_cdc_request_hook = swap_request;
+    g_cdc_send_hook = swap_reply;
+    g_write_result = ESP_OK;
+    g_write_duration_us = 0;
+
+    g_usb_addrs[0] = 2;
+    g_usb_count = 1;
+    g_usb_desc[2].idVendor = SILABS_VID;
+    usb_added(2);
+    CHECK(!find_cat_port() && !open_attempt_count, "skip CP210x before 3 seconds without opening CDC");
+    g_now_us += CAT_SETTLE_US;
+    cdc_acm_dev_hdl_t dev = find_cat_port();
+    CHECK(dev && s_rig->rig == CAT_RIG_FTDX10 && s_cat_addr == 2, "FTDX10 at first USB address");
+    const unsigned old_session = atomic_load(&s_cat_session);
+    strcpy(s_rejected_polls[0], "FT;");
+    s_rejected_count = 1;
+    s_split_keyed_polls = true;
+
+    usb_removed(2);
+    CHECK(s_disconnected && !cat_usb_ready(), "hot removal invalidates the active address immediately");
+    close_cat_port(&dev);
+    CHECK(!dev && closes == 1 && !open_addr && !s_cat_addr && !s_cat_session, "release the old CDC handle and session");
+    CHECK(!poll_rejected("FT;") && !s_split_keyed_polls, "clear previous radio poll suppression");
+    CHECK(s_last_baud == 115200, "keep remembered baud as a hint");
+
+    swap_to_ftx1 = true;
+    fail_first_open = true;
+    use(NULL);
+    g_usb_addrs[1] = 3; // non-Silicon Labs device should be skipped before CDC open
+    g_usb_addrs[2] = 4;
+    g_usb_desc[4].idVendor = SILABS_VID;
+    g_usb_count = 3;
+    usb_added(2);
+    usb_added(4);
+    g_now_us += CAT_SETTLE_US;
+    g_sent[0] = '\0';
+    dev = find_cat_port();
+    CHECK(dev && s_cat_addr == 4 && s_rig->rig == CAT_RIG_FTX1, "find the second FTX-1 CP210x after the first open fails");
+    CHECK(open_attempt_count == 3 && open_attempts[0] == 2 && open_attempts[1] == 2 && open_attempts[2] == 4,
+          "probe both FTX-1 addresses in order");
+    CHECK(s_last_baud == 38400 && strcmp(g_sent, "ID;ID;") == 0, "try old baud once and find the new baud");
+    const cdc_acm_host_dev_event_data_t delayed = {.type = CDC_ACM_HOST_DEVICE_DISCONNECTED};
+    event_cb(&delayed, (void *)(uintptr_t)old_session);
+    CHECK(!s_disconnected && s_cat_addr == 4 && cat_usb_ready(), "ignore a disconnect from the old CDC session");
+    static const char stale_rx[] = "FA099999999;";
+    rx_cb((const uint8_t *)stale_rx, sizeof(stale_rx) - 1, (void *)(uintptr_t)old_session);
+    CHECK(s_state.freq_main != 99999999, "ignore data callbacks from the old CDC session");
+    close_cat_port(&dev);
+    CHECK(!dev && closes == 2 && !open_addr && !s_cat_addr, "close the replacement handle");
+
+    fail_first_open = false;
+    suppress_id = true;
+    use(NULL);
+    CHECK(!find_cat_port() && !open_addr && closes == 4, "release both ports after no ID at any baud");
+    CHECK(open_attempt_count == 5 && open_attempts[3] == 2 && open_attempts[4] == 4,
+          "first failed scan probes CP210x 2 then 4");
+    CHECK(!find_cat_port() && !open_addr && closes == 6, "release both ports in rotated scan");
+    CHECK(open_attempt_count == 7 && open_attempts[5] == 4 && open_attempts[6] == 2,
+          "second scan starts with the other CP210x");
+    CHECK(s_last_baud == 38400, "failed scans do not overwrite the cached baud");
+    s_scan_after_addr = 0;
+    g_usb_count = 0;
+    g_cdc_open_hook = NULL;
+    g_cdc_close_hook = NULL;
+    g_cdc_request_hook = NULL;
+    g_cdc_send_hook = NULL;
+    atomic_store(&s_link_starting, false);
 }
 
 static cat_cmd_item_t queued_rigctl;
@@ -712,6 +844,7 @@ int main(void) {
     handle_cat_packet("MD0C;");
     CHECK(cat_voice_mode_error(false) != NULL, "voice stops if radio leaves SSB");
     test_startup();
+    test_hot_swap();
     test_rigctl_cat_writes();
     printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     return fails != 0;

@@ -123,6 +123,10 @@ static int64_t s_usb_seen_us[128];
 static int64_t s_usb_reset_until;
 static bool s_usb_resetting;
 static atomic_uchar s_cat_addr;
+static usb_host_client_handle_t s_usb_observer;
+static atomic_uint s_cat_session;
+static unsigned s_next_cat_session;    // assigned by the CAT task
+static uint8_t s_scan_after_addr;       // rotate after the first port that exhausted its baud probes
 static atomic_bool s_link_starting;
 static uint32_t s_last_baud;
 static const uint32_t s_default_bauds[] = {115200, 38400, 19200, 9600, 4800};
@@ -153,6 +157,7 @@ static QueueHandle_t s_cmd_queue;      // queued commands to send over CAT
 typedef struct {
     char cmd[32];
     unsigned ticket;
+    unsigned session;
     int64_t expires_us;
     bool sub;
     bool require_active;
@@ -279,15 +284,13 @@ static struct {
 #define CAT_REJECTED_POLLS 48
 static char s_rejected_polls[CAT_REJECTED_POLLS][13];
 static size_t s_rejected_count;
-static uint8_t s_rejected_addr;
-static int64_t s_rejected_device_us;
 static bool s_split_keyed_polls;
 static unsigned s_keyed_reject_baseline;
 static atomic_uint s_rejects;
 static atomic_bool s_rx_restart;
 static volatile uint32_t s_rx_bytes;     // all bytes received from the open port (diagnostics)
 static char s_rx_tail[17];               // last received bytes, printable only
-static volatile bool s_disconnected;
+static atomic_bool s_disconnected;
 
 static void diag(const char *fmt, ...)
 {
@@ -342,6 +345,7 @@ unsigned cat_rejected_commands(void)
 
 static bool rx_cb(const uint8_t *data, size_t len, void *arg)
 {
+    if ((uintptr_t)arg != atomic_load(&s_cat_session)) return true;
     if (atomic_exchange(&s_rx_restart, false)) s_rx_len = 0;
     s_rx_bytes += len;
     for (size_t i = 0; i < len; i++) {
@@ -368,7 +372,8 @@ static bool rx_cb(const uint8_t *data, size_t len, void *arg)
 
 static void event_cb(const cdc_acm_host_dev_event_data_t *event, void *arg)
 {
-    if (event->type == CDC_ACM_HOST_DEVICE_DISCONNECTED) {
+    if (event->type == CDC_ACM_HOST_DEVICE_DISCONNECTED &&
+        (uintptr_t)arg == atomic_load(&s_cat_session)) {
         s_disconnected = true;
         atomic_store(&s_rx_restart, true);
         if (s_task) {
@@ -377,13 +382,26 @@ static void event_cb(const cdc_acm_host_dev_event_data_t *event, void *arg)
     }
 }
 
-static void cat_new_usb_device(usb_device_handle_t dev)
+static void cat_usb_event(const usb_host_client_event_msg_t *event, void *arg)
 {
-    usb_device_info_t info;
-    if (usb_host_device_info(dev, &info) != ESP_OK || info.dev_addr >= 128) return;
+    (void)arg;
+    const bool added = event->event == USB_HOST_CLIENT_EVENT_NEW_DEV;
+    if (!added && event->event != USB_HOST_CLIENT_EVENT_DEV_REMOVED) return;
+    const unsigned addr = added ? event->new_dev.address : event->dev_removed.address;
+    if (!addr || addr >= 128) return;
+
+    const int64_t until = added ? esp_timer_get_time() + CAT_SETTLE_US : 0;
     taskENTER_CRITICAL(&s_usb_mux);
-    s_usb_seen_us[info.dev_addr] = esp_timer_get_time() + CAT_SETTLE_US;
+    s_usb_seen_us[addr] = until;
+    if (!added && addr == atomic_load(&s_cat_addr)) s_disconnected = true;
     taskEXIT_CRITICAL(&s_usb_mux);
+}
+
+static void observe_usb_events(void)
+{
+    // Only the CAT task dispatches this client's events. The CDC driver's
+    // NEW_DEV callback is disabled so it cannot race a CDC port open.
+    if (s_usb_observer) usb_host_client_handle_events(s_usb_observer, 0);
 }
 
 // Call around the root-port power cycle. Serialize with the USB write itself
@@ -406,16 +424,20 @@ void cat_usb_reset_end(void)
     taskEXIT_CRITICAL(&s_usb_mux);
 }
 
-static bool cat_usb_ready(void)
+static bool cat_usb_address_ready(unsigned addr)
 {
     const int64_t now = esp_timer_get_time();
     taskENTER_CRITICAL(&s_usb_mux);
-    const unsigned addr = atomic_load(&s_cat_addr);
     const int64_t until = addr ? s_usb_seen_us[addr] : 0;
     const bool ready = !s_usb_resetting && now >= s_usb_reset_until &&
                        (!addr || (until && now >= until));
     taskEXIT_CRITICAL(&s_usb_mux);
     return ready;
+}
+
+static bool cat_usb_ready(void)
+{
+    return cat_usb_address_ready(atomic_load(&s_cat_addr));
 }
 
 // ---- Transmit allow-list ----------------------------------------------------------------------------
@@ -850,6 +872,14 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_state.mode_sub_raw = 0;
         s_state.mode_main[0] = '\0';
         s_state.mode_sub[0] = '\0';
+        s_state.vol_main = s_state.vol_sub = 0;
+        s_state.sq_main = s_state.sq_sub = 0;
+        s_state.notch_main = s_state.notch_sub = false;
+        s_state.notch_hz_main = s_state.notch_hz_sub = 0;
+        s_last_answer_us = 0;
+        s_last_set_main_sq_us = s_last_set_sub_sq_us = 0;
+        s_last_set_main_vol_us = s_last_set_sub_vol_us = 0;
+        memset(s_last_set_notch_us, 0, sizeof(s_last_set_notch_us));
     }
     xSemaphoreGive(s_lock);
 }
@@ -1488,6 +1518,8 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
     ESP_LOGI(TAG, "Polling %s", rig->name);
 
     while (!s_disconnected) {
+        observe_usb_events();
+        if (s_disconnected || !cat_usb_ready()) break;
         if (rig->can_tx && cat_tx_requested()) {
             poll_keyed(dev, rig, &keyed_poll);
             vTaskDelay(pdMS_TO_TICKS(POLL_PERIOD_MS));
@@ -1501,6 +1533,7 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
         // 1. Process any pending commands in the queue (already checked against the allow-list when queued)
         cat_cmd_item_t item;
         while (s_cmd_queue && !cat_tx_requested() && xQueueReceive(s_cmd_queue, &item, 0) == pdTRUE) {
+            if (item.session != atomic_load(&s_cat_session)) continue;
             if (item.ticket) {
                 const unsigned result = run_rigctl_write(dev, item) ? 1u : 2u;
                 atomic_store(&s_rigctl_results[item.ticket & 1u], (item.ticket << 2) | result);
@@ -1647,9 +1680,67 @@ static esp_err_t cp210x_setup(cdc_acm_dev_hdl_t dev, uint8_t intf, uint32_t baud
     return cdc_acm_host_send_custom_request(dev, CP210X_REQ_OUT, CP210X_SET_MHS, CP210X_MHS_DTR_RTS_LOW, intf, 0, NULL);
 }
 
-/** Open the CP210x at USB address addr and return true if it answers ID; as a CAT port */
-static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened)
+static void close_cat_port(cdc_acm_dev_hdl_t *dev)
 {
+    // Invalidate delayed callbacks before the handle can be freed or reused.
+    atomic_store(&s_link_starting, true);
+    atomic_store(&s_cat_session, 0);
+    const unsigned addr = atomic_exchange(&s_cat_addr, 0);
+    if (*dev) {
+        const esp_err_t err = cdc_acm_host_close(*dev);
+        if (err != ESP_OK) ESP_LOGW(TAG, "CDC close at USB address %u: %s", addr, esp_err_to_name(err));
+        *dev = NULL;
+    }
+    atomic_store(&s_rx_restart, true);
+    s_rejected_count = 0;
+    s_split_keyed_polls = false;
+}
+
+static bool is_cp210x(uint8_t addr)
+{
+    usb_device_handle_t dev;
+    esp_err_t err = usb_host_device_open(s_usb_observer, addr, &dev);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Skip USB address %u: descriptor open failed: %s (0x%x)",
+                 addr, esp_err_to_name(err), (unsigned)err);
+        return false;
+    }
+    const usb_device_desc_t *desc;
+    const esp_err_t read_err = usb_host_get_device_descriptor(dev, &desc);
+    const unsigned vid = read_err == ESP_OK ? desc->idVendor : 0;
+    const unsigned pid = read_err == ESP_OK ? desc->idProduct : 0;
+    err = usb_host_device_close(s_usb_observer, dev);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Skip USB address %u: descriptor close failed: %s (0x%x)",
+                 addr, esp_err_to_name(err), (unsigned)err);
+        return false;
+    }
+    if (read_err != ESP_OK) {
+        ESP_LOGW(TAG, "Skip USB address %u: descriptor read failed: %s (0x%x)",
+                 addr, esp_err_to_name(read_err), (unsigned)read_err);
+        return false;
+    }
+    if (vid != SILABS_VID) {
+        ESP_LOGW(TAG, "Skip USB address %u: non-CP210x (VID 0x%04x, PID 0x%04x)", addr, vid, pid);
+        return false;
+    }
+    return true;
+}
+
+/** Open the CP210x at USB address addr and return true if it answers ID; as a CAT port */
+static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool *no_id)
+{
+    *no_id = false;
+    if (!is_cp210x(addr)) return false;
+    observe_usb_events();
+    if (!cat_usb_address_ready(addr)) {
+        ESP_LOGW(TAG, "Skip USB address %u: 3 s CAT settling period or USB reset still in progress", addr);
+        return false;
+    }
+    if (++s_next_cat_session == 0) ++s_next_cat_session;
+    atomic_store(&s_cat_session, s_next_cat_session);
+    atomic_store(&s_cat_addr, addr);
+    atomic_store(&s_rx_restart, true);
     const cdc_acm_host_open_config_t cfg = {
         .vid = SILABS_VID,
         .pid = CDC_HOST_ANY_PID,
@@ -1660,65 +1751,66 @@ static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened)
         .in_buffer_size = 0,
         .event_cb = event_cb,
         .data_cb = rx_cb,
-        .user_arg = NULL,
+        .user_arg = (void *)(uintptr_t)s_next_cat_session,
     };
     esp_err_t err = cdc_acm_host_open(&cfg, dev);
     if (err != ESP_OK) {
+        ESP_LOGW(TAG, "CDC open at USB address %u, interface %u: %s (0x%x)",
+                 addr, cfg.interface_idx, esp_err_to_name(err), (unsigned)err);
         diag("open addr %u: %s", addr, esp_err_to_name(err));
+        close_cat_port(dev);
         return false;
     }
     (*opened)++;
     // The CP210x UARTs here are single-interface devices (the CDC driver opened interface 0)
     const uint8_t intf = cfg.interface_idx;
-    s_cat_addr = addr;
-    const int64_t deadline = esp_timer_get_time() + CAT_SETTLE_US * 2;
-    while (!s_disconnected && !cat_usb_ready() && esp_timer_get_time() < deadline) {
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
     uint32_t bauds[5];
     const size_t count = baud_order(bauds);
-    for (size_t b = 0; b < count && !s_disconnected && cat_usb_ready(); b++) {
+    size_t attempted = 0;
+    for (size_t b = 0; b < count; b++) {
+        observe_usb_events();
+        if (s_disconnected || !cat_usb_ready()) {
+            ESP_LOGW(TAG, "Stop probing USB address %u: %s", addr, s_disconnected ? "disconnected" :
+                     "3 s CAT settling period or USB reset still in progress");
+            break;
+        }
         err = cp210x_setup(*dev, intf, bauds[b]);
         if (err != ESP_OK) {
+            ESP_LOGW(TAG, "CDC setup at USB address %u, %lu bps: %s",
+                     addr, (unsigned long)bauds[b], esp_err_to_name(err));
             diag("setup addr %u: %s", addr, esp_err_to_name(err));
             break;
         }
         char answer[RX_BUF_BYTES];
         atomic_store(&s_rx_restart, true);
         s_rx_bytes = 0;
+        ++attempted;
         if (query(*dev, "ID;", answer, sizeof(answer), ANSWER_TIMEOUT_MS, false) == QUERY_ANSWER) {
             memcpy(s_rig_id, answer + 2, 4);
             s_rig_id[4] = '\0';
             s_rig = profile_for_id(s_rig_id);
-            taskENTER_CRITICAL(&s_usb_mux);
-            const int64_t device_at = s_usb_seen_us[addr];
-            taskEXIT_CRITICAL(&s_usb_mux);
-            if (s_rejected_addr != addr || s_rejected_device_us != device_at) {
-                s_rejected_count = 0;
-                s_split_keyed_polls = false;
-                s_rejected_addr = addr;
-                s_rejected_device_us = device_at;
-            }
             cache_baud(bauds[b]);
             ESP_LOGI(TAG, "CAT port at USB address %u, interface %u, %lu bps: %s -> %s", addr, intf,
                      (unsigned long)bauds[b], answer, s_rig->name);
             return true;
         }
-        ESP_LOGI(TAG, "addr %u @%lu: no ID; answer (%lu bytes received)", addr, (unsigned long)bauds[b],
+        ESP_LOGW(TAG, "addr %u @%lu: no ID; answer (%lu bytes received)", addr, (unsigned long)bauds[b],
                  (unsigned long)s_rx_bytes);
         diag("addr %u: no answer, rx %lu B [%s]", addr, (unsigned long)s_rx_bytes, s_rx_tail);
     }
-    cdc_acm_host_close(*dev);
-    s_cat_addr = 0;
-    *dev = NULL;
+    *no_id = attempted == count && !s_disconnected && cat_usb_ready();
+    close_cat_port(dev);
     return false;
 }
 
 static cdc_acm_dev_hdl_t find_cat_port(void)
 {
+    observe_usb_events();
     uint8_t addrs[10];
     int count = 0;
-    if (usb_host_device_addr_list_fill(sizeof(addrs), addrs, &count) != ESP_OK) {
+    const esp_err_t err = usb_host_device_addr_list_fill(sizeof(addrs), addrs, &count);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "USB address scan failed: %s (0x%x)", esp_err_to_name(err), (unsigned)err);
         return NULL;
     }
     bool present[128] = {0};
@@ -1736,16 +1828,33 @@ static cdc_acm_dev_hdl_t find_cat_port(void)
     if (count == 0) {
         diag("no USB device on the bus");
     }
-    for (int i = 0; i < count; i++) {
+    int start = 0;
+    for (int i = 0; i < count; ++i) {
+        if (addrs[i] == s_scan_after_addr) {
+            start = (i + 1) % count;
+            break;
+        }
+    }
+    uint8_t first_unanswered = 0;
+    for (int i = 0; i < count; ++i) {
+        const uint8_t addr = addrs[(start + i) % count];
+        if (!addr || addr >= 128) {
+            ESP_LOGW(TAG, "Skip invalid USB address %u", addr);
+            continue;
+        }
         cdc_acm_dev_hdl_t dev = NULL;
+        bool no_id;
         s_disconnected = false;
-        if (addrs[i] > 0 && addrs[i] < 128 && try_port(addrs[i], &dev, &opened)) {
+        if (try_port(addr, &dev, &opened, &no_id)) {
+            s_scan_after_addr = 0;
             diag_counts((uint8_t)count, opened, 1);
             diag("%s", "");
             return dev;
         }
+        if (no_id && !first_unanswered) first_unanswered = addr;
         diag_counts((uint8_t)count, opened, 0);
     }
+    s_scan_after_addr = first_unanswered;
     return NULL;
 }
 
@@ -1763,8 +1872,7 @@ static void cat_task(void *arg)
             // Keep CAT controls and PTT unavailable during the initial read-only sequence.
             initialize_reads(dev, s_rig);
             if (s_disconnected || !cat_usb_ready()) {
-                cdc_acm_host_close(dev);
-                s_cat_addr = 0;
+                close_cat_port(&dev);
                 publish(false, 0, 0, 0, 0, 0, 0, "", 0, "");
                 continue;
             }
@@ -1782,8 +1890,8 @@ static void cat_task(void *arg)
             ESP_LOGW(TAG, "CAT port lost");
             xSemaphoreTake(s_ptt_lock, portMAX_DELAY);
             s_ptt_port = NULL;
-            cdc_acm_host_close(dev);
-            s_cat_addr = 0;
+            s_ptt_ready = false;
+            close_cat_port(&dev);
             xSemaphoreGive(s_ptt_lock);
             publish(false, 0, 0, 0, 0, 0, 0, "", 0, "");
             s_rig = &s_profile_none;
@@ -1802,11 +1910,16 @@ esp_err_t cat_init(void)
     ESP_RETURN_ON_FALSE(s_lock && s_ptt_lock && s_wire_lock, ESP_ERR_NO_MEM, TAG, "no memory");
     s_cmd_queue = xQueueCreate(10, sizeof(cat_cmd_item_t));
     ESP_RETURN_ON_FALSE(s_cmd_queue, ESP_ERR_NO_MEM, TAG, "no queue memory");
+    const usb_host_client_config_t observer = {
+        .max_num_event_msg = 16,
+        .flags.notify_dev_removed = true,
+        .async.client_event_callback = cat_usb_event,
+    };
+    ESP_RETURN_ON_ERROR(usb_host_client_register(&observer, &s_usb_observer), TAG, "CAT USB observer");
     const cdc_acm_host_driver_config_t cfg = {
         .driver_task_stack_size = 4096,
         .driver_task_priority = 5,
         .xCoreID = 0,
-        .new_dev_cb = cat_new_usb_device,
     };
     ESP_RETURN_ON_ERROR(cdc_acm_host_install(&cfg), TAG, "cdc_acm install");
     BaseType_t ok = xTaskCreatePinnedToCore(cat_task, "cat", 4096, NULL, CAT_TASK_PRIORITY, NULL, 0);
@@ -1850,7 +1963,7 @@ void cat_get_state(cat_state_t *state)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *state = s_state;
-    if (atomic_load(&s_link_starting)) {
+    if (atomic_load(&s_link_starting) || s_disconnected) {
         state->connected = false;
         state->can_control = false;
     }
@@ -2029,12 +2142,13 @@ static esp_err_t cat_enqueue_item(const char *cmd, unsigned ticket, bool sub, bo
         ESP_LOGE(TAG, "Refused a CAT command that is not on the allow-list");
         return ESP_ERR_INVALID_ARG;
     }
-    if (!s_cmd_queue || atomic_load(&s_link_starting) || cat_tx_requested()) {
+    const unsigned session = atomic_load(&s_cat_session);
+    if (!s_cmd_queue || atomic_load(&s_link_starting) || s_disconnected || cat_tx_requested()) {
         return ESP_ERR_INVALID_STATE;
     }
 
     if (ticket && !cat_radio_rx_confirmed()) return ESP_ERR_INVALID_STATE;
-    cat_cmd_item_t item = {.ticket = ticket,
+    cat_cmd_item_t item = {.ticket = ticket, .session = session,
                            .expires_us = esp_timer_get_time() + 1200000, .sub = sub,
                            .require_active = require_active, .rig = s_rig->rig};
     strlcpy(item.cmd, cmd, sizeof(item.cmd));
