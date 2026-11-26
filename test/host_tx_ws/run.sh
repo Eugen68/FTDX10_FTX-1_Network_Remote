@@ -4,8 +4,8 @@ root=$(cd -- "$(dirname -- "$0")/../.." && pwd)
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 # Compile the production parser and handler against the HTTP server stubs below.
-sed -n '/^static const char \*tx_reason(/,/^static esp_err_t status_handler(/ {
-    /^static esp_err_t status_handler(/d
+sed -n '/^static const char \*tx_reason(/,/^static unsigned lwip_sockets_used(/ {
+    /^static unsigned lwip_sockets_used(/d
     p
 }' "$root/main/web_server.c" > "$out/tx_ws_handler.inc"
 sed -n '/^static void skip_ws(/,/^static bool token_to_uint(/ {

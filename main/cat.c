@@ -73,6 +73,7 @@
 #include "usb/usb_host.h"
 #include "usb/cdc_acm_host.h"
 #include "cat.h"
+#include "rigctl_protocol.h"
 #include "app_config.h"
 #include "nvs.h"
 
@@ -146,10 +147,16 @@ static int64_t s_last_set_sub_sq_us;
 static int64_t s_last_set_notch_us[2];       // [MAIN, SUB]: last local BP write (ON/OFF or frequency)
 static int64_t s_last_set_main_vol_us;
 static int64_t s_last_set_sub_vol_us;
+static atomic_uint s_rigctl_results[2];  // one completion slot per TCP client
 static QueueHandle_t s_cmd_queue;      // queued commands to send over CAT
 
 typedef struct {
     char cmd[32];
+    unsigned ticket;
+    int64_t expires_us;
+    bool sub;
+    bool require_active;
+    cat_rig_t rig;
 } cat_cmd_item_t;
 
 static const struct {
@@ -497,8 +504,14 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         return rig->can_tx && pl == 1 && p[0] == '0';
     case CAT_TWO('B', 'Y'):         // busy (read), FTDX10
         return rig->has_by_tx && pl == 0;
-    case CAT_TWO('F', 'T'):         // transmitter selection, read only
-        return rig->can_tx && pl == 0;
+    case CAT_TWO('F', 'T'):         // transmitter selection (does not key it)
+        return rig->can_tx && (pl == 0 || (pl == 1 &&
+            (rig->dual_rx ? is_side(p[0]) : (p[0] == '2' || p[0] == '3'))));
+    case CAT_TWO('V', 'S'):         // active VFO
+        return ctl && (pl == 0 || (pl == 1 && is_side(p[0])));
+    case CAT_TWO('S', 'H'):         // receiver filter bandwidth
+        return ctl && (pl == 1 || pl == 4) && is_rx_side(rig, p[0]) &&
+               (pl == 1 || (p[1] == '0' && all_digits(p + 2, 2) && digits_value(p + 2, 2) <= 23));
     case CAT_TWO('T', 'X'):
         if (pl == 1 && p[0] == '0') {
             return true;   // emergency unkey, independent of PTT authorization or profile
@@ -823,6 +836,9 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         memset(s_mode_status_us, 0, sizeof(s_mode_status_us));
         memset(s_ssb_menu_us, 0, sizeof(s_ssb_menu_us));
         s_state.tx_vfo = CAT_TX_VFO_UNKNOWN;
+        s_state.rx_vfo_known = false;
+        s_state.rx_vfo_sub = false;
+        s_state.width_code[0] = s_state.width_code[1] = -1;
         s_last_ptt_status_us = 0;
         s_ptt_mode = 0;
         s_state.tx_cat = false;
@@ -1147,6 +1163,27 @@ static void handle_cat_packet(const char *pkt)
         return;
     }
 
+    if (pkt[0] == 'V' && s_rig->can_control && strncmp(pkt, "VS", 2) == 0 && strlen(pkt) == 4 &&
+        is_side(pkt[2]) && xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+        s_state.rx_vfo_known = true;
+        s_state.rx_vfo_sub = pkt[2] == '1';
+        s_last_answer_us = now_pkt_us;
+        xSemaphoreGive(s_lock);
+        return;
+    }
+    if (pkt[0] == 'S' && s_rig->can_control && strncmp(pkt, "SH", 2) == 0 && strlen(pkt) == 7 &&
+        is_rx_side(s_rig, pkt[2]) && pkt[3] == '0' && all_digits(pkt + 4, 2) &&
+        digits_value(pkt + 4, 2) <= 23 &&
+        xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+        if (s_rig->dual_rx || s_state.rx_vfo_known) {
+            const bool sub = s_rig->dual_rx ? pkt[2] == '1' : s_state.rx_vfo_sub;
+            s_state.width_code[sub] = (int8_t)digits_value(pkt + 4, 2);
+        }
+        s_last_answer_us = now_pkt_us;
+        xSemaphoreGive(s_lock);
+        return;
+    }
+
     // Both manuals define FT0; as MAIN and FT1; as SUB in the read response.
     if (s_rig->can_tx && strncmp(pkt, "FT", 2) == 0 && strlen(pkt) == 4 && pkt[3] == ';' &&
         (pkt[2] == '0' || pkt[2] == '1')) {
@@ -1361,10 +1398,90 @@ static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_po
     }
 }
 
+static bool rigctl_write_confirmed(cdc_acm_dev_hdl_t dev, const char *cmd,
+                                    const char *readback, const char *expected)
+{
+    esp_err_t err = cat_tx(dev, cmd);
+    if (err == ESP_OK) {
+        char answer[RX_BUF_BYTES];
+        if (query(dev, readback, answer, sizeof(answer), NORMAL_ANSWER_MS, false) == QUERY_ANSWER &&
+            strcmp(answer, expected) == 0) return true;
+        err = ESP_ERR_INVALID_RESPONSE;
+    }
+    report_queued_write_failure(cmd, err);
+    return false;
+}
+
+static bool run_rigctl_write(cdc_acm_dev_hdl_t dev, cat_cmd_item_t item)
+{
+    // NET rigctl may enqueue one mode+width transaction. Keep each USB write separate.
+    char *second = strchr(item.cmd, ';') + 1;
+    char width[8];
+    strlcpy(width, second, sizeof(width));
+    *second = '\0';
+    const bool selecting = strncmp(item.cmd, "VS", 2) == 0;
+    const bool split = strncmp(item.cmd, "FT", 2) == 0;
+    cat_state_t state;
+    cat_get_state(&state);
+    const bool active_matches = state.rx_vfo_known && state.rx_vfo_sub == item.sub;
+    if (esp_timer_get_time() >= item.expires_us || state.rig != item.rig || !cat_radio_rx_confirmed() ||
+        cat_tx_requested() || (item.require_active && !active_matches)) {
+        report_queued_write_failure(item.cmd, ESP_ERR_INVALID_STATE);
+        return false;
+    }
+    // An explicit split request supplies the RX side as well as the TX side.
+    // Confirm the receiver before issuing FT. Frequency/mode writes never select a VFO.
+    if (split && !active_matches) {
+        const char *select = item.sub ? "VS1;" : "VS0;";
+        if (!rigctl_write_confirmed(dev, select, "VS;", select)) return false;
+        cat_get_state(&state);
+        if (esp_timer_get_time() >= item.expires_us || !state.rx_vfo_known || state.rx_vfo_sub != item.sub ||
+            !cat_radio_rx_confirmed() || cat_tx_requested()) {
+            report_queued_write_failure(item.cmd, ESP_ERR_INVALID_STATE);
+            return false;
+        }
+    }
+
+    char readback[6] = {item.cmd[0], item.cmd[1], ';'};
+    if (strncmp(item.cmd, "MD", 2) == 0) {
+        readback[2] = item.cmd[2];
+        readback[3] = ';';
+    }
+    char expected[16];
+    strlcpy(expected, item.cmd, sizeof(expected));
+    if (split && !s_rig->dual_rx) expected[2] -= 2;
+    if (!rigctl_write_confirmed(dev, item.cmd, readback, expected)) return false;
+
+    if (width[0]) {
+        // FTDX10 SH0 and relative VFO requests must still target the same receiver.
+        cat_get_state(&state);
+        const char mode = item.sub ? state.mode_sub_raw : state.mode_main_raw;
+        if (esp_timer_get_time() >= item.expires_us || mode != item.cmd[3] ||
+            (item.require_active && (!state.rx_vfo_known || state.rx_vfo_sub != item.sub)) ||
+            !cat_radio_rx_confirmed() || cat_tx_requested()) {
+            report_queued_write_failure(width, ESP_ERR_INVALID_STATE);
+            return false;
+        }
+        const char *filter = s_rig->dual_rx && item.sub ? "SH1;" : "SH0;";
+        return rigctl_write_confirmed(dev, width, filter, width);
+    }
+    if (selecting) {
+        cat_get_state(&state);
+        if (!state.rx_vfo_known || state.rx_vfo_sub != item.sub) {
+            report_queued_write_failure(item.cmd, ESP_ERR_INVALID_RESPONSE);
+            return false;
+        }
+        send_poll(dev, "FT;");
+        send_poll(dev, s_rig->dual_rx && item.sub ? "SH1;" : "SH0;");
+    }
+    return true;
+}
+
 static void poll_loop(cdc_acm_dev_hdl_t dev)
 {
     const rig_profile_t *rig = s_rig;
     uint32_t poll_count = 0;
+    const bool net_rigctl = rig->can_control && app_config_rigctl_enabled();
     keyed_poll_t keyed_poll = {0};
     bool usb_level_applied = false;   // DATA audio output level already set for the current DATA-USB session
 
@@ -1384,6 +1501,12 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
         // 1. Process any pending commands in the queue (already checked against the allow-list when queued)
         cat_cmd_item_t item;
         while (s_cmd_queue && !cat_tx_requested() && xQueueReceive(s_cmd_queue, &item, 0) == pdTRUE) {
+            if (item.ticket) {
+                const unsigned result = run_rigctl_write(dev, item) ? 1u : 2u;
+                atomic_store(&s_rigctl_results[item.ticket & 1u], (item.ticket << 2) | result);
+                // Leave room for normal CAT polling even with a busy network client.
+                break;
+            }
             ESP_LOGI(TAG, "Sending CAT command: %s", item.cmd);
             const esp_err_t err = cat_tx(dev, item.cmd);
             if (err != ESP_OK) {
@@ -1434,12 +1557,15 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             send_poll(dev, rig->poll_status);
             if (rig->can_tx && app_config_tx_enabled()) {
                 send_poll(dev, rig->dual_rx ? "FT;MD0;MD1;" : "FT;MD0;");
+            } else if (net_rigctl) {
+                send_poll(dev, "FT;");
             }
         }
 
         // 4. Periodic slow refresh / sync every 5 seconds (50 iterations)
         if ((poll_count % 50) == 0) {
             send_poll(dev, rig->sync_all);
+            if (net_rigctl) send_poll(dev, rig->dual_rx ? "VS;SH0;SH1;" : "VS;SH0;");
             if (rig->can_tx && app_config_tx_enabled()) {
                 send_poll(dev, rig->rig == CAT_RIG_FTDX10 ? "EX010113;EX010114;" : "EX010113;");
             }
@@ -1896,10 +2022,10 @@ const char *cat_ptt_mode_error(int64_t keyed_at)
     return reason;
 }
 
-/** Queue exactly one allow-listed command (with its ';'). Private on purpose: callers use the typed functions. */
-static esp_err_t cat_enqueue(const char *cmd)
+/** Queue a typed, allow-listed write. NET rigctl can add a second command for bandwidth. */
+static esp_err_t cat_enqueue_item(const char *cmd, unsigned ticket, bool sub, bool require_active)
 {
-    if (!cat_cmds_allowed(cmd, 1)) {
+    if (!cat_cmds_allowed(cmd, ticket ? 2 : 1)) {
         ESP_LOGE(TAG, "Refused a CAT command that is not on the allow-list");
         return ESP_ERR_INVALID_ARG;
     }
@@ -1907,17 +2033,67 @@ static esp_err_t cat_enqueue(const char *cmd)
         return ESP_ERR_INVALID_STATE;
     }
 
-    cat_cmd_item_t item;
-    memset(&item, 0, sizeof(item));
+    if (ticket && !cat_radio_rx_confirmed()) return ESP_ERR_INVALID_STATE;
+    cat_cmd_item_t item = {.ticket = ticket,
+                           .expires_us = esp_timer_get_time() + 1200000, .sub = sub,
+                           .require_active = require_active, .rig = s_rig->rig};
     strlcpy(item.cmd, cmd, sizeof(item.cmd));
 
-    if (xQueueSend(s_cmd_queue, &item, pdMS_TO_TICKS(100)) != pdTRUE) {
+    if (xQueueSend(s_cmd_queue, &item, ticket ? 0 : pdMS_TO_TICKS(100)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
     }
     if (s_task) {
         xTaskNotifyGive(s_task);
     }
     return ESP_OK;
+}
+
+static esp_err_t cat_enqueue(const char *cmd)
+{
+    return cat_enqueue_item(cmd, 0, false, false);
+}
+
+esp_err_t cat_rigctl_set_freq(bool sub, uint32_t hz, bool require_active, unsigned ticket)
+{
+    char cmd[16];
+    if (hz < s_rig->freq_min || hz > s_rig->freq_max) return ESP_ERR_INVALID_ARG;
+    snprintf(cmd, sizeof(cmd), "F%c%09lu;", sub ? 'B' : 'A', (unsigned long)hz);
+    return cat_enqueue_item(cmd, ticket, sub, require_active);
+}
+
+esp_err_t cat_rigctl_set_mode(bool sub, char mode, int width_hz, bool require_active, unsigned ticket)
+{
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "MD%c%c;", sub ? '1' : '0', mode);
+    const unsigned fixed = rigctl_width_hz(s_rig->rig, mode, -1);
+    if (fixed > 0) {
+        if (width_hz > 0 && (unsigned)width_hz != fixed) return ESP_ERR_NOT_SUPPORTED;
+    } else if (width_hz > 0) {
+        const int code = rigctl_width_code(s_rig->rig, mode, width_hz);
+        if (code < 0 || code > 23) return ESP_ERR_NOT_SUPPORTED;
+        // On FTDX10 SH0 addresses the sole receiver, whichever VFO is active.
+        require_active |= !s_rig->dual_rx;
+        snprintf(cmd + 5, sizeof(cmd) - 5, "SH%c0%02u;", s_rig->dual_rx && sub ? '1' : '0',
+                 (unsigned)code);
+    }
+    return cat_enqueue_item(cmd, ticket, sub, require_active);
+}
+
+esp_err_t cat_rigctl_select_vfo(bool sub, unsigned ticket)
+{
+    return cat_enqueue_item(sub ? "VS1;" : "VS0;", ticket, sub, false);
+}
+
+esp_err_t cat_rigctl_set_split(bool rx_sub, bool tx_sub, bool require_active, unsigned ticket)
+{
+    const char *cmd = s_rig->dual_rx ? (tx_sub ? "FT1;" : "FT0;") : (tx_sub ? "FT3;" : "FT2;");
+    return cat_enqueue_item(cmd, ticket, rx_sub, require_active);
+}
+
+int cat_rigctl_result(unsigned ticket)
+{
+    const unsigned result = atomic_load(&s_rigctl_results[ticket & 1u]);
+    return (result >> 2) == ticket ? ((result & 3u) == 1u ? 1 : -1) : 0;
 }
 
 esp_err_t cat_swap_vfo(void)

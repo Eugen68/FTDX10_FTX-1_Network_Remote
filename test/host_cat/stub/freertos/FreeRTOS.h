@@ -26,7 +26,15 @@ static inline TickType_t xTaskGetTickCount(void){return 0;}
 static inline void vTaskDelay(uint32_t t){(void)t;}
 static inline void *xTaskGetCurrentTaskHandle(void){return 0;}
 static inline int xQueueReceive(void *q, void *i, uint32_t t){(void)q;(void)i;(void)t;return 0;}
-static inline int xQueueSend(void *q, const void *i, uint32_t t){(void)q;(void)i;(void)t;return 1;}
+static inline int xQueueSend(void *q, const void *i, uint32_t t)
+{
+    (void)q; (void)i; (void)t;
+#ifdef TEST_CAT_CAPTURE_QUEUE
+    extern void (*g_queue_send_hook)(const void *);
+    if (g_queue_send_hook) g_queue_send_hook(i);
+#endif
+    return 1;
+}
 static inline void *xQueueCreate(int n, int s){(void)n;(void)s;return (void*)1;}
 static inline int xTaskCreate(void (*f)(void*), const char *n, int s, void *a, int p, void *h){return 1;}
 static inline int xTaskCreatePinnedToCore(void (*f)(void*), const char *n, int s, void *a, int p, void *h, int c){return 1;}

@@ -411,6 +411,51 @@ Example with an external player (48 kHz / 16 bit / mono):
 ffplay -nodisp -tls_verify 0 https://trx-remote.local/stream.wav
 ```
 
+### Log4OM and WSJT-X over Wi-Fi (Hamlib NET rigctl)
+
+In the USB serial menu, use **n** to enable NET rigctl, **r** to change its TCP port
+(default **4532**) and **i** to optionally allow a single client IPv4 address. Use **6** to
+save and restart. The server is off by default and accepts up to two clients.
+
+- **Log4OM** — open the CAT settings, choose **Hamlib** as the CAT engine and
+  **NET rigctl** as the rig model. Set the connection to the board's IPv4 address
+  and TCP port, for example `192.168.55.138:4532`.
+- **WSJT-X** — go to **Settings → Radio**, set **Rig** to **Hamlib NET rigctl**
+  and **Network Server** to the board's `IP:4532`. For **PTT Method** use
+  **None** if offered, or **VOX** with the radio's VOX disabled for receive-only
+  use. **Test CAT** verifies the connection. NET rigctl cannot key or unkey the radio.
+- **Hamlib CLI** — run `rigctl -m 2 -r 192.168.55.138:4532 -vvvv f m v s t get_powerstat`.
+  The authenticated HTTPS `/status` endpoint includes the `rigctld` enable/listen state,
+  port and client, command and rejection counts.
+
+Rejected requests appear in the serial log with the client IPv4 address, request and
+response. The latest rejection is available as `rigctld.last_rejected` in HTTPS
+`/status`. To trace successful requests as well, enable **d** in the serial menu and
+save with **6**. The 1.9.42 Log4OM test firmware starts with tracing enabled. Use **d**, then **6**, to turn it off after the test.
+
+If a client stops reading and a reply cannot be queued within one second, the
+server closes that connection. TCP keepalive detects lost idle peers. HTTPS `/status` reports the current lwIP socket
+descriptor count and limit under `lwip`. The `rigctld` section reports its own
+listener and client socket count, admitted connections opened and closed, and
+accept/send errors and send timeouts. The counts are snapshots of open socket
+descriptors, so closed TCP connections in TIME_WAIT are outside the count.
+
+Frequency and mode setters accept an optional VFO before their values, for example
+`F VFOA 7025000` and `M VFOA CW -1`. They update that side directly while the active
+VFO stays selected. A mode width of `-1` or `0` leaves the radio to handle its filter
+without a separate CAT filter command. An explicit split request such as
+`S VFOB 1 VFOA` selects VFO-B for receive and VFO-A for transmit.
+
+NET rigctl is plain TCP with no password. Use it only on a trusted local network
+or over a VPN. Keep the port off the public Internet. Clients can change frequency,
+mode, VFO and split only while CAT confirms reception. The service rejects PTT
+commands even when transmit through the web interface is enabled. Frequencies use
+whole Hz. Mode sets accept an available filter width, `0` for normal or `-1` to leave
+the width alone. For an adjustable filter, a reported width of `0` means the
+station returned its default code or the width has yet to be read. All getters use
+cached CAT state. When this feature is enabled, the existing CAT refresh also reads
+the active VFO, transmit VFO and filter settings one command at a time.
+
 ## The FTDX10's own scope from the ACC socket
 
 With an FTDX10, the page can show the radio's own spectrum and waterfall (up to a 1 MHz span) instead of the audio
@@ -624,7 +669,7 @@ Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
   Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main`.
 - Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `EX`), checked against the profile of the connected radio.
   For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
-  Supported radios also allow read-only modulation menu queries and transmitter selection status (`FT;`). `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.
+  Supported radios also allow modulation menu queries and transmit VFO status (`FT;`). NET rigctl can set the active VFO, transmit VFO selection and filter width through radio-specific allow-listed commands. These commands cannot key the radio. `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.
   The ordinary CAT endpoint has no raw-command or PTT operation.
 - Frequency settings are range-checked against the radio's profile (FTX-1 30 kHz – 470 MHz, FTDX10 30 kHz – 75 MHz); anything outside it is rejected.
 - The allow list and the answer parsers are covered by a host test that runs without the board: `test/host_cat/run.sh`.

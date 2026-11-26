@@ -55,6 +55,9 @@ typedef struct {
     bool c4fm;              /*!< The radio has the C4FM modes */
     bool busy;              /*!< Squelch is open on the receiver reported by RI (BUSY) */
     cat_tx_vfo_t tx_vfo;    /*!< Transmitter selected by the radio, from FT; */
+    bool rx_vfo_known;
+    bool rx_vfo_sub;
+    int8_t width_code[2];     /*!< SH code for each receiver, -1 if unavailable */
     bool tx_cat;
     bool tx_radio;
     bool tx_radio_known;
@@ -128,6 +131,15 @@ void cat_get_state(cat_state_t *state);
 
 /** True only when a recent CAT status report confirmed the radio is not transmitting. */
 bool cat_radio_rx_confirmed(void);
+
+/** NET rigctl writes use the CAT allow-list and require freshly confirmed RX. */
+esp_err_t cat_rigctl_set_freq(bool sub, uint32_t hz, bool require_active, unsigned ticket);
+esp_err_t cat_rigctl_set_mode(bool sub, char mode, int width_hz, bool require_active, unsigned ticket);
+esp_err_t cat_rigctl_select_vfo(bool sub, unsigned ticket);
+esp_err_t cat_rigctl_set_split(bool rx_sub, bool tx_sub, bool require_active, unsigned ticket);
+/** Returns 0 while pending, 1 on success, or -1 on CAT failure. */
+int cat_rigctl_result(unsigned ticket);
+
 typedef struct {
     cat_rig_t rig;
     unsigned po, swr, swr_po;
