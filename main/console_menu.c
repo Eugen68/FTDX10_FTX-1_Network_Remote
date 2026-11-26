@@ -238,6 +238,7 @@ static void print_config_summary(const app_config_t *cfg)
         " m) TX limit         : %u s\r\n"
         " s) SWR limit        : %u.%u:1\r\n"
         " n) NET rigctl       : %s, TCP %u, IPv4: %s\r\n"
+        " d) NET rigctl trace : %s\r\n"
         " h) Host name        : %s.local\r\n"
         "==================================================\r\n",
         cfg->wifi_ssid[0] ? cfg->wifi_ssid : "(not set)",
@@ -250,7 +251,7 @@ static void print_config_summary(const app_config_t *cfg)
         cfg->tx_pass[0] ? masked_tx_pass : "(not set)", cfg->tx_max_seconds,
         cfg->swr_max / 10, cfg->swr_max % 10,
         cfg->rigctl_enabled ? "on" : "off", cfg->rigctl_port,
-        cfg->rigctl_ip[0] ? cfg->rigctl_ip : "any", cfg->hostname
+        cfg->rigctl_ip[0] ? cfg->rigctl_ip : "any", cfg->rigctl_debug ? "on" : "off", cfg->hostname
     );
     console_write_str(msg);
 }
@@ -289,11 +290,12 @@ void console_menu_run(void)
             "  s: Set SWR limit (1.5–3.0)\r\n"
             "  n: Toggle NET rigctl (trusted LAN/VPN only)\r\n"
             "  r: Set NET rigctl port\r\n"
+            "  d: Toggle tracing of all NET rigctl commands and replies\r\n"
             "  i: Set allowed NET rigctl IPv4 address\r\n"
             "  h: Set Host name (mDNS / DHCP)\r\n"
             "  c: Regenerate HTTPS certificate\r\n"
             "--------------------------------------------------\r\n"
-            "Enter selection (0-9, h, t, p, m, s, c, n, r, i): "
+            "Enter selection (0-9, h, t, p, m, s, c, n, r, i, d): "
         );
 
         char opt[8] = {0};
@@ -415,6 +417,9 @@ void console_menu_run(void)
                 console_write_str("-> Enter a limit from 1.5 to 3.0 with one decimal\r\n");
                 break;
             }
+            case 'd':
+                cfg.rigctl_debug = !cfg.rigctl_debug;
+                break;
             case 'n':
                 cfg.rigctl_enabled = !cfg.rigctl_enabled;
                 break;

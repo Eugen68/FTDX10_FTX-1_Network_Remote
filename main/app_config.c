@@ -79,6 +79,9 @@ esp_err_t app_config_load(app_config_t *cfg)
         uint8_t rigctl_enabled = 0;
         nvs_get_u8(handle, "rigctl_enable", &rigctl_enabled);
         cfg->rigctl_enabled = rigctl_enabled != 0;
+        uint8_t rigctl_debug = 0;
+        nvs_get_u8(handle, "rigctl_debug", &rigctl_debug);
+        cfg->rigctl_debug = rigctl_debug != 0;
         nvs_get_u16(handle, "rigctl_port", &cfg->rigctl_port);
         if (!cfg->rigctl_port) cfg->rigctl_port = RIGCTL_DEFAULT_PORT;
         // Fail closed if the stored IP is invalid. Only an absent key allows all IPs.
@@ -129,6 +132,7 @@ esp_err_t app_config_save(const app_config_t *cfg)
     if (err == ESP_OK) err = nvs_set_u16(handle, "tx_max_seconds", cfg->tx_max_seconds);
     if (err == ESP_OK) err = nvs_set_u8(handle, "swr_max", cfg->swr_max);
     if (err == ESP_OK) err = nvs_set_u8(handle, "rigctl_enable", cfg->rigctl_enabled);
+    if (err == ESP_OK) err = nvs_set_u8(handle, "rigctl_debug", cfg->rigctl_debug);
     if (err == ESP_OK) err = nvs_set_u16(handle, "rigctl_port", cfg->rigctl_port);
     if (err == ESP_OK) err = nvs_set_str(handle, "rigctl_ip", cfg->rigctl_ip);
 

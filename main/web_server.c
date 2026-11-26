@@ -673,7 +673,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 140];
+    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 176 + 2 * RIGCTL_LINE_SIZE];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -798,12 +798,15 @@ static esp_err_t status_handler(httpd_req_t *req)
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const rigctld_stats_t rigctl = rigctld_stats();
+        char last_rejected[2 * sizeof(rigctl.last_rejected) + 1];
+        json_escape(rigctl.last_rejected, last_rejected, sizeof(last_rejected));
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"rigctld\":{\"enabled\":%s,\"listening\":%s,\"port\":%u,"
-                      "\"clients\":%u,\"commands\":%u,\"rejected\":%u}}",
+                      "\"clients\":%u,\"commands\":%u,\"rejected\":%u,\"debug\":%s,\"last_rejected\":\"%s\"}}",
                       rigctl.enabled ? "true" : "false", rigctl.listening ? "true" : "false",
-                      rigctl.port, rigctl.clients, rigctl.commands, rigctl.rejected);
+                      rigctl.port, rigctl.clients, rigctl.commands, rigctl.rejected,
+                      rigctl.debug ? "true" : "false", last_rejected);
     }
     return send_json(req, json, n, sizeof(json));
 }

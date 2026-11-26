@@ -72,7 +72,7 @@ int rigctl_width_code(cat_rig_t rig, char mode, int hz)
 
 typedef enum {
     GET_FREQ, SET_FREQ, GET_MODE, SET_MODE, GET_VFO, SET_VFO, GET_SPLIT, SET_SPLIT,
-    GET_PTT, GET_POWER, CHECK_VFO, DUMP_STATE, VFO_INFO, QUIT
+    GET_PTT, GET_POWER, CHECK_VFO, DUMP_STATE, VFO_INFO, RIG_INFO, VFO_LIST, GET_LOCK, GET_LEVEL, QUIT
 } command_id_t;
 
 static const struct {
@@ -94,6 +94,10 @@ static const struct {
     [CHECK_VFO] = {0, "chk_vfo", 0, {"ChkVFO"}},
     [DUMP_STATE] = {0, "dump_state", 0},
     [VFO_INFO] = {0, "get_vfo_info", 1},
+    [RIG_INFO] = {0, "get_rig_info", 0},
+    [VFO_LIST] = {0, "get_vfo_list", 0, {"VFO list"}},
+    [GET_LOCK] = {0, "get_lock_mode", 0, {"Locked"}},
+    [GET_LEVEL] = {'l', "get_level", 1},
     [QUIT] = {'q', "quit", 0},
 };
 
@@ -141,6 +145,26 @@ static int parse_vfo(const char *name)
     return -1;
 }
 
+static unsigned hamlib_model(const cat_state_t *cat)
+{
+    // Hamlib 4.6 has no native FTX-1 model. Use its generic Dummy identifier.
+    return cat->rig == CAT_RIG_FTDX10 ? 1042u : 1u;
+}
+
+static int read_vfo(const cat_state_t *cat, const char *name)
+{
+    if (!name || strcmp(name, "currVFO") == 0 || strcmp(name, "VFO") == 0) {
+        return cat->rx_vfo_known ? cat->rx_vfo_sub : -1;
+    }
+    return parse_vfo(name);
+}
+
+static bool supports_read_vfo(int cmd)
+{
+    return cmd == GET_FREQ || cmd == GET_MODE || cmd == GET_VFO || cmd == GET_SPLIT ||
+           cmd == GET_PTT || cmd == GET_LEVEL;
+}
+
 static int dump_state(const cat_state_t *cat, char *out, size_t cap)
 {
     uint64_t mode_mask = 0;
@@ -151,23 +175,66 @@ static int dump_state(const cat_state_t *cat, char *out, size_t cap)
     return snprintf(out, cap, "1\n%u\n0\n"
                     "%" PRIu32 " %" PRIu32 " 0x%" PRIx64 " -1 -1 0x%x 0x0\n"
                     "0 0 0 0 0 0 0\n0 0 0 0 0 0 0\n0 0\n0 0\n"
-                    "0\n0\n0\n0\n\n\n0x0\n0x0\n0x0\n0x0\n0x0\n0x0\n"
+                    "0\n0\n0\n0\n\n\n0x0\n0x0\n0x44000000\n0x0\n0x0\n0x0\n"
                     "vfo_ops=0x0\nptt_type=0x1\ntargetable_vfo=0x0\n"
                     "has_set_vfo=1\nhas_get_vfo=1\nhas_set_freq=1\nhas_get_freq=1\n"
                     "timeout=2000\nrig_model=%u\ndone\n",
-                    cat->rig == CAT_RIG_FTDX10 ? 1042u : 1u,
+                    hamlib_model(cat),
                     cat->freq_min ? cat->freq_min : 30000u,
                     cat->freq_max ? cat->freq_max : 470000000u,
                     mode_mask, cat->rig == CAT_RIG_FTX1 ? 0x06000000u : 3u,
-                    cat->rig == CAT_RIG_FTDX10 ? 1042u : 1u);
+                    hamlib_model(cat));
+}
+
+static uint32_t rig_info_crc(const char *text, size_t length)
+{
+    // CRC-32/ISO-HDLC over the body including the newline immediately before CRC=.
+    uint32_t crc = UINT32_MAX;
+    for (size_t i = 0; i < length; ++i) {
+        crc ^= (uint8_t)text[i];
+        for (unsigned bit = 0; bit < 8; ++bit) {
+            crc = (crc >> 1) ^ ((crc & 1u) ? UINT32_C(0xedb88320) : 0);
+        }
+    }
+    return crc ^ UINT32_MAX;
+}
+
+static rigctl_reply_t rig_info(const cat_state_t *cat, bool extended, char *out)
+{
+    const char *header = extended ? "get_rig_info:\n" : "";
+    const size_t header_len = strlen(header);
+    memcpy(out, header, header_len);
+    size_t used = header_len;
+    const bool rx_known = cat->connected && cat->rx_vfo_known;
+    const bool tx_known = cat->connected && cat->tx_vfo != CAT_TX_VFO_UNKNOWN;
+    const bool tx_sub = cat->tx_vfo == CAT_TX_VFO_SUB;
+    for (unsigned sub = 0; sub < 2; ++sub) {
+        const char mode = cat->connected ? (sub ? cat->mode_sub_raw : cat->mode_main_raw) : 0;
+        const char *name = rigctl_mode_name(mode);
+        const uint32_t freq = cat->connected ? (sub ? cat->freq_sub : cat->freq_main) : 0;
+        used += (size_t)snprintf(out + used, RIGCTL_REPLY_SIZE - used,
+                                 "VFO=%s Freq=%" PRIu32 " Mode=%s Width=%u RX=%u TX=%u\n",
+                                 vfo_name(cat, sub), freq, name ? name : "None",
+                                 rigctl_width_hz(cat->rig, mode, cat->width_code[sub]),
+                                 (unsigned)(rx_known && sub == cat->rx_vfo_sub),
+                                 (unsigned)(tx_known && sub == tx_sub));
+    }
+    const char *rig = cat->rig == CAT_RIG_FTX1 ? "FTX-1" :
+                      cat->rig == CAT_RIG_FTDX10 ? "FTDX10" : "Network Remote";
+    used += (size_t)snprintf(out + used, RIGCTL_REPLY_SIZE - used,
+                             "Split=%u SatMode=0\nRig=%s\nApp=Network Remote\n"
+                             "Version=20241103 1.1.0\nModel=%u\n",
+                             (unsigned)(rx_known && tx_known && cat->rx_vfo_sub != tx_sub),
+                             rig, hamlib_model(cat));
+    const uint32_t crc = rig_info_crc(out + header_len, used - header_len);
+    used += (size_t)snprintf(out + used, RIGCTL_REPLY_SIZE - used,
+                             "CRC=0x%08" PRIx32 "\n\n%s", crc, extended ? "RPRT 0\n" : "");
+    return (rigctl_reply_t){.length = used};
 }
 
 static rigctl_reply_t vfo_info(const cat_state_t *cat, const char *arg, bool extended, char *out)
 {
-    int target = parse_vfo(arg);
-    if ((strcmp(arg, "currVFO") == 0 || strcmp(arg, "VFO") == 0) && cat->rx_vfo_known) {
-        target = cat->rx_vfo_sub;
-    }
+    const int target = read_vfo(cat, arg);
     if (strcmp(arg, "?") == 0) {
         const int len = snprintf(out, RIGCTL_REPLY_SIZE, "%s%s %s\n%s",
                                  extended ? "get_vfo_info: ?\n" : "", vfo_name(cat, false),
@@ -192,21 +259,28 @@ static rigctl_reply_t vfo_info(const cat_state_t *cat, const char *arg, bool ext
     return (rigctl_reply_t){.length = (size_t)len};
 }
 
-static int execute(int cmd, char *const args[], const cat_state_t *cat, rigctl_set_fn set, void *context,
+static int execute(int cmd, char *const args[], const char *vfo, const cat_state_t *cat,
+                   rigctl_set_fn set, void *context,
                    char first[24], char second[24])
 {
-    if (cmd == CHECK_VFO || cmd == GET_POWER) {
+    if (cmd == CHECK_VFO || cmd == GET_POWER || cmd == GET_LOCK) {
         strcpy(first, cmd == GET_POWER && cat->connected ? "1" : "0");
         return 0;
     }
+    if (cmd == VFO_LIST) {
+        snprintf(first, 24, "%s %s", vfo_name(cat, false), vfo_name(cat, true));
+        return 0;
+    }
     if (!cat->connected) return -11;
+    const int side = read_vfo(cat, vfo);
+    if (vfo && side < 0) return -1;
     if (cmd == GET_PTT) {
         if (!cat->tx_radio_known) return -11;
         strcpy(first, cat->tx_radio ? "1" : "0");
         return 0;
     }
-    if (!cat->rx_vfo_known && cmd != SET_VFO) return -11;
-    const bool sub = cat->rx_vfo_sub;
+    if (side < 0 && cmd != SET_VFO) return -11;
+    const bool sub = side == 1;
     const char mode = sub ? cat->mode_sub_raw : cat->mode_main_raw;
     const char *name;
     long long number, width;
@@ -227,14 +301,33 @@ static int execute(int cmd, char *const args[], const cat_state_t *cat, rigctl_s
         snprintf(second, 24, "%u", rigctl_width_hz(cat->rig, mode, cat->width_code[sub]));
         return 0;
     case GET_VFO:
-        strcpy(first, vfo_name(cat, sub));
+        if (!cat->rx_vfo_known) return -11;
+        strcpy(first, vfo_name(cat, cat->rx_vfo_sub));
         return 0;
     case GET_SPLIT:
-        if (cat->tx_vfo == CAT_TX_VFO_UNKNOWN) return -11;
+        if (cat->tx_vfo == CAT_TX_VFO_UNKNOWN || !cat->rx_vfo_known) return -11;
         target = cat->tx_vfo == CAT_TX_VFO_SUB;
-        strcpy(first, target != sub ? "1" : "0");
+        strcpy(first, target != cat->rx_vfo_sub ? "1" : "0");
         strcpy(second, vfo_name(cat, target));
         return 0;
+    case GET_LEVEL: {
+        if (strcmp(args[0], "?") == 0) {
+            strcpy(first, "RAWSTR STRENGTH");
+            return 0;
+        }
+        if (!cat->dual_rx && (!cat->rx_vfo_known || sub != cat->rx_vfo_sub)) return -11;
+        const int raw = sub && cat->dual_rx ? cat->s_sub : cat->s_main;
+        if (strcmp(args[0], "RAWSTR") == 0) {
+            snprintf(first, 24, "%d", raw);
+        } else if (strcmp(args[0], "STRENGTH") == 0) {
+            // Match the web S-meter scale (S9 at 120 and S9+60 at 255).
+            const int db = raw <= 120 ? (raw - 120) * 54 / 120 : (raw - 120) * 60 / 135;
+            snprintf(first, 24, "%d", db);
+        } else {
+            return -11;
+        }
+        return 0;
+    }
     case SET_FREQ:
         if (!parse_frequency(args[0], cat, &number)) return -1;
         update.action = RIGCTL_FREQ;
@@ -285,11 +378,14 @@ rigctl_reply_t rigctl_command(char *line, const cat_state_t *cat, rigctl_set_fn 
     int err = -11;
 
     if (cmd >= 0) {
-        if (extra || argc != commands[cmd].argc) {
+        const bool with_vfo = supports_read_vfo(cmd) && argc == commands[cmd].argc + 1;
+        if (extra || (argc != commands[cmd].argc && !with_vfo)) {
             err = -1;
         } else if (cmd == QUIT) {
             strcpy(reply, "RPRT 0\n");
             return (rigctl_reply_t){.length = sizeof("RPRT 0\n") - 1, .close = true};
+        } else if (cmd == RIG_INFO) {
+            return rig_info(cat, extended, reply);
         } else if (cmd == VFO_INFO) {
             return vfo_info(cat, args[0], extended, reply);
         } else if (cmd == DUMP_STATE) {
@@ -299,7 +395,7 @@ rigctl_reply_t rigctl_command(char *line, const cat_state_t *cat, rigctl_set_fn 
             if (extended) used += (size_t)snprintf(reply + used, RIGCTL_REPLY_SIZE - used, "RPRT 0\n");
             return (rigctl_reply_t){.length = used};
         } else {
-            err = execute(cmd, args, cat, set, context, first, second);
+            err = execute(cmd, args + with_vfo, with_vfo ? args[0] : NULL, cat, set, context, first, second);
         }
     }
 
@@ -313,7 +409,7 @@ rigctl_reply_t rigctl_command(char *line, const cat_state_t *cat, rigctl_set_fn 
     }
     const char *values[] = {first, second};
     for (unsigned i = 0; err == 0 && i < 2 && *values[i]; ++i) {
-        if (extended) {
+        if (extended && commands[cmd].labels[i]) {
             used += (size_t)snprintf(reply + used, RIGCTL_REPLY_SIZE - used, "%s: ", commands[cmd].labels[i]);
         }
         used += (size_t)snprintf(reply + used, RIGCTL_REPLY_SIZE - used, "%s\n", values[i]);

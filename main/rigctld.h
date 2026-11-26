@@ -3,13 +3,17 @@
 
 #include <stdbool.h>
 
+#define RIGCTL_LINE_SIZE 96
+
 typedef struct {
     bool enabled;
     bool listening;
+    bool debug;
     unsigned port;
     unsigned clients;
     unsigned commands;
     unsigned rejected;
+    char last_rejected[RIGCTL_LINE_SIZE];
 } rigctld_stats_t;
 
 void rigctld_start(void);

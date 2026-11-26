@@ -428,6 +428,11 @@ save and restart. The server is off by default and accepts up to two clients.
   The authenticated HTTPS `/status` endpoint includes the `rigctld` enable/listen state,
   port and client, command and rejection counts.
 
+Rejected requests appear in the serial log with the client IPv4 address, request and
+response. The latest rejection is available as `rigctld.last_rejected` in HTTPS
+`/status`. To trace successful requests as well, enable **d** in the serial menu and
+save with **6**. Full tracing is off by default.
+
 NET rigctl is plain TCP with no password. Use it only on a trusted local network
 or over a VPN. Keep the port off the public Internet. Clients can change frequency,
 mode, VFO and split only while CAT confirms reception. The service rejects PTT

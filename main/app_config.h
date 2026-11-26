@@ -55,6 +55,7 @@ typedef struct {
     char web_user[APP_CONFIG_WEB_USER_MAX_LEN + 1];
     char web_pass[APP_CONFIG_WEB_PASS_MAX_LEN + 1];
     bool rigctl_enabled;
+    bool rigctl_debug;
     uint16_t rigctl_port;
     char rigctl_ip[16];
     bool tx_enabled;

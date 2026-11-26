@@ -3,7 +3,7 @@
 
 #include "cat.h"
 
-#define RIGCTL_LINE_SIZE 96
+#include "rigctld.h"
 #define RIGCTL_REPLY_SIZE 640
 
 typedef enum { RIGCTL_FREQ, RIGCTL_MODE, RIGCTL_VFO, RIGCTL_SPLIT } rigctl_action_t;
