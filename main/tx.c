@@ -133,6 +133,7 @@ static bool key_audio(uint32_t owner, tx_tone_t tone, int dbfs, int64_t feed_at)
     app_config_get(&cfg);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool keyed = false;
+    const int64_t setup_start = tone == TX_TONE_FT8 ? esp_timer_get_time() : 0;
     const char *refusal = "PTT unavailable";
     if (s_state.phase == TX_ARMED && s_state.owner == owner && !s_inhibited &&
         usb_audio_get_format(NULL) && cat_radio_rx_after(0)) {
@@ -156,6 +157,9 @@ static bool key_audio(uint32_t owner, tx_tone_t tone, int dbfs, int64_t feed_at)
         } else if (tone != TX_TONE_OFF && usb_audio_tx_prepare(radio.rig == CAT_RIG_FTX1) != ESP_OK) {
             refusal = "USB TX audio start failed";
         } else if (tone == TX_TONE_FT8 && esp_timer_get_time() >= feed_at) {
+            const int64_t now = esp_timer_get_time();
+            ESP_LOGW("tx", "FT8 USB setup took %" PRId64 " us, missed submit by %" PRId64 " us",
+                     now - setup_start, now - feed_at);
             usb_audio_tx_finished();
             refusal = TX_FT8_SLOT_MISSED;
         } else if (tone != TX_TONE_OFF &&
@@ -177,6 +181,9 @@ static bool key_audio(uint32_t owner, tx_tone_t tone, int dbfs, int64_t feed_at)
             if (keyed && tone != TX_TONE_OFF) {
                 if (tone == TX_TONE_FT8) {
                     s_ft8_feed_at = feed_at;
+                    const int64_t now = esp_timer_get_time();
+                    ESP_LOGI("tx", "FT8 USB setup and key took %" PRId64 " us, lead before submit %" PRId64 " us",
+                             now - setup_start, feed_at - now);
                     cat_enable_ft8_alc();
                 }
                 usb_audio_tx_request(tone, dbfs);

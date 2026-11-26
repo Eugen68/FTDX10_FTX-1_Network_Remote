@@ -12,9 +12,10 @@ static tx_state_t state = {.reason = ""};
 static unsigned keyed;
 static bool complete = true;
 static bool miss;
-static int64_t feed_at;
+static int64_t feed_at, setup_delay_us;
+static cat_rig_t model = CAT_RIG_FTDX10;
 
-void cat_get_state(cat_state_t *radio) { *radio = (cat_state_t){.rig = CAT_RIG_FTDX10}; }
+void cat_get_state(cat_state_t *radio) { *radio = (cat_state_t){.rig = model}; }
 bool tx_acquire(uint32_t owner)
 {
     if (state.phase != TX_IDLE) return false;
@@ -24,7 +25,8 @@ bool tx_acquire(uint32_t owner)
 bool tx_key_ft8(uint32_t owner, int64_t feed)
 {
     assert(state.owner == owner && state.phase == TX_ARMED);
-    if (miss) {
+    g_now_us += setup_delay_us;
+    if (miss || g_now_us >= feed) {
         tx_release(owner, TX_FT8_SLOT_MISSED);
         return false;
     }
@@ -57,7 +59,7 @@ static int64_t kick(void)
     ft8_tick();
     const int64_t slot = s_job.slot;
     assert(slot > g_now_us);
-    advance_with_heartbeats(slot - PREPARE_LEAD_US);
+    advance_with_heartbeats(slot - (model == CAT_RIG_FTX1 ? FTX1_PREPARE_LEAD_US : PREPARE_LEAD_US));
     ft8_tick();
     return slot;
 }
@@ -122,6 +124,15 @@ int main(void)
     advance_with_heartbeats(g_now_us + BROWSER_MAX_AGE_US);
     ft8_tick();
     assert(!s_job.owner && strcmp(s_job.reason, "FT8 clock expired: check SNTP or browser RTT") == 0);
+    ntp_synced(&ntp);
+    model = CAT_RIG_FTX1;
+    setup_delay_us = 800000;
+    assert(!*ft8_tx_arm(1, "CQ K1ABC FN42", 1500, false, -24));
+    const int64_t ftx1_slot = kick();
+    assert(state.phase == TX_KEYED);
+    assert(g_now_us == ftx1_slot - FTX1_PREPARE_LEAD_US + setup_delay_us);
+    assert(feed_at == ftx1_slot + FT8_TX_AUDIO_US - 20000LL);
+    ft8_tx_halt(1, "Done");
     free(s_pcm);
     puts("FT8 clock selection, ownership, slot limit, late schedule and fail-safe stops passed");
 }

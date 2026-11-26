@@ -34,6 +34,8 @@ static bool defer_audio_cleanup, cleanup_pending;
 static cat_rig_t radio_model = CAT_RIG_FTDX10;
 static bool prepare_fails, prepare_changes_mode, prepare_shared;
 static unsigned preparations, cleanups;
+static unsigned tx_limit = 10;
+static int64_t prepare_delay_us;
 static tx_tone_t audio_request;
 static unsigned po_raw, swr_raw;
 static bool meters_missing;
@@ -51,17 +53,18 @@ const char *cat_voice_mode_error(bool starting) { return NULL; }
 const char *cat_data_mode_error(void) { return NULL; }
 
 bool app_config_tx_enabled(void) { return enabled; }
-void app_config_get(app_config_t *cfg) { *cfg = (app_config_t){.tx_max_seconds = 10, .swr_max = 30}; }
+void app_config_get(app_config_t *cfg) { *cfg = (app_config_t){.tx_max_seconds = tx_limit, .swr_max = 30}; }
 bool usb_audio_get_format(usb_audio_format_t *fmt) { return usb_available; }
 bool usb_audio_tx_available(void) { return output_available; }
 bool usb_audio_tx_idle(void) { return output_idle; }
 bool usb_audio_tx_cleanup_pending(void) { return cleanup_pending; }
 void usb_audio_tx_request(tx_tone_t tone, int dbfs) { audio_request = tone; }
-void cat_get_state(cat_state_t *state) { *state = (cat_state_t){.rig = radio_model}; }
+void cat_get_state(cat_state_t *state) { *state = (cat_state_t){.rig = radio_model, .mode_main_raw = 'C'}; }
 esp_err_t usb_audio_tx_prepare(bool shared)
 {
     assert(!radio_on && output_idle);
     ++preparations;
+    g_now_us += prepare_delay_us;
     prepare_shared = shared;
     if (prepare_changes_mode) {
         mode_error = "Mode changed";
@@ -334,6 +337,22 @@ int main(void)
     assert(tx_submit_voice(1, frame, sizeof(frame)) && voice_frames == 3);
     watchdog_tick();
     assert(tx_get_state().stopping && strcmp(tx_get_state().reason, "Heartbeat lost") == 0);
+    confirm_rx();
+    tx_limit = 15;
+    radio_model = CAT_RIG_FTX1;
+    const unsigned last_on = on_writes;
+    const unsigned last_cleanup = cleanups;
+    prepare_delay_us = 900000;
+    assert(tx_acquire(1));
+    assert(!tx_key_ft8(1, g_now_us + 800000));
+    assert(strcmp(tx_get_state().reason, TX_FT8_SLOT_MISSED) == 0);
+    assert(prepare_shared && cleanups == last_cleanup + 1 && on_writes == last_on);
+    assert(strstr(warnings, "FT8 USB setup took 900000 us, missed submit by 100000 us"));
+    assert(tx_acquire(1));
+    const int64_t feed = g_now_us + 980000;
+    assert(tx_key_ft8(1, feed) && tx_ft8_feed_time() == feed);
+    assert(on_writes == last_on + 1 && audio_request == TX_TONE_FT8);
+    tx_release(1, "Released");
     confirm_rx();
     puts("all TX state tests passed");
 }

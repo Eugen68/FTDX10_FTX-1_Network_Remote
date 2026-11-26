@@ -20,6 +20,7 @@
 #define BROWSER_MAX_AGE_US 15000000LL
 #define MAX_CLOCK_CHANGE_US 80000LL
 #define PREPARE_LEAD_US 300000LL
+#define FTX1_PREPARE_LEAD_US 500000LL
 #define PREPARE_LATE_US 50000LL
 #define SLOT_LIMIT 3
 
@@ -128,11 +129,9 @@ const char *ft8_tx_arm(uint32_t owner, const char *message, unsigned hz, bool od
     return error;
 }
 
-static unsigned audio_lead_ms(void)
+static unsigned audio_lead_ms(cat_rig_t rig)
 {
-    cat_state_t radio;
-    cat_get_state(&radio);
-    return radio.rig == CAT_RIG_FTX1 ? CONFIG_FT8_FTX1_AUDIO_LEAD_MS : CONFIG_FT8_FTDX10_AUDIO_LEAD_MS;
+    return rig == CAT_RIG_FTX1 ? CONFIG_FT8_FTX1_AUDIO_LEAD_MS : CONFIG_FT8_FTDX10_AUDIO_LEAD_MS;
 }
 
 ft8_tx_status_t ft8_tx_status(uint32_t owner)
@@ -140,13 +139,15 @@ ft8_tx_status_t ft8_tx_status(uint32_t owner)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     const int64_t now = esp_timer_get_time();
     const ft8_clock_t clock = clock_locked(owner ? owner : s_browser.owner, now);
+    cat_state_t radio;
+    cat_get_state(&radio);
     const ft8_tx_status_t status = {
         .armed = s_job.owner != 0, .owned = owner && owner == s_job.owner,
         .remaining = s_job.remaining, .reason = s_job.reason,
         .preparing = s_job.owner && !s_job.ready, .prepare_ms = s_job.prepare_ms,
         .clock = clock.sampled_us ? (clock.owner ? "browser" : "sntp") : "none",
         .age_ms = clock.sampled_us ? (now - clock.sampled_us) / 1000 : -1,
-        .offset_ms = clock.offset_us / 1000, .rtt_ms = clock.rtt_ms, .lead_ms = audio_lead_ms(),
+        .offset_ms = clock.offset_us / 1000, .rtt_ms = clock.rtt_ms, .lead_ms = audio_lead_ms(radio.rig),
     };
     xSemaphoreGive(s_lock);
     return status;
@@ -208,19 +209,23 @@ static void ft8_tick(void)
             }
         }
     } else if (s_job.ready) {
+        cat_state_t radio;
+        cat_get_state(&radio);
+        // FTX-1 hands off the RX USB channel before it can key. Preserve the UTC audio target.
+        const int64_t prepare_lead = radio.rig == CAT_RIG_FTX1 ? FTX1_PREPARE_LEAD_US : PREPARE_LEAD_US;
         if (!s_job.slot) {
             s_job.offset_us = clock.offset_us;
-            s_job.slot = ft8_next_slot(now + clock.offset_us, s_job.odd, PREPARE_LEAD_US) - clock.offset_us;
+            s_job.slot = ft8_next_slot(now + clock.offset_us, s_job.odd, prepare_lead) - clock.offset_us;
             s_job.reason = "Waiting for FT8 slot";
         }
-        const int64_t prepare = s_job.slot - PREPARE_LEAD_US;
+        const int64_t prepare = s_job.slot - prepare_lead;
         if (now < prepare) return;
         if (now > prepare + PREPARE_LATE_US) {
             s_job.slot = 0;
             return;
         }
         const int64_t audio_at = s_job.slot + FT8_TX_AUDIO_US;
-        const int64_t feed_at = audio_at - audio_lead_ms() * 1000LL;
+        const int64_t feed_at = audio_at - audio_lead_ms(radio.rig) * 1000LL;
         --s_job.remaining;
         if (!tx_key_ft8(s_job.owner, feed_at)) {
             const tx_state_t refused = tx_get_state();

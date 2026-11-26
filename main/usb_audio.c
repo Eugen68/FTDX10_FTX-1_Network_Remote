@@ -87,6 +87,7 @@ static QueueHandle_t s_evt_queue;
 static SemaphoreHandle_t s_lock;               // protects input state and output descriptors
 static uac_host_device_handle_t s_mic_handle;
 static uac_host_stream_config_t s_rx_format;
+static atomic_bool s_rx_pause_requested;       // prevent more PCM reads while waiting to stop RX
 static atomic_bool s_rx_paused;                // logical RX stream retained while its pipe is released
 static SemaphoreHandle_t s_output_lock;        // keeps handle open across UAC output operations
 static uac_host_device_handle_t s_output_handle;
@@ -607,8 +608,11 @@ esp_err_t usb_audio_tx_prepare(bool share_rx_channel)
 
     const bool pause_rx = share_rx_channel || s_output_format.endpoints > 1;
     if (pause_rx) {
+        // The higher-priority reader can repeatedly reacquire s_lock while RX is active.
+        atomic_store(&s_rx_pause_requested, true);
         xSemaphoreTake(s_lock, portMAX_DELAY);
-        s_rx_paused = true;
+        atomic_store(&s_rx_paused, true);
+        atomic_store(&s_rx_pause_requested, false);
         const esp_err_t err = s_streaming && s_mic_handle
                               ? uac_host_device_stop(s_mic_handle) : ESP_ERR_INVALID_STATE;
         if (err != ESP_OK) {
@@ -760,7 +764,10 @@ static void tx_audio_task(void *arg)
                 continue;
             }
             if (ft8 && !ft8_offset) {
-                if (now > ft8_feed + 20000 || !cat_radio_tx()) {
+                const bool confirmed_tx = cat_radio_tx();
+                if (now > ft8_feed + 20000 || !confirmed_tx) {
+                    ESP_LOGW(TAG, "FT8 first block refused: submit_late_us=%" PRId64 " CAT TX=%s",
+                             now - ft8_feed, confirmed_tx ? "yes" : "no");
                     error = TX_FT8_SLOT_MISSED;
                     blocks = 0;
                 } else {
@@ -876,12 +883,17 @@ bool usb_audio_get_output_format(usb_audio_output_format_t *fmt)
 
 esp_err_t usb_audio_read(uint8_t *buf, uint32_t size, uint32_t *bytes_read, TickType_t timeout)
 {
+    if (atomic_load(&s_rx_pause_requested) || atomic_load(&s_rx_paused)) return ESP_ERR_NOT_FINISHED;
+
     esp_err_t ret = ESP_ERR_INVALID_STATE;
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(MAX_LOCK_WAIT_MS)) != pdTRUE) {
-        return s_rx_paused ? ESP_ERR_NOT_FINISHED : ESP_ERR_TIMEOUT;
+        return atomic_load(&s_rx_pause_requested) || atomic_load(&s_rx_paused)
+            ? ESP_ERR_NOT_FINISHED : ESP_ERR_TIMEOUT;
     }
-    if (s_streaming) {
-        ret = s_rx_paused ? ESP_ERR_NOT_FINISHED : uac_host_device_read(s_mic_handle, buf, size, bytes_read, timeout);
+    if (atomic_load(&s_rx_pause_requested) || atomic_load(&s_rx_paused)) {
+        ret = ESP_ERR_NOT_FINISHED;
+    } else if (s_streaming) {
+        ret = uac_host_device_read(s_mic_handle, buf, size, bytes_read, timeout);
     }
     xSemaphoreGive(s_lock);
     return ret;
