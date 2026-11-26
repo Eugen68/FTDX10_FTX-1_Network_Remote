@@ -1309,7 +1309,10 @@
           <label>FT8 message <input id="ft8TxMessage" maxlength="34" autocomplete="off" size="24"></label>
           <label>Hz <input id="ft8TxHz" type="number" min="200" max="3000" value="1500"></label>
           <label>Slot <select id="ft8TxSlot"><option value="even">Even</option><option value="odd">Odd</option></select></label>
-          <label>dBFS <input id="ft8TxLevel" type="number" min="-60" max="-6" value="-24"></label>
+          <label>Level <input id="ft8TxLevel" type="range" min="-60" max="-6" step="1" value="-24">
+            <output id="ft8TxLevelValue" for="ft8TxLevel">-24 dBFS</output></label>
+          <label>ALC <meter id="ft8TxAlc" min="0" max="255" value="0" aria-label="Radio ALC"></meter>
+            <span id="ft8TxAlcValue">—</span></label>
           <button type="button" class="ft8-btn" id="ft8TxArm">Enable TX</button>
           <button type="button" class="ft8-btn" id="ft8TxHalt" disabled>Halt</button>
           <label>My call <input id="ft8TxCall" maxlength="11" autocomplete="off" size="7"></label>
@@ -3944,7 +3947,7 @@ let micOpening = false;
 let micGeneration = 0;
 let pendingMicFrame = null;
 
-const ft8Tx = Object.fromEntries(['Controls', 'Message', 'Hz', 'Slot', 'Level', 'Arm', 'Halt', 'Call', 'Grid', 'Info']
+const ft8Tx = Object.fromEntries(['Controls', 'Message', 'Hz', 'Slot', 'Level', 'LevelValue', 'Alc', 'AlcValue', 'Arm', 'Halt', 'Call', 'Grid', 'Info']
   .map(k => [k, document.getElementById('ft8Tx' + k)]));
 let ft8Armed = false, ft8Pending = false, ft8Clock = 'none';
 let ft8Probe = null, ft8ProbeRound = null, ft8LastProbe = 0;
@@ -3987,12 +3990,22 @@ function haltFt8() {
   updateTxControls();
 }
 
+function showFt8Alc(raw = null) {
+  ft8Tx.Alc.value = raw ?? 0;
+  ft8Tx.Alc.style.opacity = raw === null ? '0.35' : '';
+  ft8Tx.AlcValue.textContent = raw ?? '—';
+}
+
+ft8Tx.Level.addEventListener('input', () => {
+  ft8Tx.LevelValue.value = ft8Tx.Level.value + ' dBFS';
+});
 ft8Tx.Halt.addEventListener('click', haltFt8);
 ft8Tx.Arm.addEventListener('click', async () => {
   if (!activeTxPage() || ft8Tx.Arm.disabled || !ft8Tx.Message.value.trim() ||
       !ft8Tx.Hz.validity.valid || !ft8Tx.Level.validity.valid) return;
   const socket = txSocket;
   ft8Pending = txNetworkQuiet = true;
+  ft8Tx.Info.textContent = "Preparing FT8…";
   updateTxControls();
   await devicePoll;
   if (!ft8Pending || socket !== txSocket || !activeTxPage()) {
@@ -4013,6 +4026,7 @@ function updateTxControls() {
   ft8Tx.Controls.hidden = !txAuthenticated;
   ft8Tx.Arm.disabled = !txAuthenticated || ft8Pending || ft8Armed || txHeld || txKeyed || txStopping || ft8Clock === 'none';
   ft8Tx.Halt.disabled = !ft8Pending && !ft8Armed;
+  ft8Tx.Level.disabled = ft8Pending || ft8Armed;
   ptt.disabled = !txAuthenticated || txStopping || ft8Pending || ft8Armed ||
     (voice && !txHeld && (!mic || voiceSource !== 2));
 }
@@ -4209,9 +4223,11 @@ txConnect.addEventListener('click', () => {
     ft8Armed = state.ft8_owned === true;
     if (ft8Armed || state.error) ft8Pending = false;
     ft8Clock = state.ft8_clock || 'none';
-    ft8Tx.Info.textContent = state.error || (state.ft8_reason
+    ft8Tx.Info.textContent = state.error || ((ft8Pending || (ft8Armed && state.ft8_preparing))
+      ? 'Preparing FT8…' : state.ft8_reason
       ? state.ft8_reason + (ft8Armed ? ` · ${state.ft8_remaining} remaining · ${ft8Clock}` : '')
       : `Clock: ${ft8Clock}`);
+    showFt8Alc(ft8Armed && state.alc_valid ? state.alc_raw : null);
     const wasKeyedByUs = txKeyed && txOwnsKey;
     txKeyed = state.state === 'KEYED';
     txStopping = state.stopping === true;
@@ -4248,6 +4264,7 @@ txConnect.addEventListener('click', () => {
     ft8Armed = ft8Pending = false;
     ft8Probe = ft8ProbeRound = null;
     ft8Clock = 'none';
+    showFt8Alc();
     updateTxControls();
     releasePtt();
     txKeyRequested = txNetworkQuiet = false;

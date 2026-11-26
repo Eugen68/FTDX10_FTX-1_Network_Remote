@@ -6,11 +6,12 @@
 typedef struct {
     bool armed;
     bool owned;
+    bool preparing;
     const char *reason;
     const char *clock;
     int64_t age_ms;
     int64_t offset_ms;
-    unsigned rtt_ms, lead_ms;
+    unsigned rtt_ms, lead_ms, prepare_ms;
     unsigned remaining;
 } ft8_tx_status_t;
 

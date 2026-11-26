@@ -142,8 +142,8 @@ int cat_rigctl_result(unsigned ticket);
 
 typedef struct {
     cat_rig_t rig;
-    unsigned po, swr, swr_po;
-    int64_t po_us, swr_us, swr_po_us;
+    unsigned po, swr, swr_po, alc;
+    int64_t po_us, swr_us, swr_po_us, alc_us;
 } cat_tx_meters_t;
 
 cat_tx_meters_t cat_get_tx_meters(void);
@@ -161,6 +161,7 @@ cat_write_stats_t cat_get_write_stats(void);
 bool cat_radio_rx_after(int64_t after_us);
 bool cat_radio_tx(void);
 esp_err_t cat_ptt(bool on);
+void cat_enable_ft8_alc(void);
 const char *cat_ptt_fault(int64_t started, int64_t grace_us);
 const char *cat_ptt_mode_error(int64_t keyed_at);
 const char *cat_voice_mode_error(bool starting);

@@ -103,6 +103,7 @@ size_t cat_log_recent_tx_meters(uint32_t through_ms, cat_log_entry_t *entries, s
 bool cat_radio_rx_after(int64_t after_us) { return cat_available && !radio_on && rx_us > after_us; }
 bool cat_radio_tx(void) { return cat_available && radio_on; }
 const char *cat_ptt_fault(int64_t started, int64_t grace_us) { return cat_available ? fault : "CAT lost"; }
+void cat_enable_ft8_alc(void) {}
 esp_err_t cat_ptt(bool on)
 {
     if (!cat_available) {

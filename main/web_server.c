@@ -811,9 +811,10 @@ static esp_err_t status_handler(httpd_req_t *req)
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"ft8_tx\":{\"armed\":%s,\"remaining\":%u,\"clock\":\"%s\","
                       "\"age_ms\":%" PRId64 ",\"offset_ms\":%" PRId64 ",\"rtt_ms\":%u,\"usb_lead_ms\":%u,"
-                      "\"reason\":\"%s\"}}",
+                      "\"preparing\":%s,\"prepare_ms\":%u,\"reason\":\"%s\"}}",
                       ft8.armed ? "true" : "false", ft8.remaining, ft8.clock, ft8.age_ms,
-                      ft8.offset_ms, ft8.rtt_ms, ft8.lead_ms, ft8.reason);
+                      ft8.offset_ms, ft8.rtt_ms, ft8.lead_ms,
+                      ft8.preparing ? "true" : "false", ft8.prepare_ms, ft8.reason);
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const tx_voice_stats_t voice = tx_voice_stats();
@@ -1234,13 +1235,16 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
                            "{\"t\":\"tx\",\"state\":\"%s\",\"left_s\":%u,\"reason\":\"%s\","
                            "\"on_air\":%s,\"stopping\":%s,\"rx_confirmed\":%s,\"rx_paused\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\","
                            "\"swr_x100\":%u,\"swr_raw\":%u,\"po_raw\":%u,\"po_valid\":%s,"
-                           "\"ft8_owned\":%s,\"ft8_remaining\":%u,\"ft8_reason\":\"%s\",\"ft8_clock\":\"%s\"}",
+                           "\"alc_raw\":%u,\"alc_valid\":%s, "
+                           "\"ft8_owned\":%s,\"ft8_preparing\":%s,\"ft8_remaining\":%u,\"ft8_reason\":\"%s\",\"ft8_clock\":\"%s\"}",
                            phase, state.left_s, tx_reason(&state, reason), state.on_air ? "true" : "false",
                            state.stopping ? "true" : "false", state.rx_confirmed ? "true" : "false",
                            usb_audio_rx_paused() ? "true" : "false", tx_vfo,
                            session ? "true" : "false", session && state.owner == session->owner ? "true" : "false",
                            error, state.swr, state.swr_raw, state.po_raw, state.po_valid ? "true" : "false",
-                           ft8.owned ? "true" : "false", ft8.remaining, ft8.reason, ft8.clock);
+                           state.alc_raw, state.alc_valid ? "true" : "false",
+                           ft8.owned ? "true" : "false", ft8.preparing ? "true" : "false",
+                           ft8.remaining, ft8.reason, ft8.clock);
     if (n < 0 || (size_t)n >= sizeof(json)) {
         return ESP_FAIL;
     }

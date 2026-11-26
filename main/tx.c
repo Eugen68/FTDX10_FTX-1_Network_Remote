@@ -175,7 +175,10 @@ static bool key_audio(uint32_t owner, tx_tone_t tone, int dbfs, int64_t feed_at)
             s_swr_guard = (tx_swr_guard_t){.rig = radio.rig};
             keyed = cat_ptt(true) == ESP_OK;
             if (keyed && tone != TX_TONE_OFF) {
-                if (tone == TX_TONE_FT8) s_ft8_feed_at = feed_at;
+                if (tone == TX_TONE_FT8) {
+                    s_ft8_feed_at = feed_at;
+                    cat_enable_ft8_alc();
+                }
                 usb_audio_tx_request(tone, dbfs);
             }
         }
@@ -345,6 +348,9 @@ tx_state_t tx_get_state(void)
         result.swr = result.swr_valid ? tx_swr_value(meters.rig, meters.swr) : 0;
         result.swr_raw = meters.swr_us >= s_keyed_at ? meters.swr : 0;
         result.po_raw = meters.po_us >= s_keyed_at ? meters.po : 0;
+        result.alc_valid = result.on_air && !s_stopping && s_tone == TX_TONE_FT8 &&
+                           meters.alc_us >= s_keyed_at && now - meters.alc_us <= max_age_us;
+        result.alc_raw = result.alc_valid ? meters.alc : 0;
     }
     xSemaphoreGive(s_lock);
     return result;

@@ -136,6 +136,10 @@ static int64_t s_normal_swr_us;
 static int64_t s_rm6_reply_us;
 static bool s_unkey_requested;
 static cat_tx_meters_t s_tx_meters;
+static atomic_bool s_ft8_alc;
+
+#define ALC_QUERY_MS 40
+#define ALC_PERIOD_US 500000
 static cat_write_stats_t s_write_stats;
 static int64_t s_tx_vfo_status_us;
 static int64_t s_mode_status_us[2];
@@ -282,9 +286,19 @@ static struct {
     char answer[RX_BUF_BYTES];
     query_result_t result;
     bool waiting;
+    bool transition_reject;
 } s_query;
 #define CAT_REJECTED_POLLS 48
-static char s_rejected_polls[CAT_REJECTED_POLLS][13];
+#define CAT_REJECT_LIMIT 3
+#define CAT_REJECT_RETRY_US 60000000LL
+#define CAT_TRANSITION_GRACE_MS 1000u
+static struct {
+    char cmd[13];
+    unsigned streak;
+    int64_t retry_us;
+} s_rejected_polls[CAT_REJECTED_POLLS];
+static atomic_uint s_transition_ms;
+static atomic_uint s_effective_rejects;
 static size_t s_rejected_count;
 static bool s_split_keyed_polls;
 static unsigned s_keyed_reject_baseline;
@@ -328,14 +342,30 @@ static bool matches_query(const char *pkt, size_t length, const char *command)
     return length > prefix + 1;
 }
 
+static void record_tx_transition(void)
+{
+    atomic_store(&s_transition_ms, (unsigned)(esp_timer_get_time() / 1000));
+}
+
+static bool in_tx_transition(void)
+{
+    const unsigned since = atomic_load(&s_transition_ms);
+    return since && (unsigned)(esp_timer_get_time() / 1000) - since < CAT_TRANSITION_GRACE_MS;
+}
+
 static void record_query_answer(const char *pkt, size_t length)
 {
     const bool rejected = length == 2 && memcmp(pkt, "?;", 2) == 0;
-    if (rejected) atomic_fetch_add(&s_rejects, 1);
+    const bool transient = rejected && in_tx_transition();
+    if (rejected) {
+        atomic_fetch_add(&s_rejects, 1);
+        if (!transient) atomic_fetch_add(&s_effective_rejects, 1);
+    }
     taskENTER_CRITICAL(&s_query_mux);
     if (s_query.waiting && (rejected || matches_query(pkt, length, s_query.command))) {
         memcpy(s_query.answer, pkt, length + 1);
         s_query.result = rejected ? QUERY_REJECTED : QUERY_ANSWER;
+        s_query.transition_reject = transient;
         s_query.waiting = false;
     }
     taskEXIT_CRITICAL(&s_query_mux);
@@ -544,7 +574,7 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         return rig->can_tx && (pl == 0 || (pl == 1 && p[0] == '1' && app_config_tx_enabled()));
     case CAT_TWO('R', 'M'):         // meter (read): the S meter item of this radio only
         return pl == 1 && ((rig->meter_side && p[0] == rig->meter_side) ||
-                           (rig->can_tx && (p[0] == '5' || p[0] == '6')));
+                           (rig->can_tx && p[0] >= '4' && p[0] <= '6'));
     case CAT_TWO('P', 'S'):         // power
         return ctl && pl == 1 && is_side(p[0]);
     case CAT_TWO('F', 'A'):         // frequency, read or set within the radio's range
@@ -746,7 +776,8 @@ static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_ki
         if (s_wire_lock) xSemaphoreGive(s_wire_lock);
         return ESP_ERR_INVALID_STATE;
     }
-    const unsigned budget_ms = keyed_poll ? keyed_write_timeout_ms() : TX_TIMEOUT_MS;
+    const unsigned budget_ms = !keyed_poll ? TX_TIMEOUT_MS :
+        strcmp(cmds, "RM4;") == 0 ? ALC_QUERY_MS : keyed_write_timeout_ms();
     const int64_t start = esp_timer_get_time();
     const esp_err_t err = cdc_acm_host_data_tx_blocking(dev, (const uint8_t *)cmds, strlen(cmds), budget_ms);
     const unsigned elapsed = (unsigned)(esp_timer_get_time() - start);
@@ -769,12 +800,52 @@ static esp_err_t cat_tx(cdc_acm_dev_hdl_t dev, const char *cmds)
     return cat_tx_kind(dev, cmds, CAT_LOG_CMD, false);
 }
 
-static bool poll_rejected(const char *cmd)
+static bool essential_poll(const char *cmd)
 {
-    for (size_t i = 0; i < s_rejected_count; ++i) {
-        if (strcmp(s_rejected_polls[i], cmd) == 0) return true;
+    if (strncmp(cmd, "EX", 2) == 0) return true;
+    static const char *const essential[] = {
+        "ID;", "TX;", "RI0;", "BY;", "RM5;", "RM6;", "FT;", "MD0;", "MD1;", "FA;", "FB;"
+    };
+    for (size_t i = 0; i < sizeof(essential) / sizeof(essential[0]); ++i) {
+        if (strcmp(cmd, essential[i]) == 0) return true;
     }
     return false;
+}
+
+static size_t rejected_poll_index(const char *cmd)
+{
+    for (size_t i = 0; i < s_rejected_count; ++i) {
+        if (strcmp(s_rejected_polls[i].cmd, cmd) == 0) return i;
+    }
+    return s_rejected_count;
+}
+
+static bool poll_rejected(const char *cmd)
+{
+    const size_t i = rejected_poll_index(cmd);
+    return i < s_rejected_count && s_rejected_polls[i].retry_us > esp_timer_get_time();
+}
+
+static void update_poll_rejections(const char *cmd, query_result_t result, bool transient)
+{
+    if (essential_poll(cmd) || transient) return;
+    const size_t i = rejected_poll_index(cmd);
+    if (result != QUERY_REJECTED) {
+        if (i < s_rejected_count) s_rejected_polls[i] = s_rejected_polls[--s_rejected_count];
+        return;
+    }
+    if (i == s_rejected_count) {
+        if (i == CAT_REJECTED_POLLS) return;
+        ++s_rejected_count;
+        s_rejected_polls[i].streak = 0;
+        s_rejected_polls[i].retry_us = 0;
+        strlcpy(s_rejected_polls[i].cmd, cmd, sizeof(s_rejected_polls[i].cmd));
+    }
+    if (s_rejected_polls[i].streak < CAT_REJECT_LIMIT) ++s_rejected_polls[i].streak;
+    if (s_rejected_polls[i].streak == CAT_REJECT_LIMIT) {
+        s_rejected_polls[i].retry_us = esp_timer_get_time() + CAT_REJECT_RETRY_US;
+        ESP_LOGW(TAG, "Repeated CAT rejection of %s, retrying in 60 s", cmd);
+    }
 }
 
 /** One outstanding read at a time; consume only its matching response or a rejection. */
@@ -784,6 +855,7 @@ static query_result_t query(cdc_acm_dev_hdl_t dev, const char *cmd, char *out, s
     taskENTER_CRITICAL(&s_query_mux);
     strlcpy(s_query.command, cmd, sizeof(s_query.command));
     s_query.result = QUERY_TIMEOUT;
+    s_query.transition_reject = false;
     s_query.waiting = true;
     taskEXIT_CRITICAL(&s_query_mux);
     ulTaskNotifyTake(pdTRUE, 0);
@@ -802,13 +874,10 @@ static query_result_t query(cdc_acm_dev_hdl_t dev, const char *cmd, char *out, s
     taskENTER_CRITICAL(&s_query_mux);
     const query_result_t result = link_ok ? s_query.result : QUERY_FAILED;
     if (result == QUERY_ANSWER && out) strlcpy(out, s_query.answer, out_size);
+    const bool transient = s_query.transition_reject;
     s_query.waiting = false;
     taskEXIT_CRITICAL(&s_query_mux);
-    if (result == QUERY_REJECTED && strcmp(cmd, "ID;") != 0 &&
-        s_rejected_count < CAT_REJECTED_POLLS && !poll_rejected(cmd)) {
-        strlcpy(s_rejected_polls[s_rejected_count++], cmd, sizeof(s_rejected_polls[0]));
-        ESP_LOGW(TAG, "Radio rejected %s; suppressing its periodic poll", cmd);
-    }
+    update_poll_rejections(cmd, result, transient);
     return result;
 }
 
@@ -852,6 +921,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_state.connected = false;
         s_state.busy = false;
         s_state.tx = false;
+        atomic_store(&s_transition_ms, 0);
         s_last_tx_status_us = 0;
         s_swr_status_us = 0;
         s_hi_swr_us = 0;
@@ -859,6 +929,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_rm6_reply_us = 0;
         s_unkey_requested = false;
         s_tx_meters = (cat_tx_meters_t){0};
+        atomic_store(&s_ft8_alc, false);
         s_tx_vfo_status_us = 0;
         memset(s_mode_status_us, 0, sizeof(s_mode_status_us));
         memset(s_ssb_menu_us, 0, sizeof(s_ssb_menu_us));
@@ -1183,6 +1254,7 @@ static void handle_cat_packet(const char *pkt)
     if (s_rig->has_ri && parse_ri(pkt, &ri_busy, &ri_tx)) {
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
             s_state.busy = ri_busy;
+            if (s_state.tx != ri_tx) record_tx_transition();
             s_state.tx = ri_tx;
             s_state.connected = true;
             s_last_answer_us = esp_timer_get_time();
@@ -1239,6 +1311,7 @@ static void handle_cat_packet(const char *pkt)
     bool tx_on = false;
     if (s_rig->can_tx && parse_tx(pkt, &tx_on)) {
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+            if (s_state.tx != tx_on) record_tx_transition();
             s_state.tx = tx_on;
             s_state.connected = true;
             s_last_answer_us = esp_timer_get_time();
@@ -1252,13 +1325,16 @@ static void handle_cat_packet(const char *pkt)
 
     // Both manuals use RM + item + three digits + reserved 000 + semicolon.
     if (s_rig->can_tx && strlen(pkt) == 10 && strncmp(pkt, "RM", 2) == 0 &&
-        (pkt[2] == '5' || pkt[2] == '6') && all_digits(pkt + 3, 3) &&
+        pkt[2] >= '4' && pkt[2] <= '6' && all_digits(pkt + 3, 3) &&
         memcmp(pkt + 6, "000;", 4) == 0) {
         const unsigned raw = digits_value(pkt + 3, 3);
         if (raw <= 255 && xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
             s_tx_meters.rig = s_rig->rig;
             s_last_answer_us = now_pkt_us;
-            if (pkt[2] == '5') {
+            if (pkt[2] == '4') {
+                s_tx_meters.alc = raw;
+                s_tx_meters.alc_us = now_pkt_us;
+            } else if (pkt[2] == '5') {
                 s_tx_meters.po = raw;
                 s_tx_meters.po_us = now_pkt_us;
             } else {
@@ -1368,7 +1444,7 @@ static void report_queued_write_failure(const char *cmd, esp_err_t err)
 }
 
 typedef struct {
-    int64_t sent_at;
+    int64_t sent_at, alc_at;
     bool status;
     unsigned meters_until_status;
 } keyed_poll_t;
@@ -1386,12 +1462,23 @@ static bool keyed_poll_answered(const rig_profile_t *rig, const keyed_poll_t *po
     return answered;
 }
 
+static void poll_ft8_alc(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_poll_t *poll)
+{
+    if (!atomic_load(&s_ft8_alc) || poll->status ||
+        esp_timer_get_time() - poll->alc_at < ALC_PERIOD_US ||
+        poll_rejected("RM4;") || !keyed_poll_answered(rig, poll)) return;
+
+    // An optional ALC read gets a short budget, only after fresh PO/SWR replies.
+    poll->alc_at = esp_timer_get_time();
+    query(dev, "RM4;", NULL, 0, ALC_QUERY_MS, true);
+}
+
 static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_poll_t *poll)
 {
     const int64_t now = esp_timer_get_time();
     bool recheck_swr = false;
     if (poll->sent_at) {
-        if (cat_rejected_commands() != s_keyed_reject_baseline) s_split_keyed_polls = true;
+        if (atomic_load(&s_effective_rejects) != s_keyed_reject_baseline) s_split_keyed_polls = true;
         const int64_t elapsed = now - poll->sent_at;
         // On the FTDX10 a missing reply must leave time for another meter poll
         // before the SWR watchdog reaches its 1.1 s freshness limit.
@@ -1407,10 +1494,11 @@ static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_po
             recheck_swr = s_hi_swr_us >= poll->sent_at && s_normal_swr_us < s_hi_swr_us;
             xSemaphoreGive(s_lock);
         }
+        poll_ft8_alc(dev, rig, poll);
     }
 
     // Record before writing: a reply can arrive before the CDC write returns.
-    poll->sent_at = now;
+    poll->sent_at = esp_timer_get_time();
     poll->status = recheck_swr || poll->meters_until_status == 0;
     const char *cmds = "RM5;RM6;";
     if (poll->status) {
@@ -1419,18 +1507,10 @@ static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_po
     } else {
         --poll->meters_until_status;
     }
-    s_keyed_reject_baseline = cat_rejected_commands();
-    if (!s_split_keyed_polls && s_rejected_count) {
-        // A read can have been rejected during initial or ordinary polling.
-        for (size_t i = 0; i < s_rejected_count; ++i) {
-            if (strstr(cmds, s_rejected_polls[i])) {
-                s_split_keyed_polls = true;
-                break;
-            }
-        }
-    }
+    s_keyed_reject_baseline = atomic_load(&s_effective_rejects);
     if (s_split_keyed_polls) {
         read_poll(dev, cmds, NORMAL_ANSWER_MS, true);
+        poll_ft8_alc(dev, rig, poll);
         // Individual reads already awaited their replies.
         poll->sent_at = 0;
     } else {
@@ -2085,12 +2165,18 @@ static bool cat_tx_requested(void)
     return requested;
 }
 
+void cat_enable_ft8_alc(void)
+{
+    atomic_store(&s_ft8_alc, true);
+}
+
 esp_err_t cat_ptt(bool on)
 {
     if (!s_ptt_lock) {
         return ESP_ERR_INVALID_STATE;
     }
     if (!on) {
+        atomic_store(&s_ft8_alc, false);
         // Stop submitting telemetry while TX0 is waiting for the CDC OUT endpoint.
         xSemaphoreTake(s_lock, portMAX_DELAY);
         s_unkey_requested = true;
@@ -2103,6 +2189,7 @@ esp_err_t cat_ptt(bool on)
                           ? cat_tx(s_ptt_port, on ? "TX1;" : "TX0;") : ESP_ERR_INVALID_STATE;
     if (err == ESP_OK) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
+        if (s_state.tx_cat != on) record_tx_transition();
         s_state.tx_cat = on;
         s_unkey_requested = false;
         xSemaphoreGive(s_lock);

@@ -45,6 +45,7 @@ static void use(const char *id) {
 static const char *startup_ai = "AI0;";
 static bool reject_notch;
 static bool fail_ai_write;
+static bool reject_tx_read;
 
 static void inject(const char *reply)
 {
@@ -70,6 +71,9 @@ static void startup_reply(const char *cmd, size_t len)
     } else if (len == 3 && memcmp(cmd, "AI;", len) == 0) {
         if (fail_ai_write) g_write_result = ESP_ERR_TIMEOUT;
         else if (startup_ai) inject(startup_ai);
+    } else if (reject_tx_read && len == 3 && memcmp(cmd, "TX;", len) == 0) {
+        reject_tx_read = false;
+        inject("?;");
     } else if (reject_notch && len == 5 && memcmp(cmd, "BP00;", len) == 0) {
         inject("?;");
     } else {
@@ -99,6 +103,8 @@ static void test_startup(void)
     s_disconnected = false;
     g_write_result = ESP_OK;
     s_state.tx_cat = false;
+    s_state.tx = false;
+    atomic_store(&s_transition_ms, 0);
     s_unkey_requested = false;
     use(NULL);
     uint32_t rates[5];
@@ -137,10 +143,28 @@ static void test_startup(void)
     initialize_reads((void *)1, s_rig);
     CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;AG1;SQ0;SQ1;RI0;TX;RM0;BP00;BP01;BP10;BP11;FT;AI1;") == 0,
           "FTX-1 reads before first write");
-    CHECK(cat_rejected_commands() == rejected + 1 && poll_rejected("BP00;"), "count and attribute explicit rejection");
+    CHECK(cat_rejected_commands() == rejected + 1 && !poll_rejected("BP00;"),
+          "one explicit rejection does not suppress a read");
     g_sent[0] = '\0';
     send_poll((void *)1, "BP00;BP01;");
-    CHECK(strcmp(g_sent, "BP01;") == 0, "skip only rejected periodic command");
+    CHECK(strcmp(g_sent, "BP00;BP01;") == 0 && !poll_rejected("BP00;"), "retry after two rejections");
+    send_poll((void *)1, "BP00;");
+    CHECK(poll_rejected("BP00;"), "suppress optional read after three rejections");
+    g_sent[0] = '\0';
+    send_poll((void *)1, "BP00;BP01;");
+    CHECK(strcmp(g_sent, "BP01;") == 0, "only skip the suppressed optional command");
+    g_now_us += CAT_REJECT_RETRY_US - 1;
+    CHECK(poll_rejected("BP00;"), "do not retry before cooldown expires");
+    ++g_now_us;
+    CHECK(!poll_rejected("BP00;"), "retry after 60 seconds");
+    send_poll((void *)1, "BP00;");
+    CHECK(poll_rejected("BP00;"), "a rejected retry starts a new cooldown");
+    g_now_us += CAT_REJECT_RETRY_US;
+    reject_notch = false;
+    send_poll((void *)1, "BP00;");
+    reject_notch = true;
+    send_poll((void *)1, "BP00;");
+    CHECK(!poll_rejected("BP00;"), "a successful retry clears the streak");
 
     use("0761");
     s_rejected_count = 0;
@@ -169,6 +193,53 @@ static void test_startup(void)
     initialize_reads((void *)1, s_rig);
     CHECK(strstr(g_sent, "AI;") && !strstr(g_sent, "AI1;"), "rejected AI never enables it");
     g_cdc_send_hook = NULL;
+}
+
+static void test_rejected_tx_read_after_unkey(void)
+{
+    use("0761");
+    tx_enabled = tx_password = true;
+    s_ptt_lock = s_ptt_port = (void *)1;
+    s_ptt_ready = true;
+    atomic_store(&s_link_starting, false);
+    s_disconnected = false;
+    g_cdc_send_hook = startup_reply;
+    s_state.tx_cat = true;
+    inject("TX1;");
+    g_sent[0] = '\0';
+    CHECK(cat_ptt(false) == ESP_OK, "send TX0 normally");
+    const int64_t unkey_at = g_now_us;
+    ++g_now_us;
+    const unsigned rejects = atomic_load(&s_effective_rejects);
+    reject_tx_read = true;
+    send_poll((void *)1, "TX;");
+    CHECK(!poll_rejected("TX;") && atomic_load(&s_effective_rejects) == rejects,
+          "ignore an isolated RX transition rejection");
+    g_now_us += 100000;
+    send_poll((void *)1, "TX;");
+    CHECK(strcmp(g_sent, "TX0;TX;TX;") == 0 && cat_radio_rx_after(unkey_at),
+          "next TX read confirms RX");
+    CHECK(cat_ptt(true) == ESP_OK, "PTT remains available after the rejected read");
+    CHECK(cat_ptt(false) == ESP_OK, "return to RX");
+    tx_enabled = tx_password = false;
+    g_cdc_send_hook = NULL;
+    atomic_store(&s_transition_ms, 0);
+
+    const char *essential[] = {"TX;", "RI0;", "BY;", "RM5;", "RM6;", "FT;",
+                               "MD0;", "MD1;", "FA;", "FB;", "EX010113;"};
+    for (size_t i = 0; i < sizeof essential / sizeof *essential; ++i) {
+        for (int j = 0; j < CAT_REJECT_LIMIT; ++j) update_poll_rejections(essential[i], QUERY_REJECTED, false);
+        CHECK(!poll_rejected(essential[i]), "%s remains eligible after repeated rejection", essential[i]);
+    }
+    s_rejected_count = 0;
+    for (int i = 0; i < CAT_REJECT_LIMIT + 1; ++i) update_poll_rejections("RM4;", QUERY_REJECTED, true);
+    CHECK(!poll_rejected("RM4;"), "transition rejections do not suppress optional reads");
+    CHECK(ok("RM4;") && !ok("RM40;"), "ALC is read only");
+    inject("RM4042000;");
+    const cat_tx_meters_t meters = cat_get_tx_meters();
+    CHECK(meters.alc == 42 && meters.alc_us == g_now_us, "ALC has an independent timestamp");
+    inject("RM4256000;RM4042001;");
+    CHECK(cat_get_tx_meters().alc == 42, "ignore invalid ALC replies");
 }
 
 static unsigned open_attempts[16], open_attempt_count, closes;
@@ -230,15 +301,15 @@ static void test_hot_swap(void)
     cdc_acm_dev_hdl_t dev = find_cat_port();
     CHECK(dev && s_rig->rig == CAT_RIG_FTDX10 && s_cat_addr == 2, "FTDX10 at first USB address");
     const unsigned old_session = atomic_load(&s_cat_session);
-    strcpy(s_rejected_polls[0], "FT;");
-    s_rejected_count = 1;
+    for (int i = 0; i < CAT_REJECT_LIMIT; ++i) update_poll_rejections("BP00;", QUERY_REJECTED, false);
+    CHECK(poll_rejected("BP00;"), "optional read is suppressed before hot swap");
     s_split_keyed_polls = true;
 
     usb_removed(2);
     CHECK(s_disconnected && !cat_usb_ready(), "hot removal invalidates the active address immediately");
     close_cat_port(&dev);
     CHECK(!dev && closes == 1 && !open_addr && !s_cat_addr && !s_cat_session, "release the old CDC handle and session");
-    CHECK(!poll_rejected("FT;") && !s_split_keyed_polls, "clear previous radio poll suppression");
+    CHECK(!poll_rejected("BP00;") && !s_split_keyed_polls, "clear previous radio poll suppression");
     CHECK(s_last_baud == 115200, "keep remembered baud as a hint");
 
     swap_to_ftx1 = true;
@@ -882,6 +953,7 @@ int main(void) {
     CHECK(cat_data_mode_error() != NULL, "FTDX10 DATA MIC cannot authorize FT8");
     CHECK(cat_cmds_allowed("EX010113;EX010114;EX010415;EX010416;", CAT_TX_MAX_CMDS) && !ok("EX0104161;"), "FTDX10 DATA settings read only");
     test_startup();
+    test_rejected_tx_read_after_unkey();
     test_hot_swap();
     test_rigctl_cat_writes();
     printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);

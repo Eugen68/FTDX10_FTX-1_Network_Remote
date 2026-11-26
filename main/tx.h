@@ -21,8 +21,8 @@ typedef struct {
     bool rx_confirmed;
     unsigned off_attempts;
     esp_err_t off_error;
-    unsigned swr, swr_raw, po_raw, stop_swr;
-    bool swr_valid, po_valid;
+    unsigned swr, swr_raw, po_raw, stop_swr, alc_raw;
+    bool swr_valid, po_valid, alc_valid;
 } tx_state_t;
 
 esp_err_t tx_init(void);

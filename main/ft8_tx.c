@@ -32,7 +32,7 @@ typedef struct {
 typedef struct {
     uint32_t owner;
     bool odd, ready, started, finishing;
-    unsigned hz, remaining;
+    unsigned hz, remaining, prepare_ms;
     int dbfs;
     int64_t heartbeat, slot, offset_us, end_us;
     uint8_t tones[FT8_TX_SYMBOLS];
@@ -143,6 +143,7 @@ ft8_tx_status_t ft8_tx_status(uint32_t owner)
     const ft8_tx_status_t status = {
         .armed = s_job.owner != 0, .owned = owner && owner == s_job.owner,
         .remaining = s_job.remaining, .reason = s_job.reason,
+        .preparing = s_job.owner && !s_job.ready, .prepare_ms = s_job.prepare_ms,
         .clock = clock.sampled_us ? (clock.owner ? "browser" : "sntp") : "none",
         .age_ms = clock.sampled_us ? (now - clock.sampled_us) / 1000 : -1,
         .offset_ms = clock.offset_us / 1000, .rtt_ms = clock.rtt_ms, .lead_ms = audio_lead_ms(),
@@ -247,15 +248,20 @@ static void ft8_task(void *arg)
             xSemaphoreGive(s_lock);
             const int64_t start = esp_timer_get_time();
             const bool ready = ft8_wave_render(s_pcm, job.tones, job.hz, job.dbfs, yield_render);
+            const unsigned prepare_ms = (unsigned)((esp_timer_get_time() - start) / 1000);
             if (ready) {
-                ESP_LOGI("ft8_tx", "Prepared %u PCM bytes in %lld ms", (unsigned)(FT8_TX_SAMPLES * sizeof(*s_pcm)),
-                         (long long)((esp_timer_get_time() - start) / 1000));
+                ESP_LOGI("ft8_tx", "Prepared %u PCM bytes in %u ms",
+                         (unsigned)(FT8_TX_SAMPLES * sizeof(*s_pcm)), prepare_ms);
             }
             xSemaphoreTake(s_lock, portMAX_DELAY);
             s_rendering = false;
             if (s_job.owner == job.owner) {
-                if (ready) s_job.ready = true;
-                else stop_locked("FT8 frame preparation cancelled");
+                if (ready) {
+                    s_job.ready = true;
+                    s_job.prepare_ms = prepare_ms;
+                } else {
+                    stop_locked("FT8 frame preparation cancelled");
+                }
             }
         }
         ft8_tick();
@@ -269,6 +275,6 @@ esp_err_t ft8_tx_init(void)
     s_lock = xSemaphoreCreateMutex();
     if (!s_lock) return ESP_ERR_NO_MEM;
     s_pcm = heap_caps_malloc(FT8_TX_SAMPLES * sizeof(*s_pcm), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (xTaskCreatePinnedToCore(ft8_task, "ft8_tx", 6144, NULL, 3, NULL, 0) != pdPASS) return ESP_ERR_NO_MEM;
+    if (xTaskCreatePinnedToCore(ft8_task, "ft8_tx", 6144, NULL, 2, NULL, 1) != pdPASS) return ESP_ERR_NO_MEM;
     return ESP_OK;
 }
