@@ -690,7 +690,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 400 + 2 * RIGCTL_LINE_SIZE + 256];
+    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 400 + 2 * RIGCTL_LINE_SIZE + 736];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -807,14 +807,30 @@ static esp_err_t status_handler(httpd_req_t *req)
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const ft8_tx_status_t ft8 = ft8_tx_status(0);
+        const ft8_audio_stats_t audio = usb_audio_ft8_stats();
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"ft8_tx\":{\"armed\":%s,\"remaining\":%u,\"clock\":\"%s\","
                       "\"age_ms\":%" PRId64 ",\"offset_ms\":%" PRId64 ",\"rtt_ms\":%u,\"usb_lead_ms\":%u,"
-                      "\"preparing\":%s,\"prepare_ms\":%u,\"reason\":\"%s\"}}",
+                      "\"preparing\":%s,\"prepare_ms\":%u,\"reason\":\"%s\",\"audio\":{\"max_task_gap_us\":%u",
                       ft8.armed ? "true" : "false", ft8.remaining, ft8.clock, ft8.age_ms,
                       ft8.offset_ms, ft8.rtt_ms, ft8.lead_ms,
-                      ft8.preparing ? "true" : "false", ft8.prepare_ms, ft8.reason);
+                      ft8.preparing ? "true" : "false", ft8.prepare_ms, ft8.reason, audio.max_task_gap_us);
+        const struct { const char *name; ft8_audio_event_t event; } events[] = {
+            {"task_late", audio.task_late}, {"write_timeout", audio.write_timeout},
+            {"write_failed", audio.write_failed}, {"iso_failed", audio.iso_failed},
+            {"iso_short", audio.iso_short}, {"queue_empty", audio.queue_empty},
+        };
+        for (size_t i = 0; i < sizeof(events) / sizeof(*events) && n > 0 && (size_t)n < sizeof(json); ++i) {
+            const ft8_audio_event_t event = events[i].event;
+            n += snprintf(json + n, sizeof(json) - n,
+                          ",\"%s\":{\"count\":%u,\"first_ms\":%d,\"last_ms\":%d}",
+                          events[i].name, event.count, event.count ? event.first_ms : -1,
+                          event.count ? event.last_ms : -1);
+        }
+        if (n > 0 && (size_t)n < sizeof(json)) {
+            n += snprintf(json + n, sizeof(json) - n, "}}}");
+        }
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const tx_voice_stats_t voice = tx_voice_stats();

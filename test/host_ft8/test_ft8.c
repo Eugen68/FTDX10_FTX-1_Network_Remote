@@ -13,6 +13,22 @@ static bool pause_render(void)
     return ++rendered_symbols < 2;
 }
 
+static void verify_continuity(const int16_t *audio, unsigned hz, int peak)
+{
+    // Maximum adjacent difference for a continuous sine at the highest FT8 tone.
+    // Allow quantization, LUT interpolation and the amplitude taper at the edges.
+    const int max_step = (int)ceil(2 * peak * sin(acos(-1.0) * (hz + 7 * 6.25) / FT8_TX_RATE)) + 32;
+    for (unsigned i = 1; i < FT8_TX_SAMPLES; ++i) {
+        const int step = abs(audio[i] - audio[i - 1]);
+        if (step > max_step) {
+            fprintf(stderr, "FT8 discontinuity at sample %u (block %s, symbol %s): %d > %d\n", i,
+                    i % (FT8_TX_RATE / 100) == 0 ? "edge" : "interior",
+                    i % FT8_TX_SYMBOL_SAMPLES == 0 ? "edge" : "interior", step, max_step);
+            abort();
+        }
+    }
+}
+
 int main(void)
 {
     uint8_t tones[FT8_TX_SYMBOLS], normalized[FT8_TX_SYMBOLS];
@@ -49,6 +65,12 @@ int main(void)
         }
     }
     assert(crossings[0] > crossings[1]);
+    verify_continuity(audio, 1500, peak);
+    const unsigned frequencies[] = {200, 1500, 3000};
+    for (unsigned i = 0; i < sizeof(frequencies) / sizeof(*frequencies); ++i) {
+        assert(ft8_wave_render(audio, tones, frequencies[i], 0, NULL));
+        verify_continuity(audio, frequencies[i], 32767);
+    }
     free(audio);
 
     assert(ft8_next_slot(28500000, false, 1000000) == 30000000);

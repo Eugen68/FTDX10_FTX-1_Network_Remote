@@ -64,9 +64,12 @@ _Static_assert(USB_RX_MPS_LIMIT >= 192 && USB_RX_MPS_LIMIT >= 64 &&
                USB_BULK_OUT_MPS_LIMIT >= 64 && USB_ISOC_OUT_MPS_LIMIT >= 192,
                "FIFO must fit 48 kHz stereo UAC and full-speed CDC endpoints");
 
-#define TX_TASK_PRIORITY        18
+#define TX_TASK_PRIORITY        19
 #define TX_BLOCK_MS             10
 #define TX_PREFILL_BLOCKS       4
+#define FT8_PREFILL_BLOCKS      6
+_Static_assert(FT8_PREFILL_BLOCKS * (48000 / 100) * 2 * sizeof(int16_t) < USB_AUDIO_TX_RING_BYTES,
+               "FT8 prefill must fit in the UAC TX ring");
 
 typedef enum {
     EVT_RX_CONNECTED,
@@ -103,6 +106,64 @@ static atomic_uint s_tx_request;               // generation, waveform and dBFS
 static atomic_uint s_tx_rate, s_tx_underruns, s_tx_written_bytes;
 static atomic_bool s_ft8_complete;
 static usb_audio_output_format_t s_output_format;
+static bool s_output_present;                 // protected by s_output_format_mux
+static portMUX_TYPE s_output_format_mux = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE s_ft8_stats_mux = portMUX_INITIALIZER_UNLOCKED;
+static ft8_audio_stats_t s_ft8_stats;
+static int64_t s_ft8_start_us;
+static unsigned s_ft8_expected_bytes;
+
+static void ft8_record(ft8_audio_event_t *event, unsigned count, int time_ms)
+{
+    if (!event->count) event->first_ms = time_ms;
+    event->last_ms = time_ms;
+    event->count += count;
+}
+
+ft8_audio_stats_t usb_audio_ft8_stats(void)
+{
+    portENTER_CRITICAL(&s_ft8_stats_mux);
+    const ft8_audio_stats_t stats = s_ft8_stats;
+    portEXIT_CRITICAL(&s_ft8_stats_mux);
+    return stats;
+}
+
+void usb_audio_ft8_iso_event(unsigned failed, unsigned incomplete, bool drained, unsigned attempted_bytes)
+{
+    const int64_t now = esp_timer_get_time();
+    portENTER_CRITICAL(&s_ft8_stats_mux);
+    if (s_ft8_start_us) {
+        const int ms = (int)((now - s_ft8_start_us) / 1000);
+        if (failed) ft8_record(&s_ft8_stats.iso_failed, failed, ms);
+        if (incomplete) ft8_record(&s_ft8_stats.iso_short, incomplete, ms);
+        if (drained && attempted_bytes < s_ft8_expected_bytes) {
+            ft8_record(&s_ft8_stats.queue_empty, 1, ms);
+        }
+    }
+    portEXIT_CRITICAL(&s_ft8_stats_mux);
+}
+
+static void log_ft8_event(const char *name, ft8_audio_event_t event)
+{
+    if (event.count) {
+        ESP_LOGW(TAG, "FT8 %s count=%u first_ms=%d last_ms=%d",
+                 name, event.count, event.first_ms, event.last_ms);
+    }
+}
+
+static void log_ft8_stats(ft8_audio_stats_t stats)
+{
+    ESP_LOGI(TAG, "FT8 audio frame max_task_gap_us=%u late_cycles=%u write_timeouts=%u write_failed=%u "
+             "iso_failed=%u iso_short=%u queue_empty=%u",
+             stats.max_task_gap_us, stats.task_late.count, stats.write_timeout.count,
+             stats.write_failed.count, stats.iso_failed.count, stats.iso_short.count, stats.queue_empty.count);
+    log_ft8_event("late task", stats.task_late);
+    log_ft8_event("write timeout", stats.write_timeout);
+    log_ft8_event("write failed", stats.write_failed);
+    log_ft8_event("ISO failed", stats.iso_failed);
+    log_ft8_event("ISO short", stats.iso_short);
+    log_ft8_event("queue empty", stats.queue_empty);
+}
 static usb_audio_format_t s_fmt;
 static atomic_bool s_streaming;
 
@@ -393,7 +454,10 @@ static void handle_output_connected(uint8_t addr, uint8_t iface_num)
     xSemaphoreTake(s_output_lock, portMAX_DELAY);
     s_tx_format = stream;
     s_output_handle = handle;
+    portENTER_CRITICAL(&s_output_format_mux);
     s_output_format = output;
+    s_output_present = true;
+    portEXIT_CRITICAL(&s_output_format_mux);
     atomic_store(&s_tx_available, selected);
     xSemaphoreGive(s_output_lock);
 }
@@ -409,7 +473,10 @@ static void handle_disconnected(uac_host_device_handle_t handle)
         }
         s_output_prepared = false;
         s_output_handle = NULL;
+        portENTER_CRITICAL(&s_output_format_mux);
         s_output_format = (usb_audio_output_format_t){0};
+        s_output_present = false;
+        portEXIT_CRITICAL(&s_output_format_mux);
         uac_host_device_close(handle);
     }
     xSemaphoreGive(s_output_lock);
@@ -711,7 +778,11 @@ static void tx_audio_task(void *arg)
 
         const char *error = NULL;
         int64_t first_pcm_us = 0;
-        xSemaphoreTake(s_output_lock, portMAX_DELAY);
+        const bool ft8 = (request & 7) == TX_TONE_FT8;
+        if (xSemaphoreTake(s_output_lock, ft8 && !atomic_load(&s_tx_finish) ? 0 : portMAX_DELAY) != pdTRUE) {
+            vTaskDelay(1);
+            continue;
+        }
         if (atomic_load(&s_tx_finish)) {
             if (!s_tx_clean) {
                 finish_audio_tx();
@@ -721,14 +792,22 @@ static void tx_audio_task(void *arg)
             }
             atomic_store(&s_tx_finish, false);
         }
+        bool report_ft8 = false;
+        ft8_audio_stats_t finished_stats;
         if (active && (active != request || !s_output_prepared || !s_output_handle)) {
+            if ((active & 7) == TX_TONE_FT8) {
+                portENTER_CRITICAL(&s_ft8_stats_mux);
+                report_ft8 = s_ft8_start_us != 0;
+                finished_stats = s_ft8_stats;
+                s_ft8_start_us = 0;
+                portEXIT_CRITICAL(&s_ft8_stats_mux);
+            }
             active = 0;
             atomic_store(&s_tx_rate, 0);
         }
 
         const tx_tone_t tone = request & 7;
         const bool voice = tone == TX_TONE_VOICE;
-        const bool ft8 = tone == TX_TONE_FT8;
         unsigned blocks = 1;
         if (request && !active && s_output_prepared && s_output_handle &&
             request == atomic_load(&s_tx_request)) {
@@ -744,6 +823,10 @@ static void tx_audio_task(void *arg)
             if (ft8) {
                 ft8_feed = tx_ft8_feed_time(&ft8_utc_offset);
                 ft8_offset = 0;
+                portENTER_CRITICAL(&s_ft8_stats_mux);
+                s_ft8_stats = (ft8_audio_stats_t){0};
+                s_ft8_expected_bytes = FT8_TX_SAMPLES * s_tx_format.channels * sizeof(pcm[0]);
+                portEXIT_CRITICAL(&s_ft8_stats_mux);
                 if (s_tx_play_rate != FT8_TX_RATE) error = "FT8 requires 48 kHz USB TX";
             } else {
                 blocks = TX_PREFILL_BLOCKS;
@@ -773,16 +856,27 @@ static void tx_audio_task(void *arg)
                     error = TX_FT8_SLOT_MISSED;
                     blocks = 0;
                 } else {
-                    // Keep more than one 8 ms URB queued throughout the frame.
-                    blocks = 2;
+                    // Queue at the original deadline, then fill enough USB transfers to absorb jitter.
+                    blocks = FT8_PREFILL_BLOCKS;
                     tick = xTaskGetTickCount();
                 }
             }
-            if (last_write_us && now - last_write_us >= 2 * TX_BLOCK_MS * 1000) {
-                if (ft8) {
+            if (ft8 && last_write_us) {
+                const unsigned gap_us = (unsigned)(now - last_write_us);
+                portENTER_CRITICAL(&s_ft8_stats_mux);
+                if (gap_us > s_ft8_stats.max_task_gap_us) s_ft8_stats.max_task_gap_us = gap_us;
+                if (gap_us > TX_BLOCK_MS * 1000) {
+                    ft8_record(&s_ft8_stats.task_late, 1, (int)((now - s_ft8_start_us) / 1000));
+                }
+                const bool lost_audio = s_ft8_stats.queue_empty.count || s_ft8_stats.iso_failed.count ||
+                                        s_ft8_stats.iso_short.count;
+                portEXIT_CRITICAL(&s_ft8_stats_mux);
+                if (lost_audio) {
                     error = "FT8 USB playback interrupted";
                     blocks = 0;
+                    atomic_fetch_add(&s_tx_underruns, 1);
                 }
+            } else if (last_write_us && now - last_write_us >= 2 * TX_BLOCK_MS * 1000) {
                 atomic_fetch_add(&s_tx_underruns, 1);
                 tick = xTaskGetTickCount();
             }
@@ -797,8 +891,20 @@ static void tx_audio_task(void *arg)
                     if (active != atomic_load(&s_tx_request)) break;
                 }
                 const int64_t pcm_us = ft8 && !ft8_offset ? esp_timer_get_time() : 0;
+                if (pcm_us) {
+                    portENTER_CRITICAL(&s_ft8_stats_mux);
+                    s_ft8_start_us = pcm_us;
+                    portEXIT_CRITICAL(&s_ft8_stats_mux);
+                }
                 const esp_err_t err = uac_host_device_write(s_output_handle, (uint8_t *)pcm, bytes, 0);
                 if (err != ESP_OK) {
+                    if (ft8) {
+                        const int64_t failed_at = esp_timer_get_time();
+                        portENTER_CRITICAL(&s_ft8_stats_mux);
+                        ft8_record(err == ESP_ERR_TIMEOUT ? &s_ft8_stats.write_timeout : &s_ft8_stats.write_failed,
+                                   1, (int)((failed_at - s_ft8_start_us) / 1000));
+                        portEXIT_CRITICAL(&s_ft8_stats_mux);
+                    }
                     if (err != ESP_ERR_TIMEOUT || ft8) {
                         error = "USB TX audio write failed";
                     }
@@ -813,6 +919,7 @@ static void tx_audio_task(void *arg)
             }
         }
         xSemaphoreGive(s_output_lock);
+        if (report_ft8) log_ft8_stats(finished_stats);
         if (first_pcm_us) {
             char utc[FT8_UTC_TEXT_SIZE];
             ft8_format_utc(first_pcm_us + ft8_utc_offset, utc);
@@ -883,10 +990,10 @@ bool usb_audio_get_format(usb_audio_format_t *fmt)
 
 bool usb_audio_get_output_format(usb_audio_output_format_t *fmt)
 {
-    xSemaphoreTake(s_output_lock, portMAX_DELAY);
-    const bool present = s_output_handle != NULL;
+    portENTER_CRITICAL(&s_output_format_mux);
+    const bool present = s_output_present;
     *fmt = s_output_format;
-    xSemaphoreGive(s_output_lock);
+    portEXIT_CRITICAL(&s_output_format_mux);
     return present;
 }
 

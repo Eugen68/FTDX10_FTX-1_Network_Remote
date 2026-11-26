@@ -55,6 +55,18 @@ typedef struct {
     esp_err_t submit_error;
 } usb_tx_transfer_stats_t;
 
+typedef struct {
+    unsigned count;
+    int first_ms, last_ms;
+} ft8_audio_event_t;
+
+typedef struct {
+    ft8_audio_event_t task_late, write_timeout, write_failed, iso_failed, iso_short, queue_empty;
+    unsigned max_task_gap_us;
+} ft8_audio_stats_t;
+
+ft8_audio_stats_t usb_audio_ft8_stats(void);
+void usb_audio_ft8_iso_event(unsigned failed, unsigned incomplete, bool drained, unsigned attempted_bytes);
 void usb_audio_tx_reset_transfer_stats(void);
 usb_tx_transfer_stats_t usb_audio_tx_transfer_stats(void);
 bool usb_audio_tx_available(void);
