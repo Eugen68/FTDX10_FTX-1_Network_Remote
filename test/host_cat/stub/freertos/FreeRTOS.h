@@ -12,7 +12,16 @@ static inline int xSemaphoreTake(void *s, uint32_t t){(void)s;(void)t;return 1;}
 static inline int xSemaphoreGive(void *s){(void)s;return 1;}
 static inline void *xSemaphoreCreateMutex(void){return (void*)1;}
 static inline void xTaskNotifyGive(void *t){(void)t;}
-static inline uint32_t ulTaskNotifyTake(int a, uint32_t t){(void)a;(void)t;return 0;}
+static inline uint32_t ulTaskNotifyTake(int a, uint32_t t){
+    (void)a;
+#ifdef TEST_CAT_ADVANCE_TIME
+    extern int64_t g_now_us;
+    g_now_us += t * 1000LL;
+#else
+    (void)t;
+#endif
+    return 0;
+}
 static inline TickType_t xTaskGetTickCount(void){return 0;}
 static inline void vTaskDelay(uint32_t t){(void)t;}
 static inline void *xTaskGetCurrentTaskHandle(void){return 0;}

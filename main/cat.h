@@ -227,3 +227,7 @@ esp_err_t cat_set_power(bool on);
 #ifdef __cplusplus
 }
 #endif
+
+void cat_usb_reset_begin(void);
+void cat_usb_reset_end(void);
+unsigned cat_rejected_commands(void);

@@ -31,6 +31,7 @@
 #include "usb/uac_host.h"
 #include "esp_timer.h"
 #include "tx.h"
+#include "cat.h"
 #include "tx_voice.h"
 #include "usb_audio.h"
 
@@ -480,7 +481,9 @@ static void recover_tick(void)
     s_dev_seen_ms = 0;
     ESP_LOGW(TAG, "%d USB device(s) but no audio input for %d s: resetting the USB bus (attempt %d)", count,
              RECOVER_AFTER_MS / 1000, s_recover_attempts);
+    cat_usb_reset_begin();
     bus_power_cycle(500);
+    cat_usb_reset_end();
     tx_resume();
 }
 

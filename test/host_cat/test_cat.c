@@ -12,6 +12,8 @@
 #include <stdint.h>
 #include <assert.h>
 char g_sent[1024];
+void (*g_cdc_send_hook)(const char *, size_t);
+#define TEST_CAT_ADVANCE_TIME
 int64_t g_now_us = 1000000;
 #include "cat.c"   // the real file, built against the stubs in stub/
 #include "tx_swr.h"
@@ -29,6 +31,105 @@ static bool ok(const char *c) { return cat_cmds_allowed(c, 1); }
 static void use(const char *id) {
     memset(s_rig_id, 0, sizeof s_rig_id);
     if (id) { memcpy(s_rig_id, id, 4); s_rig = profile_for_id(id); } else s_rig = &s_profile_none;
+}
+
+static const char *startup_ai = "AI0;";
+static bool reject_notch;
+
+static void inject(const char *reply)
+{
+    rx_cb((const uint8_t *)reply, strlen(reply), NULL);
+}
+
+static void startup_reply(const char *cmd, size_t len)
+{
+    static const struct { const char *cmd, *reply; } reads[] = {
+        {"FA;", "FA007130000;"}, {"FB;", "FB007100000;"},
+        {"MD0;", "MD0C;"}, {"MD1;", "MD11;"},
+        {"AG0;", "AG0010;"}, {"AG1;", "AG1010;"},
+        {"SQ0;", "SQ0000;"}, {"SQ1;", "SQ1000;"},
+        {"RI0;", "RI00000000;"}, {"TX;", "TX0;"},
+        {"BY;", "BY00;"}, {"RM0;", "RM0000000;"}, {"RM1;", "RM1000000;"},
+        {"BP00;", "BP00000;"}, {"BP01;", "BP01150;"},
+        {"BP10;", "BP10000;"}, {"BP11;", "BP11150;"}, {"FT;", "FT0;"},
+    };
+    assert(memchr(cmd, ';', len) == cmd + len - 1);
+    if (len == 3 && memcmp(cmd, "ID;", len) == 0) {
+        inject("IDABCD;ID123;FA007130000;ID0840;");
+    } else if (len == 3 && memcmp(cmd, "AI;", len) == 0) {
+        inject(startup_ai);
+    } else if (reject_notch && len == 5 && memcmp(cmd, "BP00;", len) == 0) {
+        inject("?;");
+    } else {
+        for (unsigned i = 0; i < sizeof(reads) / sizeof(reads[0]); ++i) {
+            if (strlen(reads[i].cmd) == len && memcmp(cmd, reads[i].cmd, len) == 0) {
+                inject(reads[i].reply);
+                return;
+            }
+        }
+    }
+}
+
+static void test_startup(void)
+{
+    s_disconnected = false;
+    g_write_result = ESP_OK;
+    s_state.tx_cat = false;
+    s_unkey_requested = false;
+    use(NULL);
+    uint32_t rates[5];
+    s_last_baud = 38400;
+    const uint32_t expected[] = {38400, 115200, 19200, 9600, 4800};
+    CHECK(baud_order(rates) == 5 && memcmp(rates, expected, sizeof(rates)) == 0, "cached baud first without retries");
+    s_last_baud = 12345;
+    CHECK(baud_order(rates) == 5 && rates[0] == 115200 && rates[4] == 4800, "ignore invalid NVS speed");
+    CHECK(!matches_query("IDABCD;", 7, "ID;") && !matches_query("ID123;", 6, "ID;") &&
+          matches_query("ID0840;", 7, "ID;"), "strict numeric ID");
+
+    s_cat_addr = 2;
+    cat_new_usb_device((void *)2);
+    g_sent[0] = '\0';
+    g_now_us += CAT_SETTLE_US - 1;
+    CHECK(cat_tx((void *)1, "ID;") == ESP_ERR_INVALID_STATE && !g_sent[0], "no CAT byte before 3 seconds");
+    ++g_now_us;
+    g_cdc_send_hook = startup_reply;
+    char id[RX_BUF_BYTES];
+    CHECK(query((void *)1, "ID;", id, sizeof(id), 100, false) == QUERY_ANSWER &&
+          strcmp(id, "ID0840;") == 0 && strcmp(g_sent, "ID;") == 0,
+          "single probe ignores malformed ID and unrelated traffic");
+    cat_usb_reset_begin();
+    g_sent[0] = '\0';
+    CHECK(cat_tx((void *)1, "ID;") == ESP_ERR_INVALID_STATE && !g_sent[0], "no CAT during USB reset");
+    cat_usb_reset_end();
+    cat_new_usb_device((void *)2);
+    g_now_us += CAT_SETTLE_US - 1;
+    CHECK(cat_tx((void *)1, "ID;") == ESP_ERR_INVALID_STATE && !g_sent[0], "new settling period after reset");
+    ++g_now_us;
+
+    use("0840");
+    s_rejected_count = 0;
+    reject_notch = true;
+    const unsigned rejected = cat_rejected_commands();
+    initialize_reads((void *)1, s_rig);
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;AG1;SQ0;SQ1;RI0;TX;RM0;BP00;BP01;BP10;BP11;FT;AI1;") == 0,
+          "FTX-1 reads before first write");
+    CHECK(cat_rejected_commands() == rejected + 1 && poll_rejected("BP00;"), "count and attribute explicit rejection");
+    g_sent[0] = '\0';
+    send_poll((void *)1, "BP00;BP01;");
+    CHECK(strcmp(g_sent, "BP01;") == 0, "skip only rejected periodic command");
+
+    use("0761");
+    s_rejected_count = 0;
+    reject_notch = false;
+    startup_ai = "AI1;";
+    g_sent[0] = '\0';
+    initialize_reads((void *)1, s_rig);
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;") == 0, "FTDX10 leaves AI1 alone");
+    startup_ai = "?;";
+    g_sent[0] = '\0';
+    initialize_reads((void *)1, s_rig);
+    CHECK(strstr(g_sent, "AI;") && !strstr(g_sent, "AI1;"), "rejected AI never enables it");
+    g_cdc_send_hook = NULL;
 }
 
 int main(void) {
@@ -506,6 +607,7 @@ int main(void) {
     CHECK(ok("EX010114;") && !ok("EX0101141;"), "FTDX10 REAR SELECT is read only");
     handle_cat_packet("MD0C;");
     CHECK(cat_voice_mode_error(false) != NULL, "voice stops if radio leaves SSB");
+    test_startup();
     printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     return fails != 0;
 }

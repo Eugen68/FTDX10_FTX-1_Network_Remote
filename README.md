@@ -471,7 +471,19 @@ Below the meter, the level, swing, and open/closed state of each channel are sho
 - Lower the variation threshold: when it does not open while receiving (about 6 dB)
 - Choosing something like "judge on R, open and close both" makes one gate open and close both channels together.
 
-### Limitations
+#### Safe CAT startup
+
+CAT waits at least three seconds after USB enumeration or USB bus recovery. It probes each
+supported baud rate once per scan, starting with the last rate saved in NVS. Only an
+`ID` reply with four digits and a semicolon selects a CAT port. Initial reads go out one at a time.
+Startup writes, including TX0 and the DATA USB output level, wait until those reads finish.
+Automatic information is enabled only when `AI;` reports it off.
+
+The authenticated `/status` counter `cat_rejected_commands` counts radio `?;` replies. An explicitly
+rejected periodic read is skipped for that USB connection. The CAT log records the command and
+its rejection.
+
+## Limitations
 
 - A continuous voice that stays at almost the same level for 300 ms or more can cause it to close (eased by the 0.4 s hold).
 - It does not judge by the content of the audio, so noise with large swings (such as lightning) opens it.
