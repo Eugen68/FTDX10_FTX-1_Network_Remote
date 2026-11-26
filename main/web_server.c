@@ -779,11 +779,11 @@ static esp_err_t status_handler(httpd_req_t *req)
         const cat_write_stats_t cat = cat_get_write_stats();
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"cat_write\":{\"budget_ms\":%u,\"keyed_poll_budget_ms\":%u,"
+                      ",\"cat_rejected_commands\":%u,\"cat_write\":{\"budget_ms\":%u,\"keyed_poll_budget_ms\":%u,"
                       "\"all\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
                       "\"keyed\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
                       "\"meters\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u}}}",
-                      cat.budget_ms, cat.keyed_poll_budget_ms, cat.all.calls, cat.all.timeouts, cat.all.over_budget, cat.all.max_us,
+                      cat_rejected_commands(), cat.budget_ms, cat.keyed_poll_budget_ms, cat.all.calls, cat.all.timeouts, cat.all.over_budget, cat.all.max_us,
                       cat.keyed.calls, cat.keyed.timeouts, cat.keyed.over_budget, cat.keyed.max_us,
                       cat.meters.calls, cat.meters.timeouts, cat.meters.over_budget, cat.meters.max_us);
     }
