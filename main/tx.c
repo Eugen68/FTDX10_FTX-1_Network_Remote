@@ -112,7 +112,8 @@ static const char *ft8_mode_error(const cat_state_t *radio, bool starting)
     if (radio->rig != CAT_RIG_FTX1 && radio->rig != CAT_RIG_FTDX10) return "Radio not supported for FT8";
     const char mode = radio->tx_vfo == CAT_TX_VFO_SUB ? radio->mode_sub_raw : radio->mode_main_raw;
     if (mode == '2') return cat_voice_mode_error(starting);
-    return mode == 'C' ? NULL : "Select USB or DATA-USB for FT8 TX";
+    if (mode == 'C') return starting ? cat_data_mode_error() : NULL;
+    return "Select USB or DATA-USB for FT8 TX";
 }
 
 static const char *current_ft8_mode_error(bool starting)

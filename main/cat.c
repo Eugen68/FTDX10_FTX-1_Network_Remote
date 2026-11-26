@@ -87,7 +87,7 @@
 #define CAT_TASK_PRIORITY   6         // above HTTPS (5): voice frames must not delay CAT safety polling
 #define POLL_PERIOD_MS      100
 #define RADIO_STATUS_MAX_AGE_US 1500000LL  // BUSY/TX is polled every five iterations
-#define VOICE_MENU_MAX_AGE_US 15000000LL
+#define MOD_MENU_MAX_AGE_US 15000000LL
 #define ANSWER_TIMEOUT_MS   300
 #define TX_TIMEOUT_MS       200
 #define FTX1_KEYED_WRITE_TIMEOUT_MS 1200
@@ -141,6 +141,8 @@ static int64_t s_tx_vfo_status_us;
 static int64_t s_mode_status_us[2];
 static int64_t s_ssb_menu_us[2];
 static char s_ssb_menu[2];
+static int64_t s_data_menu_us[2];
+static char s_data_menu[2];
 static char s_reported_mode[2];
 static int64_t s_last_ptt_status_us;
 static char s_ptt_mode;
@@ -857,6 +859,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_tx_vfo_status_us = 0;
         memset(s_mode_status_us, 0, sizeof(s_mode_status_us));
         memset(s_ssb_menu_us, 0, sizeof(s_ssb_menu_us));
+        memset(s_data_menu_us, 0, sizeof(s_data_menu_us));
         s_state.tx_vfo = CAT_TX_VFO_UNKNOWN;
         s_state.rx_vfo_known = false;
         s_state.rx_vfo_sub = false;
@@ -1072,20 +1075,24 @@ static void handle_cat_packet(const char *pkt)
     int gain_val = 0;
     int64_t now_pkt_us = esp_timer_get_time();
 
-    // Both radios use one digit for SSB MOD SOURCE; only the FTDX10
-    // uses the second item for REAR SELECT (the FTX-1 uses it for gain).
-    if (strlen(pkt) == 10 && strncmp(pkt, "EX01011", 7) == 0 && pkt[9] == ';') {
-        const bool ftdx10 = s_rig->rig == CAT_RIG_FTDX10;
-        const int item = pkt[7] == '3' && (ftdx10 || s_rig->rig == CAT_RIG_FTX1) ? 0
-                         : pkt[7] == '4' && ftdx10 ? 1 : -1;
-        if (item >= 0 && pkt[8] >= '0' && pkt[8] <= (ftdx10 ? '1' : '3') &&
-            xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
-            s_ssb_menu[item] = pkt[8];
-            s_ssb_menu_us[item] = now_pkt_us;
-            s_last_answer_us = now_pkt_us;
-            xSemaphoreGive(s_lock);
+    // Only consume the single-digit modulation menu readbacks.
+    if (strlen(pkt) == 10 && strncmp(pkt, "EX010", 5) == 0 && pkt[9] == ';') {
+        const bool rear_select = s_rig->rig == CAT_RIG_FTDX10;
+        const bool supported = rear_select || s_rig->rig == CAT_RIG_FTX1;
+        const bool data = pkt[5] == '4';
+        const char source = data && rear_select ? '5' : '3';
+        const int item = pkt[6] != '1' || !supported || (pkt[5] != '1' && !data) ? -1
+                       : pkt[7] == source ? 0 : rear_select && pkt[7] == source + 1 ? 1 : -1;
+        if (item >= 0) {
+            if (pkt[8] >= '0' && pkt[8] <= (rear_select ? '1' : '3') &&
+                xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+                (data ? s_data_menu : s_ssb_menu)[item] = pkt[8];
+                (data ? s_data_menu_us : s_ssb_menu_us)[item] = now_pkt_us;
+                s_last_answer_us = now_pkt_us;
+                xSemaphoreGive(s_lock);
+            }
+            return;
         }
-        return;
     }
 
     if (parse_gain(pkt, "AG0", &gain_val)) {
@@ -1600,7 +1607,11 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             send_poll(dev, rig->sync_all);
             if (net_rigctl) send_poll(dev, rig->dual_rx ? "VS;SH0;SH1;" : "VS;SH0;");
             if (rig->can_tx && app_config_tx_enabled()) {
-                send_poll(dev, rig->rig == CAT_RIG_FTDX10 ? "EX010113;EX010114;" : "EX010113;");
+                if (rig->rig == CAT_RIG_FTDX10) {
+                    send_poll(dev, "EX010113;EX010114;EX010415;EX010416;");
+                } else if (rig->rig == CAT_RIG_FTX1) {
+                    send_poll(dev, "EX010113;EX010413;");
+                }
             }
         }
         poll_count++;
@@ -1932,8 +1943,8 @@ static cat_voice_source_t voice_source(void)
 {
     const bool rear_select = s_rig->rig == CAT_RIG_FTDX10;
     const int64_t now = esp_timer_get_time();
-    if (!s_ssb_menu_us[0] || now - s_ssb_menu_us[0] > VOICE_MENU_MAX_AGE_US ||
-        (rear_select && (!s_ssb_menu_us[1] || now - s_ssb_menu_us[1] > VOICE_MENU_MAX_AGE_US))) {
+    if (!s_ssb_menu_us[0] || now - s_ssb_menu_us[0] > MOD_MENU_MAX_AGE_US ||
+        (rear_select && (!s_ssb_menu_us[1] || now - s_ssb_menu_us[1] > MOD_MENU_MAX_AGE_US))) {
         return CAT_VOICE_SOURCE_UNKNOWN;
     }
     // FTX-1 AUTO selects USB modulation when the transmitter is keyed by CAT.
@@ -1957,6 +1968,23 @@ const char *cat_voice_mode_error(bool starting)
                                          : "Set SSB modulation source to USB";
     }
     return NULL;
+}
+
+const char *cat_data_mode_error(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const bool rear_select = s_rig->rig == CAT_RIG_FTDX10;
+    const int64_t now = esp_timer_get_time();
+    const char *reason = NULL;
+    if (!s_data_menu_us[0] || now - s_data_menu_us[0] > MOD_MENU_MAX_AGE_US ||
+        (rear_select && (!s_data_menu_us[1] || now - s_data_menu_us[1] > MOD_MENU_MAX_AGE_US))) {
+        reason = "Waiting for DATA-USB modulation source";
+    } else if (s_data_menu[0] != '1' || (rear_select && s_data_menu[1] != '1')) {
+        reason = rear_select ? "Set DATA MOD SOURCE to REAR and REAR SELECT to USB"
+                             : "Set MODE DATA MOD SOURCE to USB";
+    }
+    xSemaphoreGive(s_lock);
+    return reason;
 }
 
 void cat_get_state(cat_state_t *state)

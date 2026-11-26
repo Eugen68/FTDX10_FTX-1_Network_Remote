@@ -113,7 +113,15 @@ int main(void)
     kick();
     s_ntp.offset_us += MAX_CLOCK_CHANGE_US + 1;
     ft8_tick();
-    assert(!s_job.owner && strcmp(s_job.reason, "FT8 clock lost or changed") == 0);
+    assert(!s_job.owner && strcmp(s_job.reason, "FT8 clock offset changed: re-arm for a new slot") == 0);
+    s_ntp = (ft8_clock_t){0};
+    ft8_tx_browser_clock(1, utc_ms, 20);
+    assert(!*ft8_tx_arm(1, "CQ K1ABC FN42", 1500, false, -24));
+    ft8_tx_browser_clock(1, utc_ms, 200);
+    assert(ft8_tx_status(1).rtt_ms == 20);
+    advance_with_heartbeats(g_now_us + BROWSER_MAX_AGE_US);
+    ft8_tick();
+    assert(!s_job.owner && strcmp(s_job.reason, "FT8 clock expired: check SNTP or browser RTT") == 0);
     free(s_pcm);
     puts("FT8 clock selection, ownership, slot limit, late schedule and fail-safe stops passed");
 }

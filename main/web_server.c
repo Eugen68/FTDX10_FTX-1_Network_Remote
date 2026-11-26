@@ -810,9 +810,10 @@ static esp_err_t status_handler(httpd_req_t *req)
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"ft8_tx\":{\"armed\":%s,\"remaining\":%u,\"clock\":\"%s\","
-                      "\"age_ms\":%" PRId64 ",\"offset_ms\":%" PRId64 ",\"rtt_ms\":%u,\"usb_lead_ms\":%u}}",
+                      "\"age_ms\":%" PRId64 ",\"offset_ms\":%" PRId64 ",\"rtt_ms\":%u,\"usb_lead_ms\":%u,"
+                      "\"reason\":\"%s\"}}",
                       ft8.armed ? "true" : "false", ft8.remaining, ft8.clock, ft8.age_ms,
-                      ft8.offset_ms, ft8.rtt_ms, ft8.lead_ms);
+                      ft8.offset_ms, ft8.rtt_ms, ft8.lead_ms, ft8.reason);
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const tx_voice_stats_t voice = tx_voice_stats();

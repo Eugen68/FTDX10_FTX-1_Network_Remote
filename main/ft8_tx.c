@@ -178,8 +178,10 @@ static void ft8_tick(void)
     const tx_state_t state = tx_get_state();
     if (now - s_job.heartbeat >= HEARTBEAT_US) {
         stop_locked("FT8 heartbeat lost");
-    } else if (!clock.sampled_us || (s_job.slot && llabs(clock.offset_us - s_job.offset_us) > MAX_CLOCK_CHANGE_US)) {
-        stop_locked("FT8 clock lost or changed");
+    } else if (!clock.sampled_us) {
+        stop_locked("FT8 clock expired: check SNTP or browser RTT");
+    } else if (s_job.slot && llabs(clock.offset_us - s_job.offset_us) > MAX_CLOCK_CHANGE_US) {
+        stop_locked("FT8 clock offset changed: re-arm for a new slot");
     } else if (s_job.finishing) {
         if (state.phase != TX_IDLE) return;
         if (!s_job.remaining) stop_locked("FT8 transmission limit reached");

@@ -19,10 +19,13 @@ int main(void)
     assert(ft8_wave_pack("CQ K1ABC FN42", tones));
     assert(ft8_wave_pack(" cq  k1abc fn42 ", normalized));
     assert(memcmp(tones, normalized, sizeof(tones)) == 0);
-    const uint8_t costas[] = {3, 1, 4, 0, 6, 5, 2};
-    assert(memcmp(tones, costas, sizeof(costas)) == 0);
-    assert(memcmp(tones + 36, costas, sizeof(costas)) == 0);
-    assert(memcmp(tones + 72, costas, sizeof(costas)) == 0);
+    // Derived independently from the Type 1 packing, CRC-14, LDPC generator,
+    // and Gray mapping in WSJT-X commit 967c85a6119110788b0df3782cf796485b2cee14.
+    // Message: CQ K1ABC FN42. Compare all sync and data symbols.
+    const char reference[] =
+        "3140652000000001005476704606021533433140652736011047517007334745455133543140652";
+    _Static_assert(sizeof(reference) - 1 == FT8_TX_SYMBOLS, "reference contains 79 tones");
+    for (unsigned i = 0; i < FT8_TX_SYMBOLS; ++i) assert(tones[i] == reference[i] - '0');
     assert(!ft8_wave_pack(" ", normalized));
     assert(!ft8_wave_pack("THIS MESSAGE IS FAR TOO LONG TO ENCODE", normalized));
     assert(!ft8_wave_pack("CQ\nK1ABC", normalized));
