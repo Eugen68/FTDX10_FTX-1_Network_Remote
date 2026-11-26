@@ -344,13 +344,15 @@ int main(void)
     const unsigned last_cleanup = cleanups;
     prepare_delay_us = 900000;
     assert(tx_acquire(1));
-    assert(!tx_key_ft8(1, g_now_us + 800000));
+    assert(!tx_key_ft8(1, g_now_us + 800000, 1800000000000000LL));
     assert(strcmp(tx_get_state().reason, TX_FT8_SLOT_MISSED) == 0);
     assert(prepare_shared && cleanups == last_cleanup + 1 && on_writes == last_on);
     assert(strstr(warnings, "FT8 USB setup took 900000 us, missed submit by 100000 us"));
     assert(tx_acquire(1));
     const int64_t feed = g_now_us + 980000;
-    assert(tx_key_ft8(1, feed) && tx_ft8_feed_time() == feed);
+    int64_t utc_offset;
+    assert(tx_key_ft8(1, feed, 1800000000000000LL) && tx_ft8_feed_time(&utc_offset) == feed);
+    assert(utc_offset == 1800000000000000LL);
     assert(on_writes == last_on + 1 && audio_request == TX_TONE_FT8);
     tx_release(1, "Released");
     confirm_rx();

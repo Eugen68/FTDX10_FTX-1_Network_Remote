@@ -783,10 +783,20 @@ estimate expires (15 s without a usable browser sample), or the selected clock o
 more than 80 ms during a scheduled slot, FT8 disarms. Prefer SNTP on a high-latency VPN.
 Keep the page foreground and focused while armed.
 
-Use a dummy load at low power for initial tests. Decode the frame with a second receiver and
-WSJT-X. Verify the RF audio starts at slot +0.5 s, the decoded DT is within ±0.2 s, and RX returns
-after release. `CONFIG_FT8_FTX1_AUDIO_LEAD_MS` and `CONFIG_FT8_FTDX10_AUDIO_LEAD_MS` set USB playback compensation.
-Both start at 20 ms and need RF timing measurements on the corresponding radio. `CONFIG_FT8_NTP_SERVER` configures the SNTP server.
+Use a dummy load at low power for initial tests. Decode the frame in WSJT-X using a second
+receiver connected directly to the PC. Verify the decoded DT is within ±0.2 s and RX returns
+after release. The serial log records the UTC slot, the RF audio target at slot +0.500 s,
+the target for queuing PCM and when the first block was queued. This last timestamp is a
+firmware reference for the measurement. Measure RF onset with a second receiver recording IQ
+or audio against a synchronized UTC clock.
+
+With the controlling PC clock synchronized, `schedule_minus_browser_ms` and
+`browser_rtt_ms` help identify clock error before calibrating RF timing. Use low-RTT LAN
+samples and confirm the result across several frames. Measure the demodulated FT8 signal,
+and account for delay introduced by the receiver or recording path. Increase the radio's
+playback lead by the repeatable RF lateness relative to `rf_target_utc`, in milliseconds.
+`CONFIG_FT8_FTX1_AUDIO_LEAD_MS` and `CONFIG_FT8_FTDX10_AUDIO_LEAD_MS` are independent and
+default to 20 ms. `CONFIG_FT8_NTP_SERVER` configures the SNTP server.
 
 
 ## Input validation and build settings

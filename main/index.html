@@ -3955,7 +3955,7 @@ const activeTxPage = () => !document.hidden && document.hasFocus();
 
 function probeFt8Clock() {
   const now = performance.now();
-  if (!txAuthenticated || !activeTxPage() || ft8Clock === 'sntp') return;
+  if (!txAuthenticated || !activeTxPage()) return;
   if (ft8Probe && now - ft8Probe.monotonic < 700) return;
   if (ft8Probe) {
     ft8Probe = ft8ProbeRound = null;

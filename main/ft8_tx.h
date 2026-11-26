@@ -15,6 +15,9 @@ typedef struct {
     unsigned remaining;
 } ft8_tx_status_t;
 
+#define FT8_UTC_TEXT_SIZE 25
+
+void ft8_format_utc(int64_t utc_us, char timestamp[FT8_UTC_TEXT_SIZE]);
 esp_err_t ft8_tx_init(void);
 void ft8_tx_start_clock(void);
 const char *ft8_tx_arm(uint32_t owner, const char *message, unsigned hz, bool odd, int dbfs);

@@ -25,10 +25,11 @@ static tx_swr_guard_t s_swr_guard;
 static unsigned s_swr_max;
 static tx_tone_t s_tone;
 // The audio task reads this without taking the TX lock while holding its USB lock.
-static int64_t s_ft8_feed_at; // published by the release/acquire USB request
+static int64_t s_ft8_feed_at, s_ft8_utc_offset; // published by the release/acquire USB request
 
-int64_t tx_ft8_feed_time(void)
+int64_t tx_ft8_feed_time(int64_t *utc_offset)
 {
+    *utc_offset = s_ft8_utc_offset;
     return s_ft8_feed_at;
 }
 
@@ -123,7 +124,7 @@ static const char *current_ft8_mode_error(bool starting)
     return ft8_mode_error(&radio, starting);
 }
 
-static bool key_audio(uint32_t owner, tx_tone_t tone, int dbfs, int64_t feed_at)
+static bool key_audio(uint32_t owner, tx_tone_t tone, int dbfs, int64_t feed_at, int64_t utc_offset)
 {
     if (tone < TX_TONE_OFF || tone > TX_TONE_FT8 || dbfs < TX_TONE_MIN_DBFS || dbfs > TX_TONE_MAX_DBFS) {
         tx_release(owner, "Invalid TX audio settings");
@@ -181,6 +182,7 @@ static bool key_audio(uint32_t owner, tx_tone_t tone, int dbfs, int64_t feed_at)
             if (keyed && tone != TX_TONE_OFF) {
                 if (tone == TX_TONE_FT8) {
                     s_ft8_feed_at = feed_at;
+                    s_ft8_utc_offset = utc_offset;
                     const int64_t now = esp_timer_get_time();
                     ESP_LOGI("tx", "FT8 USB setup and key took %" PRId64 " us, lead before submit %" PRId64 " us",
                              now - setup_start, feed_at - now);
@@ -200,12 +202,12 @@ static bool key_audio(uint32_t owner, tx_tone_t tone, int dbfs, int64_t feed_at)
 bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
 {
     if (tone == TX_TONE_FT8) return false;
-    return key_audio(owner, tone, dbfs, 0);
+    return key_audio(owner, tone, dbfs, 0, 0);
 }
 
-bool tx_key_ft8(uint32_t owner, int64_t feed_at)
+bool tx_key_ft8(uint32_t owner, int64_t feed_at, int64_t utc_offset)
 {
-    return key_audio(owner, TX_TONE_FT8, TX_TONE_DEFAULT_DBFS, feed_at);
+    return key_audio(owner, TX_TONE_FT8, TX_TONE_DEFAULT_DBFS, feed_at, utc_offset);
 }
 
 bool tx_submit_voice(uint32_t owner, const uint8_t *frame, size_t length)

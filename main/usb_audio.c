@@ -698,7 +698,7 @@ static void tx_audio_task(void *arg)
     _Static_assert(FT8_TX_SAMPLES % (FT8_TX_RATE / 100) == 0, "FT8 requires whole USB blocks");
     int16_t pcm[(48000 / 100) * 2];
     unsigned active = 0, bytes = 0, ft8_offset = 0;
-    int64_t ft8_feed = 0;
+    int64_t ft8_feed = 0, ft8_utc_offset = 0;
     TickType_t tick = xTaskGetTickCount();
     int64_t last_write_us = 0;
     for (;;) {
@@ -709,6 +709,7 @@ static void tx_audio_task(void *arg)
         }
 
         const char *error = NULL;
+        int64_t first_pcm_us = 0;
         xSemaphoreTake(s_output_lock, portMAX_DELAY);
         if (atomic_load(&s_tx_finish)) {
             if (!s_tx_clean) {
@@ -740,7 +741,7 @@ static void tx_audio_task(void *arg)
             tick = xTaskGetTickCount();
             last_write_us = 0;
             if (ft8) {
-                ft8_feed = tx_ft8_feed_time();
+                ft8_feed = tx_ft8_feed_time(&ft8_utc_offset);
                 ft8_offset = 0;
                 if (s_tx_play_rate != FT8_TX_RATE) error = "FT8 requires 48 kHz USB TX";
             } else {
@@ -774,7 +775,6 @@ static void tx_audio_task(void *arg)
                     // Keep more than one 8 ms URB queued throughout the frame.
                     blocks = 2;
                     tick = xTaskGetTickCount();
-                    ESP_LOGI(TAG, "FT8 USB start: %" PRId64 " us after scheduled submit", now - ft8_feed);
                 }
             }
             if (last_write_us && now - last_write_us >= 2 * TX_BLOCK_MS * 1000) {
@@ -795,6 +795,7 @@ static void tx_audio_task(void *arg)
                     ft8_tx_copy(pcm, ft8_offset, FT8_TX_RATE / 100, s_tx_format.channels);
                     if (active != atomic_load(&s_tx_request)) break;
                 }
+                const int64_t pcm_us = ft8 && !ft8_offset ? esp_timer_get_time() : 0;
                 const esp_err_t err = uac_host_device_write(s_output_handle, (uint8_t *)pcm, bytes, 0);
                 if (err != ESP_OK) {
                     if (err != ESP_ERR_TIMEOUT || ft8) {
@@ -804,12 +805,19 @@ static void tx_audio_task(void *arg)
                 }
                 atomic_fetch_add(&s_tx_written_bytes, bytes);
                 if (ft8) {
+                    if (!ft8_offset) first_pcm_us = pcm_us;
                     ft8_offset += FT8_TX_RATE / 100;
                     if (ft8_offset == FT8_TX_SAMPLES) atomic_store(&s_ft8_complete, true);
                 }
             }
         }
         xSemaphoreGive(s_output_lock);
+        if (first_pcm_us) {
+            char utc[FT8_UTC_TEXT_SIZE];
+            ft8_format_utc(first_pcm_us + ft8_utc_offset, utc);
+            ESP_LOGI(TAG, "FT8 USB start: %" PRId64 " us after scheduled submit, first_pcm_queued_utc=%s",
+                     first_pcm_us - ft8_feed, utc);
+        }
         if (error) {
             ESP_LOGW(TAG, "%s", error);
             if (atomic_load(&s_tx_request) == request) {

@@ -1,8 +1,11 @@
 /* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
 #include "ft8_tx.h"
 
+#include <inttypes.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "sdkconfig.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -34,6 +37,7 @@ typedef struct {
     uint32_t owner;
     bool odd, ready, started, finishing;
     unsigned hz, remaining, prepare_ms;
+    bool slot_uses_browser;
     int dbfs;
     int64_t heartbeat, slot, offset_us, end_us;
     uint8_t tones[FT8_TX_SYMBOLS];
@@ -52,6 +56,18 @@ static ft8_clock_t clock_locked(uint32_t owner, int64_t now)
     if (s_browser.owner == owner && s_browser.sampled_us &&
         now - s_browser.sampled_us < BROWSER_MAX_AGE_US) return s_browser;
     return (ft8_clock_t){0};
+}
+
+void ft8_format_utc(int64_t utc_us, char timestamp[FT8_UTC_TEXT_SIZE])
+{
+    const time_t seconds = utc_us / 1000000;
+    struct tm utc;
+    char date[20];
+    if (!gmtime_r(&seconds, &utc) || !strftime(date, sizeof(date), "%Y-%m-%dT%H:%M:%S", &utc)) {
+        snprintf(timestamp, FT8_UTC_TEXT_SIZE, "unavailable");
+        return;
+    }
+    snprintf(timestamp, FT8_UTC_TEXT_SIZE, "%s.%03uZ", date, (unsigned)(utc_us / 1000 % 1000));
 }
 
 static void ntp_synced(struct timeval *utc)
@@ -172,6 +188,28 @@ static bool yield_render(void)
     return alive;
 }
 
+static void log_tx_schedule(cat_rig_t rig, const ft8_clock_t *clock,
+                            int64_t audio_at, int64_t feed_at)
+{
+    const int64_t now = esp_timer_get_time();
+    char current[FT8_UTC_TEXT_SIZE], slot[FT8_UTC_TEXT_SIZE];
+    char audio[FT8_UTC_TEXT_SIZE], feed[FT8_UTC_TEXT_SIZE];
+    ft8_format_utc(now + s_job.offset_us, current);
+    ft8_format_utc(s_job.slot + s_job.offset_us, slot);
+    ft8_format_utc(audio_at + s_job.offset_us, audio);
+    ft8_format_utc(feed_at + s_job.offset_us, feed);
+    ESP_LOGI("ft8_tx", "FT8 timing rig=%s source=%s clock_age_ms=%" PRId64
+             " now_utc=%s slot_utc=%s rf_target_utc=%s usb_target_utc=%s lead_ms=%u",
+             rig == CAT_RIG_FTX1 ? "FTX-1" : "FTDX10", s_job.slot_uses_browser ? "browser" : "sntp",
+             (now - clock->sampled_us) / 1000, current, slot, audio, feed, audio_lead_ms(rig));
+    if (s_browser.owner == s_job.owner && now - s_browser.sampled_us < BROWSER_MAX_AGE_US) {
+        ESP_LOGI("ft8_tx", "FT8 clock comparison schedule_minus_browser_ms=%" PRId64
+                 " browser_rtt_ms=%u browser_age_ms=%" PRId64,
+                 (s_job.offset_us - s_browser.offset_us) / 1000, s_browser.rtt_ms,
+                 (now - s_browser.sampled_us) / 1000);
+    }
+}
+
 static void ft8_tick(void)
 {
     if (!s_job.owner) return;
@@ -215,6 +253,7 @@ static void ft8_tick(void)
         const int64_t prepare_lead = radio.rig == CAT_RIG_FTX1 ? FTX1_PREPARE_LEAD_US : PREPARE_LEAD_US;
         if (!s_job.slot) {
             s_job.offset_us = clock.offset_us;
+            s_job.slot_uses_browser = clock.owner != 0;
             s_job.slot = ft8_next_slot(now + clock.offset_us, s_job.odd, prepare_lead) - clock.offset_us;
             s_job.reason = "Waiting for FT8 slot";
         }
@@ -226,8 +265,9 @@ static void ft8_tick(void)
         }
         const int64_t audio_at = s_job.slot + FT8_TX_AUDIO_US;
         const int64_t feed_at = audio_at - audio_lead_ms(radio.rig) * 1000LL;
+        log_tx_schedule(radio.rig, &clock, audio_at, feed_at);
         --s_job.remaining;
-        if (!tx_key_ft8(s_job.owner, feed_at)) {
+        if (!tx_key_ft8(s_job.owner, feed_at, s_job.offset_us)) {
             const tx_state_t refused = tx_get_state();
             if (strcmp(refused.reason, TX_FT8_SLOT_MISSED) == 0) {
                 s_job.finishing = true;
