@@ -33,6 +33,7 @@
 #include "tx.h"
 #include "cat.h"
 #include "tx_voice.h"
+#include "ft8_tx.h"
 #include "usb_audio.h"
 
 // Above the stream's USB reader (6), the web server and LwIP (18), below the Wi-Fi driver (23): the
@@ -99,6 +100,7 @@ static atomic_bool s_tx_clean = true;
 static atomic_bool s_tx_transfer_error;
 static atomic_uint s_tx_request;               // generation, waveform and dBFS
 static atomic_uint s_tx_rate, s_tx_underruns, s_tx_written_bytes;
+static atomic_bool s_ft8_complete;
 static usb_audio_output_format_t s_output_format;
 static usb_audio_format_t s_fmt;
 static atomic_bool s_streaming;
@@ -656,13 +658,21 @@ bool usb_audio_rx_paused(void)
     return atomic_load(&s_rx_paused);
 }
 
+bool usb_audio_ft8_complete(void)
+{
+    if (!atomic_load(&s_ft8_complete)) return false;
+    const usb_tx_transfer_stats_t stats = usb_audio_tx_transfer_stats();
+    return !stats.failed_packets && stats.completed_bytes >= atomic_load(&s_tx_written_bytes);
+}
+
 void usb_audio_tx_request(tx_tone_t tone, int dbfs)
 {
     static unsigned generation; // calls are serialized by the TX state lock
     unsigned request = 0;
     if (tone != TX_TONE_OFF) {
-        generation = (generation + 1) & 0x00ffffffu;
-        request = (generation << 8) | ((unsigned)(-dbfs) << 2) | (unsigned)tone;
+        atomic_store(&s_ft8_complete, false);
+        generation = (generation + 1) & 0x007fffffu;
+        request = (generation << 9) | ((unsigned)(-dbfs) << 3) | (unsigned)tone;
     }
     atomic_store(&s_tx_request, request);
     if (s_tx_task) {
@@ -681,8 +691,10 @@ usb_tx_stats_t usb_audio_tx_stats(void)
 
 static void tx_audio_task(void *arg)
 {
+    _Static_assert(FT8_TX_SAMPLES % (FT8_TX_RATE / 100) == 0, "FT8 requires whole USB blocks");
     int16_t pcm[(48000 / 100) * 2];
-    unsigned active = 0, bytes = 0;
+    unsigned active = 0, bytes = 0, ft8_offset = 0;
+    int64_t ft8_feed = 0;
     TickType_t tick = xTaskGetTickCount();
     int64_t last_write_us = 0;
     for (;;) {
@@ -708,20 +720,28 @@ static void tx_audio_task(void *arg)
             atomic_store(&s_tx_rate, 0);
         }
 
-        const bool voice = (request & 3) == TX_TONE_VOICE;
+        const tx_tone_t tone = request & 7;
+        const bool voice = tone == TX_TONE_VOICE;
+        const bool ft8 = tone == TX_TONE_FT8;
         unsigned blocks = 1;
         if (request && !active && s_output_prepared && s_output_handle &&
             request == atomic_load(&s_tx_request)) {
             active = request;
-            if (!voice) {
+            if (!voice && !ft8) {
                 tx_tone_fill(pcm, s_tx_play_rate, s_tx_format.channels,
-                             (tx_tone_t)(request & 3), -(int)((request >> 2) & 63));
+                             tone, -(int)((request >> 3) & 63));
             }
             bytes = (s_tx_play_rate / 100) * s_tx_format.channels * sizeof(pcm[0]);
             atomic_store(&s_tx_rate, s_tx_play_rate);
             tick = xTaskGetTickCount();
             last_write_us = 0;
-            blocks = TX_PREFILL_BLOCKS;
+            if (ft8) {
+                ft8_feed = tx_ft8_feed_time();
+                ft8_offset = 0;
+                if (s_tx_play_rate != FT8_TX_RATE) error = "FT8 requires 48 kHz USB TX";
+            } else {
+                blocks = TX_PREFILL_BLOCKS;
+            }
         }
         if (active) {
             const esp_err_t submit_error = usb_audio_tx_transfer_stats().submit_error;
@@ -734,7 +754,27 @@ static void tx_audio_task(void *arg)
         }
         if (active && !error && active == atomic_load(&s_tx_request)) {
             const int64_t now = esp_timer_get_time();
+            if (ft8 && (now < ft8_feed || ft8_offset >= FT8_TX_SAMPLES)) {
+                xSemaphoreGive(s_output_lock);
+                xTaskDelayUntil(&tick, pdMS_TO_TICKS(TX_BLOCK_MS));
+                continue;
+            }
+            if (ft8 && !ft8_offset) {
+                if (now > ft8_feed + 20000 || !cat_radio_tx()) {
+                    error = TX_FT8_SLOT_MISSED;
+                    blocks = 0;
+                } else {
+                    // Keep more than one 8 ms URB queued throughout the frame.
+                    blocks = 2;
+                    tick = xTaskGetTickCount();
+                    ESP_LOGI(TAG, "FT8 USB start: %" PRId64 " us after scheduled submit", now - ft8_feed);
+                }
+            }
             if (last_write_us && now - last_write_us >= 2 * TX_BLOCK_MS * 1000) {
+                if (ft8) {
+                    error = "FT8 USB playback interrupted";
+                    blocks = 0;
+                }
                 atomic_fetch_add(&s_tx_underruns, 1);
                 tick = xTaskGetTickCount();
             }
@@ -744,14 +784,22 @@ static void tx_audio_task(void *arg)
                     tx_voice_render(pcm, s_tx_play_rate, s_tx_format.channels);
                     if (active != atomic_load(&s_tx_request)) break;
                 }
+                if (ft8) {
+                    ft8_tx_copy(pcm, ft8_offset, FT8_TX_RATE / 100, s_tx_format.channels);
+                    if (active != atomic_load(&s_tx_request)) break;
+                }
                 const esp_err_t err = uac_host_device_write(s_output_handle, (uint8_t *)pcm, bytes, 0);
                 if (err != ESP_OK) {
-                    if (err != ESP_ERR_TIMEOUT) {
+                    if (err != ESP_ERR_TIMEOUT || ft8) {
                         error = "USB TX audio write failed";
                     }
                     break;
                 }
                 atomic_fetch_add(&s_tx_written_bytes, bytes);
+                if (ft8) {
+                    ft8_offset += FT8_TX_RATE / 100;
+                    if (ft8_offset == FT8_TX_SAMPLES) atomic_store(&s_ft8_complete, true);
+                }
             }
         }
         xSemaphoreGive(s_output_lock);

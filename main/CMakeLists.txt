@@ -27,9 +27,9 @@ if(NOT EXISTS "${CERT_FILE}" OR NOT EXISTS "${KEY_FILE}")
     file(CHMOD "${KEY_FILE}" PERMISSIONS OWNER_READ OWNER_WRITE)
 endif()
 
-idf_component_register(SRCS "web_auth.c" "console_menu.c" "app_config.c" "main.c" "usb_audio.c" "wifi_sta.c" "web_server.c" "https_identity.c" "ota.c" "cat.c" "rigctld.c" "rigctl_protocol.c" "tx.c" "tx_swr.c" "tx_tone.c" "tx_voice.c" "acc_scope.c" "acc_frame.c" "build_info.c"
+idf_component_register(SRCS "web_auth.c" "console_menu.c" "app_config.c" "main.c" "usb_audio.c" "wifi_sta.c" "web_server.c" "https_identity.c" "ota.c" "cat.c" "rigctld.c" "rigctl_protocol.c" "tx.c" "tx_swr.c" "tx_tone.c" "tx_voice.c" "ft8_wave.c" "ft8_tx.c" "acc_scope.c" "acc_frame.c" "build_info.c"
                     INCLUDE_DIRS "."
-                    PRIV_REQUIRES esp-tls esp_wifi esp_netif esp_event nvs_flash esp_https_server espressif__mdns lwip
+                    PRIV_REQUIRES ft8_lib esp-tls esp_wifi esp_netif esp_event nvs_flash esp_https_server espressif__mdns lwip
                                   app_update esp_app_format mbedtls esp_timer espressif__usb espressif__usb_host_cdc_acm
                                   esp_driver_usb_serial_jtag esp_driver_uart esp_driver_gpio esp_driver_spi esp_ringbuf
                     EMBED_TXTFILES "tx_mic.js" "index.html" "map.html" "${CERT_FILE}" "${KEY_FILE}"

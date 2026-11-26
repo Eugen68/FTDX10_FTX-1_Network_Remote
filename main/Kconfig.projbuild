@@ -39,3 +39,21 @@ menu "USB Audio Streamer"
             at boot time and store them in NVS.
 
 endmenu
+
+menu "FT8 transmit"
+    config FT8_NTP_SERVER
+        string "SNTP server"
+        default "pool.ntp.org"
+
+    config FT8_FTX1_AUDIO_LEAD_MS
+        int "FTX-1 USB playback compensation (milliseconds)"
+        range 0 200
+        default 20
+        help
+            Submit the first PCM block this far before the target RF audio time.
+            Calibrate on the radio using a second receiver and a known UTC clock.
+    config FT8_FTDX10_AUDIO_LEAD_MS
+        int "FTDX10 USB playback compensation (milliseconds)"
+        range 0 200
+        default 20
+endmenu

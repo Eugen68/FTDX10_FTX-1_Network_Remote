@@ -63,6 +63,7 @@ esp_err_t usb_audio_tx_prepare(bool share_rx_channel);
 bool usb_audio_tx_cleanup_pending(void);
 void usb_audio_tx_finished(void);
 bool usb_audio_rx_paused(void);
+bool usb_audio_ft8_complete(void);
 void usb_audio_tx_request(tx_tone_t tone, int dbfs);
 usb_tx_stats_t usb_audio_tx_stats(void);
 

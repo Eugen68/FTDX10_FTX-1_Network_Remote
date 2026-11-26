@@ -764,6 +764,24 @@ rate and USB bus reset count when the stream ends.
 
 Automatic USB recovery monitors the input stream. Discovery leaves the output stream stopped.
 
+### FT8 transmit (phase 4)
+
+Use the authenticated TX panel to enable FT8. Select USB with the station’s USB modulation source
+or DATA-USB with its data modulation source set to USB. Set a TX time limit of at least 15 seconds.
+Enter a message, audio frequency, level and the even/odd UTC slot. **Enable TX** queues up to
+three frames. **Halt**, leaving the page or losing its heartbeat disarms TX. A decoded CQ can fill
+a reply with your callsign and locator. It does not key the radio until you arm it.
+
+The board prioritizes SNTP. The authenticated browser supplies a short-lived UTC estimate when
+SNTP is unavailable. Keep the phone or PC clock synchronized, and check `ft8_tx` in `/status` for
+the clock source, sample age and RTT. Keep the page foreground and focused while armed.
+
+Use a dummy load at low power for initial tests. Decode the frame with a second receiver and
+WSJT-X. Verify the RF audio starts at slot +0.5 s, the decoded DT is within ±0.2 s, and RX returns
+after release. `CONFIG_FT8_FTX1_AUDIO_LEAD_MS` and `CONFIG_FT8_FTDX10_AUDIO_LEAD_MS` set USB playback compensation.
+Both start at 20 ms and need RF timing measurements on the corresponding radio. `CONFIG_FT8_NTP_SERVER` configures the SNTP server.
+
+
 ## Input validation and build settings
 
 - The request body length, the JSON, and the USB audio format (channels, sample size, sample rate) are validated, and values outside the limits are rejected.

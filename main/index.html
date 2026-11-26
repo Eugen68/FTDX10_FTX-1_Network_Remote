@@ -628,6 +628,9 @@
     align-items: center;
     gap: .25rem;
   }
+  #ft8TxControls { flex-wrap: wrap; }
+  #ft8TxControls[hidden] { display: none; }
+  #ft8TxControls input[type="number"] { width: 4.2rem; }
   .acc-only { display: none; }
   body.has-acc .acc-only { display: inline-flex; }
   .scope-source-controls { display: inline-flex; align-items: center; gap: .35rem; margin: 0 .4rem; }
@@ -1301,6 +1304,17 @@
             <button type="button" class="ft8-btn" id="ft8EnableBtnMain">DECODER OFF</button>
             <button type="button" class="ft8-btn" id="ft8ClearBtnMain">CLEAR</button>
           </div>
+        </div>
+        <div class="ft8-ctrls" id="ft8TxControls" hidden>
+          <label>FT8 message <input id="ft8TxMessage" maxlength="34" autocomplete="off" size="24"></label>
+          <label>Hz <input id="ft8TxHz" type="number" min="200" max="3000" value="1500"></label>
+          <label>Slot <select id="ft8TxSlot"><option value="even">Even</option><option value="odd">Odd</option></select></label>
+          <label>dBFS <input id="ft8TxLevel" type="number" min="-60" max="-6" value="-24"></label>
+          <button type="button" class="ft8-btn" id="ft8TxArm">Enable TX</button>
+          <button type="button" class="ft8-btn" id="ft8TxHalt" disabled>Halt</button>
+          <label>My call <input id="ft8TxCall" maxlength="11" autocomplete="off" size="7"></label>
+          <label>Grid <input id="ft8TxGrid" maxlength="4" autocomplete="off" size="4"></label>
+          <span id="ft8TxInfo" role="status"></span>
         </div>
         <div class="ft8-progress-bar"><div class="ft8-progress-fill" id="ft8ProgressFillMain"></div></div>
         <div class="ft8-list-container">
@@ -3930,12 +3944,76 @@ let micOpening = false;
 let micGeneration = 0;
 let pendingMicFrame = null;
 
+const ft8Tx = Object.fromEntries(['Controls', 'Message', 'Hz', 'Slot', 'Level', 'Arm', 'Halt', 'Call', 'Grid', 'Info']
+  .map(k => [k, document.getElementById('ft8Tx' + k)]));
+let ft8Armed = false, ft8Pending = false, ft8Clock = 'none';
+let ft8Probe = null, ft8ProbeRound = null, ft8LastProbe = 0;
+const activeTxPage = () => !document.hidden && document.hasFocus();
+
+function probeFt8Clock() {
+  const now = performance.now();
+  if (!txAuthenticated || !activeTxPage() || ft8Clock === 'sntp') return;
+  if (ft8Probe && now - ft8Probe.monotonic < 700) return;
+  if (ft8Probe) {
+    ft8Probe = ft8ProbeRound = null;
+    ft8LastProbe = now;
+    return;
+  }
+  if (!ft8ProbeRound && now - ft8LastProbe < 5000) return;
+  if (!ft8ProbeRound) ft8ProbeRound = {count: 0, best: null};
+  ft8Probe = {monotonic: now, utc: Date.now()};
+  sendTx({t: 'ft8_ping'});
+}
+
+function ft8Pong(mono) {
+  if (!ft8Probe || !ft8ProbeRound || !Number.isSafeInteger(mono)) return;
+  const rtt = Math.ceil(performance.now() - ft8Probe.monotonic);
+  const elapsedUtc = Date.now() - ft8Probe.utc;
+  if (rtt >= 0 && rtt <= 160 && Math.abs(elapsedUtc - rtt) < 30 &&
+      (!ft8ProbeRound.best || rtt < ft8ProbeRound.best.rtt)) {
+    ft8ProbeRound.best = {rtt, offset: Math.round(ft8Probe.utc + rtt / 2 - mono)};
+  }
+  ft8Probe = null;
+  if (++ft8ProbeRound.count === 3) {
+    if (ft8ProbeRound.best) sendTx({t: 'ft8_clock', ...ft8ProbeRound.best});
+    ft8ProbeRound = null;
+    ft8LastProbe = performance.now();
+  }
+}
+
+function haltFt8() {
+  if (ft8Armed || ft8Pending) sendTx({t: 'ft8_halt'});
+  ft8Armed = ft8Pending = false;
+  updateTxControls();
+}
+
+ft8Tx.Halt.addEventListener('click', haltFt8);
+ft8Tx.Arm.addEventListener('click', async () => {
+  if (!activeTxPage() || ft8Tx.Arm.disabled || !ft8Tx.Message.value.trim() ||
+      !ft8Tx.Hz.validity.valid || !ft8Tx.Level.validity.valid) return;
+  const socket = txSocket;
+  ft8Pending = txNetworkQuiet = true;
+  updateTxControls();
+  await devicePoll;
+  if (!ft8Pending || socket !== txSocket || !activeTxPage()) {
+    ft8Pending = false;
+    txNetworkQuiet = txKeyed || txStopping;
+    updateTxControls();
+    return;
+  }
+  sendTx({t: 'ft8_arm', msg: ft8Tx.Message.value.trim().toUpperCase(), hz: ft8Tx.Hz.valueAsNumber,
+          odd: ft8Tx.Slot.value === 'odd', dbfs: ft8Tx.Level.valueAsNumber});
+});
+
 function updateTxControls() {
   const voice = txTone.value === 'voice';
   micControls.hidden = !voice;
   document.getElementById('txToneLevel').hidden = voice || txTone.value === 'off';
   micToggle.disabled = !txAuthenticated || micOpening;
-  ptt.disabled = !txAuthenticated || txStopping ||
+  ft8Tx.Controls.hidden = !txAuthenticated;
+  ft8Tx.Arm.disabled = !txAuthenticated || ft8Pending || ft8Armed || txHeld || txKeyed || txStopping || ft8Clock === 'none';
+  ft8Tx.Halt.disabled = !ft8Pending && !ft8Armed;
+  ptt.disabled = !txAuthenticated || txStopping || ft8Pending || ft8Armed ||
     (voice && !txHeld && (!mic || voiceSource !== 2));
 }
 
@@ -4124,8 +4202,16 @@ txConnect.addEventListener('click', () => {
   });
   socket.addEventListener('message', event => {
     const state = JSON.parse(event.data);
+    if (state.t === 'ft8_pong') { ft8Pong(state.mono); return; }
     if (state.t !== 'tx') return;
     txAuthenticated = state.auth;
+    if (txAuthenticated && txHeartbeat === null) ft8LastProbe = -5000;
+    ft8Armed = state.ft8_owned === true;
+    if (ft8Armed || state.error) ft8Pending = false;
+    ft8Clock = state.ft8_clock || 'none';
+    ft8Tx.Info.textContent = state.error || (state.ft8_reason
+      ? state.ft8_reason + (ft8Armed ? ` · ${state.ft8_remaining} remaining · ${ft8Clock}` : '')
+      : `Clock: ${ft8Clock}`);
     const wasKeyedByUs = txKeyed && txOwnsKey;
     txKeyed = state.state === 'KEYED';
     txStopping = state.stopping === true;
@@ -4144,11 +4230,14 @@ txConnect.addEventListener('click', () => {
     if (!state.auth) {
       socket.close();
     } else if (!txHeartbeat) {
-      txHeartbeat = setInterval(() => sendTx({t: txHeld && txKeyRequested && !document.hidden && document.hasFocus() ? 'hb' : 'status'}), 250);
+      txHeartbeat = setInterval(() => {
+        sendTx({t: ((txHeld && txKeyRequested) || ft8Armed || ft8Pending) && activeTxPage() ? 'hb' : 'status'});
+        probeFt8Clock();
+      }, 250);
     }
     if (state.error || txStopping || (wasKeyedByUs && !txKeyed)) releasePtt();
     if (!txHeld && !txKeyed && !txStopping) txKeyRequested = false;
-    txNetworkQuiet = txHeld || txKeyRequested || txKeyed || txStopping;
+    txNetworkQuiet = txHeld || txKeyRequested || txKeyed || txStopping || ft8Armed || ft8Pending;
   });
   socket.addEventListener('close', () => {
     clearInterval(txHeartbeat);
@@ -4156,6 +4245,10 @@ txConnect.addEventListener('click', () => {
     txSocket = null;
     pass = '';
     txAuthenticated = txKeyed = txStopping = txOwnsKey = false;
+    ft8Armed = ft8Pending = false;
+    ft8Probe = ft8ProbeRound = null;
+    ft8Clock = 'none';
+    updateTxControls();
     releasePtt();
     txKeyRequested = txNetworkQuiet = false;
     stopMic();
@@ -4185,14 +4278,16 @@ ptt.addEventListener('lostpointercapture', releasePtt);
 ptt.addEventListener('contextmenu', e => e.preventDefault());
 window.addEventListener('pointerup', releasePtt);
 window.addEventListener('pointercancel', releasePtt);
-window.addEventListener('blur', releasePtt);
+window.addEventListener('blur', () => { releasePtt(); haltFt8(); });
 window.addEventListener('pagehide', () => {
   releasePtt();
+  haltFt8();
   txSocket?.close();
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     releasePtt();
+    haltFt8();
     stopMic();
     micInfo.textContent = '';
   }
@@ -4546,6 +4641,26 @@ function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
     <td class="${msgClass}">${escapeHtml(msg)}</td>
   `;
 
+  const cq = /^CQ(?: [A-Z]{1,4}| [0-9]{3})? ([A-Z0-9/]+)(?: [A-R]{2}[0-9]{2})?$/.exec(msg);
+  if (cq && /[0-9]/.test(cq[1])) {
+    const answer = document.createElement('button');
+    answer.type = 'button';
+    answer.className = 'ft8-btn';
+    answer.textContent = msg;
+    answer.title = 'Fill an FT8 reply';
+    answer.addEventListener('click', () => {
+      if (!txAuthenticated || ft8Armed || ft8Pending) return;
+      const call = ft8Tx.Call.value.trim().toUpperCase();
+      const grid = ft8Tx.Grid.value.trim().toUpperCase();
+      if (!/^[A-Z0-9/]{3,11}$/.test(call) || !/[0-9]/.test(call) || !/^[A-R]{2}[0-9]{2}$/.test(grid)) {
+        ft8Tx.Info.textContent = 'Enter your callsign and four-character grid';
+        return;
+      }
+      ft8Tx.Message.value = `${cq[1]} ${call} ${grid}`;
+      ft8Tx.Message.focus();
+    });
+    tr.lastElementChild.replaceChildren(answer);
+  }
   f.msgBody.insertBefore(tr, f.msgBody.firstChild);
 
   // Keep maximum 80 messages in list

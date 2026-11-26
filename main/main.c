@@ -13,6 +13,7 @@
 #include "acc_scope.h"
 #include "cat.h"
 #include "tx.h"
+#include "ft8_tx.h"
 #include "console_menu.h"
 #include "mdns.h"
 #include "nvs_flash.h"
@@ -56,6 +57,8 @@ void app_main(void)
         ESP_LOGE(TAG, "Wi-Fi connection failed. Please check Wi-Fi credentials in serial menu.");
         return;
     }
+    ESP_ERROR_CHECK(ft8_tx_init());
+    ft8_tx_start_clock();
     ESP_ERROR_CHECK(web_server_start());
     // Reserve the web ports first, even if NET rigctl was configured to use one.
     rigctld_start();

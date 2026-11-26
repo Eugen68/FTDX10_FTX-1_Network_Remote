@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
 #include <assert.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +9,7 @@
 #include "cat.h"
 #include "esp_log.h"
 #include "tx.h"
+#include "ft8_tx.h"
 #include "tx_voice.h"
 
 typedef struct {
@@ -99,6 +101,31 @@ tx_state_t tx_get_state(void)
 bool usb_audio_rx_paused(void) { return false; }
 void cat_get_state(cat_state_t *state) { *state = (cat_state_t){0}; }
 
+static unsigned ft8_arms;
+static uint32_t ft8_owner;
+int64_t esp_timer_get_time(void) { return 7300000; }
+const char *ft8_tx_arm(uint32_t owner, const char *msg, unsigned hz, bool odd, int dbfs)
+{
+    assert(owner && strcmp(msg, "CQ K1ABC FN42") == 0 && hz == 1500 && odd && dbfs == -24);
+    ++ft8_arms;
+    ft8_owner = owner;
+    return "";
+}
+void ft8_tx_halt(uint32_t owner, const char *reason)
+{
+    assert(owner && reason);
+    if (ft8_owner == owner) ft8_owner = 0;
+}
+void ft8_tx_heartbeat(uint32_t owner) { assert(owner); }
+void ft8_tx_browser_clock(uint32_t owner, int64_t offset, unsigned rtt)
+{
+    assert(owner && offset == 1795570000000LL && rtt == 20);
+}
+ft8_tx_status_t ft8_tx_status(uint32_t owner)
+{
+    return (ft8_tx_status_t){.owned = owner && owner == ft8_owner, .clock = "none", .reason = ""};
+}
+
 #include "tx_ws_handler.inc"
 
 static void http_marker_closed(void *ctx) { (void)ctx; }
@@ -145,5 +172,19 @@ int main(void)
     sending_binary = false;
     req.free_ctx(req.sess_ctx);
     assert(released_owner == acquired_owner);
+    httpd_req_t ft8_req = {0};
+    message = "{\"t\":\"ft8_arm\",\"msg\":\"CQ K1ABC FN42\",\"hz\":1500,\"odd\":true}";
+    assert(tx_ws_handler(&ft8_req) == ESP_FAIL && ft8_arms == 0);
+    message = "{\"t\":\"tx_auth\",\"pass\":\"good-password\"}";
+    assert(tx_ws_handler(&ft8_req) == ESP_OK);
+    message = "{\"t\":\"ft8_ping\"}";
+    assert(tx_ws_handler(&ft8_req) == ESP_OK && strstr(reply, "\"mono\":7300"));
+    message = "{\"t\":\"ft8_clock\",\"offset\":1795570000000,\"rtt\":20}";
+    assert(tx_ws_handler(&ft8_req) == ESP_OK);
+    message = "{\"t\":\"ft8_arm\",\"msg\":\"CQ K1ABC FN42\",\"hz\":1500,\"odd\":true}";
+    assert(tx_ws_handler(&ft8_req) == ESP_OK && ft8_arms == 1 && strstr(reply, "\"ft8_owned\":true"));
+    message = "{\"t\":\"ft8_halt\"}";
+    assert(tx_ws_handler(&ft8_req) == ESP_OK && !ft8_owner);
+    ft8_req.free_ctx(ft8_req.sess_ctx);
     puts("WebSocket session and PTT refusal tests passed");
 }
