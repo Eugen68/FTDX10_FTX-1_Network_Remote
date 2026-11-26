@@ -7,6 +7,8 @@
  * input (POST /cat) and the audio streams (/stream.wav, /stream.pcm). Every request goes through web_auth.
  */
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -29,6 +31,7 @@
 #include "tx.h"
 #include "tx_voice.h"
 #include "rigctld.h"
+#include "lwip/sockets.h"
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
 #include <math.h>
@@ -667,13 +670,26 @@ static const char *tx_reason(const tx_state_t *tx, char formatted[32])
     return formatted;
 }
 
+static unsigned lwip_sockets_used(void)
+{
+    // ESP-IDF reserves this contiguous descriptor range for lwIP. F_GETFL is a
+    // local descriptor check and doesn't make a TCP round trip or allocate a socket.
+    const int saved_errno = errno;
+    unsigned used = 0;
+    for (int fd = LWIP_SOCKET_OFFSET; fd < LWIP_SOCKET_OFFSET + CONFIG_LWIP_MAX_SOCKETS; ++fd) {
+        if (lwip_fcntl(fd, F_GETFL, 0) >= 0) ++used;
+    }
+    errno = saved_errno;
+    return used;
+}
+
 static esp_err_t status_handler(httpd_req_t *req)
 {
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) {
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 176 + 2 * RIGCTL_LINE_SIZE];
+    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 400 + 2 * RIGCTL_LINE_SIZE];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -802,11 +818,17 @@ static esp_err_t status_handler(httpd_req_t *req)
         json_escape(rigctl.last_rejected, last_rejected, sizeof(last_rejected));
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"rigctld\":{\"enabled\":%s,\"listening\":%s,\"port\":%u,"
-                      "\"clients\":%u,\"commands\":%u,\"rejected\":%u,\"debug\":%s,\"last_rejected\":\"%s\"}}",
+                      ",\"lwip\":{\"sockets_used\":%u,\"socket_limit\":%u},"
+                      "\"rigctld\":{\"enabled\":%s,\"listening\":%s,\"port\":%u,"
+                      "\"clients\":%u,\"commands\":%u,\"rejected\":%u,\"debug\":%s,\"last_rejected\":\"%s\","
+                      "\"sockets_used\":%u,\"opened\":%u,\"closed\":%u,\"accept_errors\":%u,"
+                      "\"send_errors\":%u,\"send_timeouts\":%u}}",
+                      lwip_sockets_used(), (unsigned)CONFIG_LWIP_MAX_SOCKETS,
                       rigctl.enabled ? "true" : "false", rigctl.listening ? "true" : "false",
                       rigctl.port, rigctl.clients, rigctl.commands, rigctl.rejected,
-                      rigctl.debug ? "true" : "false", last_rejected);
+                      rigctl.debug ? "true" : "false", last_rejected,
+                      rigctl.clients + rigctl.listening, rigctl.opened, rigctl.closed,
+                      rigctl.accept_errors, rigctl.send_errors, rigctl.send_timeouts);
     }
     return send_json(req, json, n, sizeof(json));
 }

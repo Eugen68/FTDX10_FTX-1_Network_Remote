@@ -13,6 +13,7 @@ typedef struct {
     unsigned clients;
     unsigned commands;
     unsigned rejected;
+    unsigned opened, closed, accept_errors, send_errors, send_timeouts;
     char last_rejected[RIGCTL_LINE_SIZE];
 } rigctld_stats_t;
 

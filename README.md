@@ -433,6 +433,13 @@ response. The latest rejection is available as `rigctld.last_rejected` in HTTPS
 `/status`. To trace successful requests as well, enable **d** in the serial menu and
 save with **6**. Full tracing is off by default.
 
+If a client stops reading and a reply cannot be queued within one second, the
+server closes that connection. TCP keepalive detects lost idle peers. HTTPS `/status` reports the current lwIP socket
+descriptor count and limit under `lwip`. The `rigctld` section reports its own
+listener and client socket count, admitted connections opened and closed, and
+accept/send errors and send timeouts. The counts are snapshots of open socket
+descriptors, so closed TCP connections in TIME_WAIT are outside the count.
+
 NET rigctl is plain TCP with no password. Use it only on a trusted local network
 or over a VPN. Keep the port off the public Internet. Clients can change frequency,
 mode, VFO and split only while CAT confirms reception. The service rejects PTT
