@@ -28,7 +28,20 @@ static inline esp_err_t cdc_acm_host_data_tx_blocking(cdc_acm_dev_hdl_t d, const
     if (g_cdc_send_hook) g_cdc_send_hook((const char *)b, n);
     return g_write_result;
 }
-static inline esp_err_t cdc_acm_host_open(const cdc_acm_host_open_config_t *c, cdc_acm_dev_hdl_t *d){return -1;}
-static inline esp_err_t cdc_acm_host_close(cdc_acm_dev_hdl_t d){return 0;}
+extern esp_err_t (*g_cdc_open_hook)(const cdc_acm_host_open_config_t *, cdc_acm_dev_hdl_t *);
+extern esp_err_t (*g_cdc_close_hook)(cdc_acm_dev_hdl_t);
+extern esp_err_t (*g_cdc_request_hook)(cdc_acm_dev_hdl_t, uint8_t, uint16_t, uint8_t *);
+static inline esp_err_t cdc_acm_host_open(const cdc_acm_host_open_config_t *c, cdc_acm_dev_hdl_t *d)
+{
+    return g_cdc_open_hook ? g_cdc_open_hook(c, d) : ESP_ERR_NOT_FOUND;
+}
+static inline esp_err_t cdc_acm_host_close(cdc_acm_dev_hdl_t d)
+{
+    return g_cdc_close_hook ? g_cdc_close_hook(d) : ESP_OK;
+}
 static inline esp_err_t cdc_acm_host_install(const cdc_acm_host_driver_config_t *c){return 0;}
-static inline esp_err_t cdc_acm_host_send_custom_request(cdc_acm_dev_hdl_t d, uint8_t a, uint8_t b, uint16_t c, uint16_t e, uint16_t f, uint8_t *g){return 0;}
+static inline esp_err_t cdc_acm_host_send_custom_request(cdc_acm_dev_hdl_t d, uint8_t a, uint8_t b, uint16_t c, uint16_t e, uint16_t f, uint8_t *g)
+{
+    (void)a; (void)c; (void)e;
+    return g_cdc_request_hook ? g_cdc_request_hook(d, b, f, g) : ESP_OK;
+}
