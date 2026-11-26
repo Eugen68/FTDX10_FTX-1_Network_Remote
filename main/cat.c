@@ -155,6 +155,7 @@ typedef struct {
     unsigned ticket;
     int64_t expires_us;
     bool sub;
+    bool require_active;
     cat_rig_t rig;
 } cat_cmd_item_t;
 
@@ -1397,6 +1398,20 @@ static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_po
     }
 }
 
+static bool rigctl_write_confirmed(cdc_acm_dev_hdl_t dev, const char *cmd,
+                                    const char *readback, const char *expected)
+{
+    esp_err_t err = cat_tx(dev, cmd);
+    if (err == ESP_OK) {
+        char answer[RX_BUF_BYTES];
+        if (query(dev, readback, answer, sizeof(answer), NORMAL_ANSWER_MS, false) == QUERY_ANSWER &&
+            strcmp(answer, expected) == 0) return true;
+        err = ESP_ERR_INVALID_RESPONSE;
+    }
+    report_queued_write_failure(cmd, err);
+    return false;
+}
+
 static bool run_rigctl_write(cdc_acm_dev_hdl_t dev, cat_cmd_item_t item)
 {
     // NET rigctl may enqueue one mode+width transaction. Keep each USB write separate.
@@ -1405,47 +1420,50 @@ static bool run_rigctl_write(cdc_acm_dev_hdl_t dev, cat_cmd_item_t item)
     strlcpy(width, second, sizeof(width));
     *second = '\0';
     const bool selecting = strncmp(item.cmd, "VS", 2) == 0;
+    const bool split = strncmp(item.cmd, "FT", 2) == 0;
     cat_state_t state;
     cat_get_state(&state);
-    if (esp_timer_get_time() >= item.expires_us || state.rig != item.rig || !cat_radio_rx_confirmed() || cat_tx_requested() ||
-        (!selecting && (!state.rx_vfo_known || state.rx_vfo_sub != item.sub))) {
+    const bool active_matches = state.rx_vfo_known && state.rx_vfo_sub == item.sub;
+    if (esp_timer_get_time() >= item.expires_us || state.rig != item.rig || !cat_radio_rx_confirmed() ||
+        cat_tx_requested() || (item.require_active && !active_matches)) {
         report_queued_write_failure(item.cmd, ESP_ERR_INVALID_STATE);
         return false;
     }
-    esp_err_t err = cat_tx(dev, item.cmd);
-    if (err != ESP_OK) {
-        report_queued_write_failure(item.cmd, err);
-        return false;
+    // An explicit split request supplies the RX side as well as the TX side.
+    // Confirm the receiver before issuing FT. Frequency/mode writes never select a VFO.
+    if (split && !active_matches) {
+        const char *select = item.sub ? "VS1;" : "VS0;";
+        if (!rigctl_write_confirmed(dev, select, "VS;", select)) return false;
+        cat_get_state(&state);
+        if (esp_timer_get_time() >= item.expires_us || !state.rx_vfo_known || state.rx_vfo_sub != item.sub ||
+            !cat_radio_rx_confirmed() || cat_tx_requested()) {
+            report_queued_write_failure(item.cmd, ESP_ERR_INVALID_STATE);
+            return false;
+        }
     }
+
     char readback[6] = {item.cmd[0], item.cmd[1], ';'};
     if (strncmp(item.cmd, "MD", 2) == 0) {
         readback[2] = item.cmd[2];
         readback[3] = ';';
     }
-    char answer[RX_BUF_BYTES];
     char expected[16];
     strlcpy(expected, item.cmd, sizeof(expected));
-    if (readback[0] == 'F' && readback[1] == 'T' && !s_rig->dual_rx) expected[2] -= 2;
-    if (query(dev, readback, answer, sizeof(answer), NORMAL_ANSWER_MS, false) != QUERY_ANSWER ||
-        strcmp(answer, expected) != 0) {
-        report_queued_write_failure(item.cmd, ESP_ERR_INVALID_RESPONSE);
-        return false;
-    }
+    if (split && !s_rig->dual_rx) expected[2] -= 2;
+    if (!rigctl_write_confirmed(dev, item.cmd, readback, expected)) return false;
+
     if (width[0]) {
-        // Width only belongs to the newly reported mode and the same active receiver.
+        // FTDX10 SH0 and relative VFO requests must still target the same receiver.
         cat_get_state(&state);
         const char mode = item.sub ? state.mode_sub_raw : state.mode_main_raw;
         if (esp_timer_get_time() >= item.expires_us || mode != item.cmd[3] ||
-            !state.rx_vfo_known || state.rx_vfo_sub != item.sub ||
+            (item.require_active && (!state.rx_vfo_known || state.rx_vfo_sub != item.sub)) ||
             !cat_radio_rx_confirmed() || cat_tx_requested()) {
             report_queued_write_failure(width, ESP_ERR_INVALID_STATE);
             return false;
         }
-        err = cat_tx(dev, width);
-        if (err != ESP_OK) {
-            report_queued_write_failure(width, err);
-            return false;
-        }
+        const char *filter = s_rig->dual_rx && item.sub ? "SH1;" : "SH0;";
+        return rigctl_write_confirmed(dev, width, filter, width);
     }
     if (selecting) {
         cat_get_state(&state);
@@ -1454,19 +1472,7 @@ static bool run_rigctl_write(cdc_acm_dev_hdl_t dev, cat_cmd_item_t item)
             return false;
         }
         send_poll(dev, "FT;");
-    }
-    if (selecting || readback[0] == 'M') {
-        const bool sub = selecting ? item.cmd[2] == '1' : item.sub;
-        const char *filter = s_rig->dual_rx && sub ? "SH1;" : "SH0;";
-        if (width[0] && strcmp(width + 4, "00;") != 0) {
-            if (query(dev, filter, answer, sizeof(answer), NORMAL_ANSWER_MS, false) != QUERY_ANSWER ||
-                strcmp(answer, width) != 0) {
-                report_queued_write_failure(width, ESP_ERR_INVALID_RESPONSE);
-                return false;
-            }
-        } else {
-            send_poll(dev, filter);
-        }
+        send_poll(dev, s_rig->dual_rx && item.sub ? "SH1;" : "SH0;");
     }
     return true;
 }
@@ -2017,7 +2023,7 @@ const char *cat_ptt_mode_error(int64_t keyed_at)
 }
 
 /** Queue a typed, allow-listed write. NET rigctl can add a second command for bandwidth. */
-static esp_err_t cat_enqueue_item(const char *cmd, unsigned ticket, bool sub)
+static esp_err_t cat_enqueue_item(const char *cmd, unsigned ticket, bool sub, bool require_active)
 {
     if (!cat_cmds_allowed(cmd, ticket ? 2 : 1)) {
         ESP_LOGE(TAG, "Refused a CAT command that is not on the allow-list");
@@ -2029,7 +2035,8 @@ static esp_err_t cat_enqueue_item(const char *cmd, unsigned ticket, bool sub)
 
     if (ticket && !cat_radio_rx_confirmed()) return ESP_ERR_INVALID_STATE;
     cat_cmd_item_t item = {.ticket = ticket,
-                           .expires_us = esp_timer_get_time() + 1200000, .sub = sub, .rig = s_rig->rig};
+                           .expires_us = esp_timer_get_time() + 1200000, .sub = sub,
+                           .require_active = require_active, .rig = s_rig->rig};
     strlcpy(item.cmd, cmd, sizeof(item.cmd));
 
     if (xQueueSend(s_cmd_queue, &item, ticket ? 0 : pdMS_TO_TICKS(100)) != pdTRUE) {
@@ -2043,45 +2050,44 @@ static esp_err_t cat_enqueue_item(const char *cmd, unsigned ticket, bool sub)
 
 static esp_err_t cat_enqueue(const char *cmd)
 {
-    return cat_enqueue_item(cmd, 0, false);
+    return cat_enqueue_item(cmd, 0, false, false);
 }
 
-esp_err_t cat_rigctl_set_freq(bool sub, uint32_t hz, unsigned ticket)
+esp_err_t cat_rigctl_set_freq(bool sub, uint32_t hz, bool require_active, unsigned ticket)
 {
     char cmd[16];
     if (hz < s_rig->freq_min || hz > s_rig->freq_max) return ESP_ERR_INVALID_ARG;
     snprintf(cmd, sizeof(cmd), "F%c%09lu;", sub ? 'B' : 'A', (unsigned long)hz);
-    return cat_enqueue_item(cmd, ticket, sub);
+    return cat_enqueue_item(cmd, ticket, sub, require_active);
 }
 
-esp_err_t cat_rigctl_set_mode(bool sub, char mode, int width_hz, unsigned ticket)
+esp_err_t cat_rigctl_set_mode(bool sub, char mode, int width_hz, bool require_active, unsigned ticket)
 {
     char cmd[16];
     snprintf(cmd, sizeof(cmd), "MD%c%c;", sub ? '1' : '0', mode);
     const unsigned fixed = rigctl_width_hz(s_rig->rig, mode, -1);
     if (fixed > 0) {
         if (width_hz > 0 && (unsigned)width_hz != fixed) return ESP_ERR_NOT_SUPPORTED;
-    } else if (width_hz >= 0) {
-        const int code = width_hz ? rigctl_width_code(s_rig->rig, mode, width_hz) : 0;
+    } else if (width_hz > 0) {
+        const int code = rigctl_width_code(s_rig->rig, mode, width_hz);
         if (code < 0 || code > 23) return ESP_ERR_NOT_SUPPORTED;
-        // SH00 is the fixed-width receiver command on FTDX10 even with VFO-B selected.
+        // On FTDX10 SH0 addresses the sole receiver, whichever VFO is active.
+        require_active |= !s_rig->dual_rx;
         snprintf(cmd + 5, sizeof(cmd) - 5, "SH%c0%02u;", s_rig->dual_rx && sub ? '1' : '0',
                  (unsigned)code);
     }
-    return cat_enqueue_item(cmd, ticket, sub);
+    return cat_enqueue_item(cmd, ticket, sub, require_active);
 }
 
 esp_err_t cat_rigctl_select_vfo(bool sub, unsigned ticket)
 {
-    return cat_enqueue_item(sub ? "VS1;" : "VS0;", ticket, sub);
+    return cat_enqueue_item(sub ? "VS1;" : "VS0;", ticket, sub, false);
 }
 
-esp_err_t cat_rigctl_set_split(bool sub, unsigned ticket)
+esp_err_t cat_rigctl_set_split(bool rx_sub, bool tx_sub, bool require_active, unsigned ticket)
 {
-    const char *cmd = s_rig->dual_rx ? (sub ? "FT1;" : "FT0;") : (sub ? "FT3;" : "FT2;");
-    cat_state_t state;
-    cat_get_state(&state);
-    return cat_enqueue_item(cmd, ticket, state.rx_vfo_sub);
+    const char *cmd = s_rig->dual_rx ? (tx_sub ? "FT1;" : "FT0;") : (tx_sub ? "FT3;" : "FT2;");
+    return cat_enqueue_item(cmd, ticket, rx_sub, require_active);
 }
 
 int cat_rigctl_result(unsigned ticket)

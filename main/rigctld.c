@@ -65,10 +65,10 @@ static bool set_radio(const rigctl_set_t *set, void *context)
     const unsigned ticket = client->ticket;
     esp_err_t err = ESP_ERR_NOT_SUPPORTED;
     switch (set->action) {
-    case RIGCTL_FREQ: err = cat_rigctl_set_freq(set->sub, set->value, ticket); break;
-    case RIGCTL_MODE: err = cat_rigctl_set_mode(set->sub, (char)set->value, set->width, ticket); break;
+    case RIGCTL_FREQ: err = cat_rigctl_set_freq(set->sub, set->value, set->require_active, ticket); break;
+    case RIGCTL_MODE: err = cat_rigctl_set_mode(set->sub, (char)set->value, set->width, set->require_active, ticket); break;
     case RIGCTL_VFO: err = cat_rigctl_select_vfo(set->sub, ticket); break;
-    case RIGCTL_SPLIT: err = cat_rigctl_set_split(set->sub, ticket); break;
+    case RIGCTL_SPLIT: err = cat_rigctl_set_split(set->sub, set->value != 0, set->require_active, ticket); break;
     }
     if (err == ESP_OK) client->cat_deadline = esp_timer_get_time() + 1600000;
     return err == ESP_OK;

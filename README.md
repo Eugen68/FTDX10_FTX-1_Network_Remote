@@ -440,6 +440,12 @@ listener and client socket count, admitted connections opened and closed, and
 accept/send errors and send timeouts. The counts are snapshots of open socket
 descriptors, so closed TCP connections in TIME_WAIT are outside the count.
 
+Frequency and mode setters accept an optional VFO before their values, for example
+`F VFOA 7025000` and `M VFOA CW -1`. They update that side directly while the active
+VFO stays selected. A mode width of `-1` or `0` leaves the radio to handle its filter
+without a separate CAT filter command. An explicit split request such as
+`S VFOB 1 VFOA` selects VFO-B for receive and VFO-A for transmit.
+
 NET rigctl is plain TCP with no password. Use it only on a trusted local network
 or over a VPN. Keep the port off the public Internet. Clients can change frequency,
 mode, VFO and split only while CAT confirms reception. The service rejects PTT

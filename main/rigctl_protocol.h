@@ -10,8 +10,9 @@ typedef enum { RIGCTL_FREQ, RIGCTL_MODE, RIGCTL_VFO, RIGCTL_SPLIT } rigctl_actio
 
 typedef struct {
     rigctl_action_t action;
-    bool sub;
-    uint32_t value;
+    bool sub;            // CAT target or, for split, the receive side
+    bool require_active; // target was resolved from the active VFO
+    uint32_t value;      // frequency, mode code or split transmit side
     int width;
 } rigctl_set_t;
 

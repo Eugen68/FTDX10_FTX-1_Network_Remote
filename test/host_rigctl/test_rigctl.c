@@ -181,9 +181,30 @@ int main(void)
     check("V VFOB", "RPRT 0\n", false, false);
     assert(last.action == RIGCTL_VFO && last.sub);
     check("S 1 VFOB", "RPRT 0\n", false, false);
-    assert(last.action == RIGCTL_SPLIT && last.sub);
+    assert(last.action == RIGCTL_SPLIT && !last.sub && last.value == 1);
     check("S 0 VFOB", "RPRT 0\n", false, false);
-    assert(last.action == RIGCTL_SPLIT && !last.sub);
+    assert(last.action == RIGCTL_SPLIT && !last.sub && last.value == 0);
+
+    // Exact commands captured when clicking a Log4OM spot.
+    cat.freq_main = 21025000;
+    check("F VFOA 7025000", "RPRT 0\n", false, false);
+    assert(last.action == RIGCTL_FREQ && !last.sub && !last.require_active && last.value == 7025000);
+    check("M VFOA CW -1", "RPRT 0\n", false, false);
+    assert(last.action == RIGCTL_MODE && !last.sub && !last.require_active && last.value == '3' && last.width == -1);
+    check("\\set_freq Sub 7030000.000000", "RPRT 0\n", false, false);
+    assert(last.action == RIGCTL_FREQ && last.sub && !last.require_active && last.value == 7030000);
+    check("+\\set_mode VFOB CW 0", "set_mode: VFOB CW 0\nRPRT 0\n", false, false);
+    assert(last.action == RIGCTL_MODE && last.sub && !last.require_active && last.width == 0);
+    check("F currVFO 7035000", "RPRT 0\n", false, false);
+    assert(last.action == RIGCTL_FREQ && !last.sub && last.require_active);
+    check("S Main 1 VFOB", "RPRT 0\n", false, false);
+    assert(last.action == RIGCTL_SPLIT && !last.sub && last.value == 1);
+    check("\\set_split_vfo currVFO 0 Main", "RPRT 0\n", false, false);
+    assert(last.action == RIGCTL_SPLIT && !last.sub && last.value == 0);
+    check("S VFOB 1 VFOA", "RPRT 0\n", false, false);
+    assert(last.action == RIGCTL_SPLIT && last.sub && !last.require_active && last.value == 0);
+    check("F VFOC 7025000", "RPRT -1\n", true, false);
+    check("M VFOA CW -1 extra", "RPRT -1\n", true, false);
 
     check("F 7133000.1", "RPRT -1\n", true, false);
     check("F 999", "RPRT -1\n", true, false);
@@ -196,13 +217,15 @@ int main(void)
     check("\\set_ptt 1", "RPRT -11\n", true, false);
     cat.tx_radio = cat.tx = true;
     check("t", "1\n", false, false);
+    check("F VFOA 7025000", "RPRT -11\n", true, false);
+    check("M VFOA CW -1", "RPRT -11\n", true, false);
     check("F 7100000", "RPRT -11\n", true, false);
     check("M AM 0", "RPRT -11\n", true, false);
     check("V VFOB", "RPRT -11\n", true, false);
     check("S 1 VFOB", "RPRT -11\n", true, false);
     cat.tx_radio = cat.tx = cat.tx_radio_known = false;
     check("F 7100000", "RPRT -11\n", true, false);
-    assert(updates == 5);
+    assert(updates == 13);
 
     cat.rig = CAT_RIG_FTX1;
     cat.dual_rx = true;

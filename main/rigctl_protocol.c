@@ -165,10 +165,11 @@ static int read_vfo(const cat_state_t *cat, const char *name)
     return parse_vfo(name);
 }
 
-static bool supports_read_vfo(int cmd)
+static bool supports_vfo_argument(int cmd)
 {
     return cmd == GET_FREQ || cmd == GET_MODE || cmd == GET_VFO || cmd == GET_SPLIT ||
-           cmd == GET_PTT || cmd == GET_LEVEL;
+           cmd == GET_PTT || cmd == GET_LEVEL ||
+           cmd == SET_FREQ || cmd == SET_MODE || cmd == SET_SPLIT;
 }
 
 // Hamlib ends the extended reply with RPRT on either kind of separator.
@@ -321,7 +322,7 @@ static int execute(int cmd, char *const args[], const char *vfo, const cat_state
     const char *name;
     long long number, width;
     int target;
-    rigctl_set_t update = {.sub = sub};
+    rigctl_set_t update = {.sub = sub, .require_active = !vfo || parse_vfo(vfo) < 0};
 
     switch (cmd) {
     case GET_FREQ: {
@@ -378,12 +379,12 @@ static int execute(int cmd, char *const args[], const char *vfo, const cat_state
         update.sub = target;
         break;
     case SET_SPLIT:
-        target = parse_vfo(args[1]);
+        target = read_vfo(cat, args[1]);
         if (!parse_number(args[0], 0, 1, &number) ||
             (target < 0 && strcmp(args[1], "None") != 0) ||
             (number && (target < 0 || target == sub))) return -1;
         update.action = RIGCTL_SPLIT;
-        update.sub = number ? target : sub;
+        update.value = number ? (unsigned)target : (unsigned)sub;
         break;
     default:
         return -11;
@@ -403,15 +404,16 @@ rigctl_reply_t rigctl_command(char *line, const cat_state_t *cat, rigctl_set_fn 
     const char sep = prefix == '+' ? '\n' : strchr(";,|", prefix) ? prefix : 0;
     if (sep && !*++token) token = strtok_r(NULL, " \t\r", &save);
     const int cmd = token ? find_command(token) : -1;
-    char *args[2] = {0};
+    char *args[3] = {0};
     unsigned argc = 0;
-    while (argc < 2 && (args[argc] = strtok_r(NULL, " \t\r", &save))) ++argc;
-    const bool extra = argc == 2 && strtok_r(NULL, " \t\r", &save) != NULL;
+    const unsigned max_args = sizeof(args) / sizeof(args[0]);
+    while (argc < max_args && (args[argc] = strtok_r(NULL, " \t\r", &save))) ++argc;
+    const bool extra = argc == max_args && strtok_r(NULL, " \t\r", &save) != NULL;
     char first[24] = "", second[24] = "";
     int err = -11;
 
     if (cmd >= 0) {
-        const bool with_vfo = supports_read_vfo(cmd) && argc == commands[cmd].argc + 1;
+        const bool with_vfo = supports_vfo_argument(cmd) && argc == commands[cmd].argc + 1;
         if (supports_capability_query(cmd) && argc == 1 && !extra && strcmp(args[0], "?") == 0) {
             return capability_reply(cmd, sep, cat, reply);
         }
