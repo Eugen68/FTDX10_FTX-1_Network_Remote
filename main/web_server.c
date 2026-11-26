@@ -875,12 +875,17 @@ static esp_err_t cat_handler(httpd_req_t *req)
              st.notch_hz_main, st.notch_hz_sub,
              (unsigned long)st.age_ms, st.devices, st.cp210x, st.answered, note);
     if (n > 0 && (size_t)n < sizeof(json)) {
+        const char *rx_vfo = st.connected && st.rx_vfo_known
+                           ? (st.rx_vfo_sub ? "\"sub\"" : "\"main\"") : "null";
+        const char *tx_vfo = st.connected && st.tx_vfo == CAT_TX_VFO_MAIN ? "\"main\"" :
+                             st.connected && st.tx_vfo == CAT_TX_VFO_SUB ? "\"sub\"" : "null";
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\"}",
+                      ",\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,"
+                      "\"rx_vfo\":%s,\"tx_vfo\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\"}",
                       (unsigned)st.voice_source, app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
-                      st.tx_radio_known ? "true" : "false", (unsigned long)st.write_error_seq, write_error);
+                      st.tx_radio_known ? "true" : "false", rx_vfo, tx_vfo, (unsigned long)st.write_error_seq, write_error);
     }
     return send_json(req, json, n, sizeof(json));
 }

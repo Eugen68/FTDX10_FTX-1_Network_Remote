@@ -101,6 +101,33 @@ static void test_discovery(void)
     }
 }
 
+static void test_vfo_info_without_split_status(void)
+{
+    const cat_state_t saved = cat;
+    static const char main_reply[] =
+        "get_vfo_info: VFOA\nFreq: 7133000\nMode: LSB\nWidth: 2400\nSplit: 0\nSatMode: 0\nRPRT 0\n";
+    static const char sub_reply[] =
+        "get_vfo_info: VFOB\nFreq: 14074000\nMode: PKTUSB\nWidth: 1200\nSplit: 0\nSatMode: 0\nRPRT 0\n";
+
+    cat.tx_vfo = CAT_TX_VFO_UNKNOWN; // FT never answered or aged out.
+    check("+\\get_vfo_info VFOA", main_reply, false, false);
+    check("+\\get_vfo_info VFOB", sub_reply, false, false);
+    check("s", "RPRT -11\n", true, false);
+
+    cat.tx_vfo = CAT_TX_VFO_SUB;
+    cat.rx_vfo_known = false; // VS hasn't answered yet.
+    check("+\\get_vfo_info VFOA", main_reply, false, false);
+    check("+\\get_vfo_info VFOB", sub_reply, false, false);
+    check("+\\get_vfo_info currVFO", "get_vfo_info: currVFO\nRPRT -11\n", true, false);
+
+    cat.mode_sub_raw = 0;
+    check("+\\get_vfo_info VFOA", main_reply, false, false);
+    check("+\\get_vfo_info VFOB", "get_vfo_info: VFOB\nRPRT -11\n", true, false);
+    cat.connected = false;
+    check("+\\get_vfo_info VFOA", "get_vfo_info: VFOA\nRPRT -11\n", true, false);
+    cat = saved;
+}
+
 int main(void)
 {
     const char *const names[] = {"LSB", "USB", "CW", "FM", "AM", "RTTY", "CWR",
@@ -172,6 +199,7 @@ int main(void)
           "\n"
           "RPRT 0\n", false, false);
     test_discovery();
+    test_vfo_info_without_split_status();
     assert(updates == 0);
 
     check("+F 14074000.000000", "set_freq: 14074000.000000\nRPRT 0\n", false, false);

@@ -242,6 +242,14 @@ static uint32_t rig_info_crc(const char *text, size_t length)
     return crc ^ UINT32_MAX;
 }
 
+static unsigned reported_split(const cat_state_t *cat)
+{
+    // These Hamlib discovery replies have no unknown-split value. Send 0
+    // until both sides are known; this never changes the cached CAT state.
+    return cat->connected && cat->rx_vfo_known && cat->tx_vfo != CAT_TX_VFO_UNKNOWN &&
+           cat->rx_vfo_sub != (cat->tx_vfo == CAT_TX_VFO_SUB);
+}
+
 static rigctl_reply_t rig_info(const cat_state_t *cat, char sep, char *out)
 {
     // Hamlib keeps the body and CRC byte-for-byte in all response modes.
@@ -266,7 +274,7 @@ static rigctl_reply_t rig_info(const cat_state_t *cat, char sep, char *out)
     used += (size_t)snprintf(out + used, RIGCTL_REPLY_SIZE - used,
                              "Split=%u SatMode=0\nRig=%s\nApp=Network Remote\n"
                              "Version=20241103 1.1.0\nModel=%u\n",
-                             (unsigned)(rx_known && tx_known && cat->rx_vfo_sub != tx_sub),
+                             reported_split(cat),
                              rig, hamlib_model(cat));
     const uint32_t crc = rig_info_crc(out + header_len, used - header_len);
     used += (size_t)snprintf(out + used, RIGCTL_REPLY_SIZE - used,
@@ -280,14 +288,14 @@ static rigctl_reply_t vfo_info(const cat_state_t *cat, const char *arg, char sep
     const uint32_t hz = target == 1 ? cat->freq_sub : cat->freq_main;
     const char mode = target == 1 ? cat->mode_sub_raw : cat->mode_main_raw;
     const char *name = rigctl_mode_name(mode);
-    if (!cat->connected || target < 0 || !hz || !name || !cat->rx_vfo_known ||
-        cat->tx_vfo == CAT_TX_VFO_UNKNOWN) {
+    // A named VFO supplies its own frequency and mode, independently of VS/FT.
+    if (!cat->connected || target < 0 || !hz || !name) {
         const int len = sep ? snprintf(out, RIGCTL_REPLY_SIZE, "get_vfo_info: %s%cRPRT -11\n", arg, sep)
                             : snprintf(out, RIGCTL_REPLY_SIZE, "RPRT -11\n");
         return (rigctl_reply_t){.length = (size_t)len, .rejected = true};
     }
     const unsigned width = rigctl_width_hz(cat->rig, mode, cat->width_code[target]);
-    const unsigned split = (cat->tx_vfo == CAT_TX_VFO_SUB) != cat->rx_vfo_sub;
+    const unsigned split = reported_split(cat);
     const int len = sep
         ? snprintf(out, RIGCTL_REPLY_SIZE,
                    "get_vfo_info: %s%cFreq: %" PRIu32 "%cMode: %s%cWidth: %u%cSplit: %u%cSatMode: 0%cRPRT 0\n",
