@@ -3950,6 +3950,7 @@ let pendingMicFrame = null;
 const ft8Tx = Object.fromEntries(['Controls', 'Message', 'Hz', 'Slot', 'Level', 'LevelValue', 'Alc', 'AlcValue', 'Arm', 'Halt', 'Call', 'Grid', 'Info']
   .map(k => [k, document.getElementById('ft8Tx' + k)]));
 let ft8Armed = false, ft8Pending = false, ft8Clock = 'none';
+let ft8SentLevel = null;
 let ft8Probe = null, ft8ProbeRound = null, ft8LastProbe = 0;
 const activeTxPage = () => !document.hidden && document.hasFocus();
 
@@ -4014,8 +4015,9 @@ ft8Tx.Arm.addEventListener('click', async () => {
     updateTxControls();
     return;
   }
+  ft8SentLevel = ft8Tx.Level.valueAsNumber;
   sendTx({t: 'ft8_arm', msg: ft8Tx.Message.value.trim().toUpperCase(), hz: ft8Tx.Hz.valueAsNumber,
-          odd: ft8Tx.Slot.value === 'odd', dbfs: ft8Tx.Level.valueAsNumber});
+          odd: ft8Tx.Slot.value === 'odd', dbfs: ft8SentLevel});
 });
 
 function updateTxControls() {
@@ -4026,7 +4028,7 @@ function updateTxControls() {
   ft8Tx.Controls.hidden = !txAuthenticated;
   ft8Tx.Arm.disabled = !txAuthenticated || ft8Pending || ft8Armed || txHeld || txKeyed || txStopping || ft8Clock === 'none';
   ft8Tx.Halt.disabled = !ft8Pending && !ft8Armed;
-  ft8Tx.Level.disabled = ft8Pending || ft8Armed;
+  ft8Tx.Level.disabled = !txAuthenticated;
   ptt.disabled = !txAuthenticated || txStopping || ft8Pending || ft8Armed ||
     (voice && !txHeld && (!mic || voiceSource !== 2));
 }
@@ -4248,6 +4250,11 @@ txConnect.addEventListener('click', () => {
     } else if (!txHeartbeat) {
       txHeartbeat = setInterval(() => {
         sendTx({t: ((txHeld && txKeyRequested) || ft8Armed || ft8Pending) && activeTxPage() ? 'hb' : 'status'});
+        const level = ft8Tx.Level.valueAsNumber;
+        if (ft8Armed && !txStopping && activeTxPage() && level !== ft8SentLevel) {
+          sendTx({t: 'ft8_level', dbfs: level});
+          ft8SentLevel = level;
+        }
         probeFt8Clock();
       }, 250);
     }

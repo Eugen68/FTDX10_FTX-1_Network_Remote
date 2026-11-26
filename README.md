@@ -773,7 +773,8 @@ or DATA-USB with USB modulation confirmed by CAT. On FTDX10 set **DATA MOD SOURC
 **REAR SELECT = USB** in MODE PSK/DATA. On FTX-1 set **MODE DATA → MOD SOURCE = USB**.
 Set a TX time limit of at least 15 seconds.
 Enter a message, audio frequency, level and the even/odd UTC slot. **Enable TX** queues up to
-three frames. **Halt**, leaving the page or losing its heartbeat disarms TX. A decoded CQ can fill
+three frames. Adjust **Level** while FT8 is armed or transmitting and use the **ALC** meter
+to monitor the radio. **Halt**, leaving the page or losing its heartbeat disarms TX. A decoded CQ can fill
 a reply with your callsign and locator. It does not key the radio until you arm it.
 
 The board prioritizes SNTP. The authenticated browser supplies a short-lived UTC estimate when

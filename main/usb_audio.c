@@ -699,6 +699,7 @@ static void tx_audio_task(void *arg)
     int16_t pcm[(48000 / 100) * 2];
     unsigned active = 0, bytes = 0, ft8_offset = 0;
     int64_t ft8_feed = 0, ft8_utc_offset = 0;
+    int ft8_gain = 0;
     TickType_t tick = xTaskGetTickCount();
     int64_t last_write_us = 0;
     for (;;) {
@@ -792,7 +793,7 @@ static void tx_audio_task(void *arg)
                     if (active != atomic_load(&s_tx_request)) break;
                 }
                 if (ft8) {
-                    ft8_tx_copy(pcm, ft8_offset, FT8_TX_RATE / 100, s_tx_format.channels);
+                    ft8_tx_copy(pcm, ft8_offset, FT8_TX_RATE / 100, s_tx_format.channels, &ft8_gain);
                     if (active != atomic_load(&s_tx_request)) break;
                 }
                 const int64_t pcm_us = ft8 && !ft8_offset ? esp_timer_get_time() : 0;

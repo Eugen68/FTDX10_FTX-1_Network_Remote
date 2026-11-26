@@ -2,6 +2,8 @@
 #include "ft8_tx.h"
 
 #include <inttypes.h>
+#include <math.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,7 +40,6 @@ typedef struct {
     bool odd, ready, started, finishing;
     unsigned hz, remaining, prepare_ms;
     bool slot_uses_browser;
-    int dbfs;
     int64_t heartbeat, slot, offset_us, end_us;
     uint8_t tones[FT8_TX_SYMBOLS];
     const char *reason;
@@ -49,6 +50,7 @@ static ft8_clock_t s_ntp, s_browser;
 static ft8_job_t s_job = {.reason = ""};
 static int16_t *s_pcm;
 static bool s_rendering;
+static atomic_int s_gain_q15;
 
 static ft8_clock_t clock_locked(uint32_t owner, int64_t now)
 {
@@ -123,6 +125,22 @@ void ft8_tx_heartbeat(uint32_t owner)
     xSemaphoreGive(s_lock);
 }
 
+static int level_gain(int dbfs)
+{
+    return (int)lroundf(32768.f * powf(10.f, dbfs / 20.f));
+}
+
+void ft8_tx_set_level(uint32_t owner, int dbfs)
+{
+    if (!owner || dbfs < TX_TONE_MIN_DBFS || dbfs > TX_TONE_MAX_DBFS) return;
+    const int gain = level_gain(dbfs);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_job.owner == owner && esp_timer_get_time() - s_job.heartbeat < HEARTBEAT_US) {
+        atomic_store(&s_gain_q15, gain);
+    }
+    xSemaphoreGive(s_lock);
+}
+
 const char *ft8_tx_arm(uint32_t owner, const char *message, unsigned hz, bool odd, int dbfs)
 {
     uint8_t tones[FT8_TX_SYMBOLS];
@@ -137,8 +155,9 @@ const char *ft8_tx_arm(uint32_t owner, const char *message, unsigned hz, bool od
     else if (!clock_locked(owner, now).sampled_us) error = "Waiting for a fresh FT8 clock";
     else if (!tx_acquire(owner)) error = "TX busy or unavailable";
     else {
-        s_job = (ft8_job_t){.owner = owner, .odd = odd, .hz = hz, .dbfs = dbfs,
+        s_job = (ft8_job_t){.owner = owner, .odd = odd, .hz = hz,
                             .remaining = SLOT_LIMIT, .heartbeat = now, .reason = "Preparing FT8"};
+        atomic_store(&s_gain_q15, level_gain(dbfs));
         for (unsigned i = 0; i < FT8_TX_SYMBOLS; ++i) s_job.tones[i] = tones[i];
     }
     xSemaphoreGive(s_lock);
@@ -171,12 +190,21 @@ ft8_tx_status_t ft8_tx_status(uint32_t owner)
 
 // The TX state is IDLE only after the USB playback task has stopped, so the
 // scheduler cannot begin rendering another frame while this buffer is in use.
-void ft8_tx_copy(int16_t *pcm, unsigned offset, unsigned count, unsigned channels)
+void ft8_tx_copy(int16_t *pcm, unsigned offset, unsigned count, unsigned channels, int *gain)
 {
+    if (!count) return;
+    const int target = atomic_load(&s_gain_q15);
+    if (!offset) *gain = target;
+    // Interpolate over one PCM block to avoid clicks when the level changes.
+    const int step = (target - *gain) * 32768 / (int)count;
+    int gain_fraction = *gain * 32768;
     for (unsigned i = 0; i < count; ++i) {
-        int16_t sample = offset + i < FT8_TX_SAMPLES ? s_pcm[offset + i] : 0;
-        for (unsigned ch = 0; ch < channels; ++ch) *pcm++ = sample;
+        gain_fraction += step;
+        const int sample = offset + i < FT8_TX_SAMPLES ? s_pcm[offset + i] : 0;
+        const int16_t scaled = (int16_t)(sample * (gain_fraction / 32768) / 32768);
+        for (unsigned ch = 0; ch < channels; ++ch) *pcm++ = scaled;
     }
+    *gain = target;
 }
 
 static bool yield_render(void)
@@ -292,7 +320,7 @@ static void ft8_task(void *arg)
             s_rendering = true;
             xSemaphoreGive(s_lock);
             const int64_t start = esp_timer_get_time();
-            const bool ready = ft8_wave_render(s_pcm, job.tones, job.hz, job.dbfs, yield_render);
+            const bool ready = ft8_wave_render(s_pcm, job.tones, job.hz, 0, yield_render);
             const unsigned prepare_ms = (unsigned)((esp_timer_get_time() - start) / 1000);
             if (ready) {
                 ESP_LOGI("ft8_tx", "Prepared %u PCM bytes in %u ms",

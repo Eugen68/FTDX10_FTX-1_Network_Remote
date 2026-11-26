@@ -101,7 +101,12 @@ tx_state_t tx_get_state(void)
 bool usb_audio_rx_paused(void) { return false; }
 void cat_get_state(cat_state_t *state) { *state = (cat_state_t){0}; }
 
-static unsigned ft8_arms;
+static unsigned ft8_arms, ft8_levels;
+void ft8_tx_set_level(uint32_t owner, int dbfs)
+{
+    assert(owner && dbfs == -50);
+    ++ft8_levels;
+}
 static uint32_t ft8_owner;
 int64_t esp_timer_get_time(void) { return 7300000; }
 const char *ft8_tx_arm(uint32_t owner, const char *msg, unsigned hz, bool odd, int dbfs)
@@ -183,6 +188,8 @@ int main(void)
     assert(tx_ws_handler(&ft8_req) == ESP_OK);
     message = "{\"t\":\"ft8_arm\",\"msg\":\"CQ K1ABC FN42\",\"hz\":1500,\"odd\":true}";
     assert(tx_ws_handler(&ft8_req) == ESP_OK && ft8_arms == 1 && strstr(reply, "\"ft8_owned\":true"));
+    message = "{\"t\":\"ft8_level\",\"dbfs\":-50}";
+    assert(tx_ws_handler(&ft8_req) == ESP_OK && ft8_levels == 1);
     message = "{\"t\":\"ft8_halt\"}";
     assert(tx_ws_handler(&ft8_req) == ESP_OK && !ft8_owner);
     ft8_req.free_ctx(ft8_req.sess_ctx);

@@ -1124,6 +1124,7 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
                           ((fields & ~(TONE | DBFS)) == (TYPE | ON) &&
                            (!(fields & (TONE | DBFS)) || (msg->on && (fields & TONE))) && strcmp(msg->type, "ptt") == 0) ||
                           ((fields & ~DBFS) == (TYPE | MESSAGE | HZ | ODD) && strcmp(msg->type, "ft8_arm") == 0) ||
+                          (fields == (TYPE | DBFS) && strcmp(msg->type, "ft8_level") == 0) ||
                           (fields == (TYPE | OFFSET | RTT) && strcmp(msg->type, "ft8_clock") == 0) ||
                           (fields == TYPE && (strcmp(msg->type, "hb") == 0 || strcmp(msg->type, "status") == 0 ||
                                               strcmp(msg->type, "ft8_ping") == 0 || strcmp(msg->type, "ft8_halt") == 0)));
@@ -1201,6 +1202,8 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
         tx_heartbeat(session->owner);
     } else if (strcmp(msg.type, "ft8_arm") == 0) {
         error = ft8_tx_arm(session->owner, msg.message, msg.hz, msg.odd, msg.dbfs);
+    } else if (strcmp(msg.type, "ft8_level") == 0) {
+        ft8_tx_set_level(session->owner, msg.dbfs);
     } else if (strcmp(msg.type, "ft8_halt") == 0) {
         ft8_tx_halt(session->owner, "FT8 halted");
     } else if (strcmp(msg.type, "ft8_clock") == 0) {

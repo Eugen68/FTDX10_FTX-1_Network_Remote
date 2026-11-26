@@ -138,6 +138,18 @@ int main(void)
     assert(g_now_us == ftx1_slot - FTX1_PREPARE_LEAD_US + setup_delay_us);
     assert(feed_at == ftx1_slot + FT8_TX_AUDIO_US - 20000LL);
     assert((feed_at + feed_offset) % FT8_TX_SLOT_US == 480000);
+    int gain = 0;
+    int16_t pcm[8];
+    for (unsigned i = 0; i < 8; ++i) s_pcm[i] = 32767;
+    ft8_tx_copy(pcm, 0, 4, 2, &gain);
+    assert(gain == level_gain(-24) && pcm[0] == pcm[7]);
+    ft8_tx_set_level(2, -50);
+    assert(atomic_load(&s_gain_q15) == gain);
+    ft8_tx_set_level(1, -50);
+    ft8_tx_copy(pcm, 4, 4, 2, &gain);
+    assert(gain == level_gain(-50));
+    assert(pcm[0] == pcm[1] && pcm[0] > pcm[2] && pcm[2] > pcm[6]);
+    assert(pcm[6] >= gain - 2 && pcm[6] == pcm[7]);
     ft8_tx_halt(1, "Done");
     free(s_pcm);
     puts("FT8 clock selection, ownership, slot limit, late schedule and fail-safe stops passed");
