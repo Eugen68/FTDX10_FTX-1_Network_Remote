@@ -276,7 +276,7 @@ static TaskHandle_t s_task;
 static char s_rx[RX_BUF_BYTES];        // RX assembler, written only from the CDC driver task
 static size_t s_rx_len;
 static portMUX_TYPE s_query_mux = portMUX_INITIALIZER_UNLOCKED;
-typedef enum { QUERY_TIMEOUT, QUERY_ANSWER, QUERY_REJECTED } query_result_t;
+typedef enum { QUERY_TIMEOUT, QUERY_ANSWER, QUERY_REJECTED, QUERY_FAILED } query_result_t;
 static struct {
     char command[13];
     char answer[RX_BUF_BYTES];
@@ -320,11 +320,12 @@ static bool all_digits(const char *s, size_t n);
 
 static bool matches_query(const char *pkt, size_t length, const char *command)
 {
-    size_t prefix = strlen(command) - 1;
-    if (length <= prefix + 1 || memcmp(pkt, command, prefix) != 0) return false;
+    const size_t prefix = strlen(command) - 1;
+    if (length <= prefix || memcmp(pkt, command, prefix) != 0) return false;
     if (strcmp(command, "ID;") == 0) return length == 7 && all_digits(pkt + 2, 4);
-    if (strcmp(command, "AI;") == 0) return length == 4 && (pkt[2] == '0' || pkt[2] == '1');
-    return true;
+    // Even an unexpected AI value is a reply, distinct from silence.
+    if (strcmp(command, "AI;") == 0) return true;
+    return length > prefix + 1;
 }
 
 static void record_query_answer(const char *pkt, size_t length)
@@ -786,19 +787,21 @@ static query_result_t query(cdc_acm_dev_hdl_t dev, const char *cmd, char *out, s
     s_query.waiting = true;
     taskEXIT_CRITICAL(&s_query_mux);
     ulTaskNotifyTake(pdTRUE, 0);
-    query_result_t result = QUERY_TIMEOUT;
-    if (cat_tx_kind(dev, cmd, CAT_LOG_POLL, keyed) == ESP_OK) {
+    const bool sent = cat_tx_kind(dev, cmd, CAT_LOG_POLL, keyed) == ESP_OK;
+    if (sent) {
         const int64_t deadline = esp_timer_get_time() + wait_ms * 1000LL;
-        do {
+        for (;;) {
             taskENTER_CRITICAL(&s_query_mux);
-            result = s_query.result;
-            if (result == QUERY_ANSWER && out) strlcpy(out, s_query.answer, out_size);
+            const bool pending = s_query.waiting;
             taskEXIT_CRITICAL(&s_query_mux);
-            if (result != QUERY_TIMEOUT || s_disconnected || !cat_usb_ready()) break;
+            if (!pending || s_disconnected || !cat_usb_ready() || esp_timer_get_time() >= deadline) break;
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
-        } while (esp_timer_get_time() < deadline);
+        }
     }
+    const bool link_ok = sent && !s_disconnected && cat_usb_ready();
     taskENTER_CRITICAL(&s_query_mux);
+    const query_result_t result = link_ok ? s_query.result : QUERY_FAILED;
+    if (result == QUERY_ANSWER && out) strlcpy(out, s_query.answer, out_size);
     s_query.waiting = false;
     taskEXIT_CRITICAL(&s_query_mux);
     if (result == QUERY_REJECTED && strcmp(cmd, "ID;") != 0 &&
@@ -1604,7 +1607,12 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
 
         // 4. Periodic slow refresh / sync every 5 seconds (50 iterations)
         if ((poll_count % 50) == 0) {
+            const int64_t sync_start = esp_timer_get_time();
             send_poll(dev, rig->sync_all);
+            if (poll_count == 0) {
+                ESP_LOGI(TAG, "%s sync_all: %lld ms", rig->name,
+                         (long long)((esp_timer_get_time() - sync_start) / 1000));
+            }
             if (net_rigctl) send_poll(dev, rig->dual_rx ? "VS;SH0;SH1;" : "VS;SH0;");
             if (rig->can_tx && app_config_tx_enabled()) {
                 if (rig->rig == CAT_RIG_FTDX10) {
@@ -1629,11 +1637,14 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
 
 static void initialize_reads(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig)
 {
+    const int64_t started = esp_timer_get_time();
     read_poll(dev, "FA;FB;MD0;MD1;", ANSWER_TIMEOUT_MS, false);
-    char answer[RX_BUF_BYTES];
-    const bool enable_ai = rig->can_control && !s_disconnected && !poll_rejected("AI;") &&
-                           query(dev, "AI;", answer, sizeof(answer), ANSWER_TIMEOUT_MS, false) == QUERY_ANSWER &&
-                           strcmp(answer, "AI0;") == 0;
+    bool enable_ai = false;
+    if (rig->can_control && !s_disconnected && !poll_rejected("AI;")) {
+        char answer[RX_BUF_BYTES];
+        const query_result_t result = query(dev, "AI;", answer, sizeof(answer), ANSWER_TIMEOUT_MS, false);
+        enable_ai = result == QUERY_TIMEOUT || (result == QUERY_ANSWER && strcmp(answer, "AI0;") == 0);
+    }
     if (rig->can_control) {
         read_poll(dev, rig->dual_rx ? "AG0;AG1;SQ0;SQ1;" : "AG0;SQ0;", ANSWER_TIMEOUT_MS, false);
         read_poll(dev, rig->poll_status, ANSWER_TIMEOUT_MS, false);
@@ -1641,6 +1652,8 @@ static void initialize_reads(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig)
         read_poll(dev, rig->dual_rx ? "BP00;BP01;BP10;BP11;" : "BP00;BP01;", ANSWER_TIMEOUT_MS, false);
         read_poll(dev, "FT;", ANSWER_TIMEOUT_MS, false);
     }
+    ESP_LOGI(TAG, "%s initial CAT reads: %lld ms", rig->name,
+             (long long)((esp_timer_get_time() - started) / 1000));
     if (enable_ai && !s_disconnected && cat_tx(dev, "AI1;") == ESP_OK) {
         // AI may immediately emit readbacks; let them arrive before the next command.
         vTaskDelay(pdMS_TO_TICKS(NORMAL_ANSWER_MS));

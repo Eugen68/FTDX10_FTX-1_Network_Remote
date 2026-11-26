@@ -44,6 +44,7 @@ static void use(const char *id) {
 
 static const char *startup_ai = "AI0;";
 static bool reject_notch;
+static bool fail_ai_write;
 
 static void inject(const char *reply)
 {
@@ -63,10 +64,12 @@ static void startup_reply(const char *cmd, size_t len)
         {"BP10;", "BP10000;"}, {"BP11;", "BP11150;"}, {"FT;", "FT0;"},
     };
     assert(memchr(cmd, ';', len) == cmd + len - 1);
+    g_write_result = ESP_OK;
     if (len == 3 && memcmp(cmd, "ID;", len) == 0) {
         inject("IDABCD;ID123;FA007130000;ID0840;");
     } else if (len == 3 && memcmp(cmd, "AI;", len) == 0) {
-        inject(startup_ai);
+        if (fail_ai_write) g_write_result = ESP_ERR_TIMEOUT;
+        else if (startup_ai) inject(startup_ai);
     } else if (reject_notch && len == 5 && memcmp(cmd, "BP00;", len) == 0) {
         inject("?;");
     } else {
@@ -146,6 +149,21 @@ static void test_startup(void)
     g_sent[0] = '\0';
     initialize_reads((void *)1, s_rig);
     CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;") == 0, "FTDX10 leaves AI1 alone");
+    startup_ai = NULL;
+    g_sent[0] = '\0';
+    const int64_t before = g_now_us;
+    initialize_reads((void *)1, s_rig);
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;AI1;") == 0 &&
+          g_now_us - before >= ANSWER_TIMEOUT_MS * 1000, "silent AI enables it after timeout and all reads");
+    startup_ai = "AI2;";
+    g_sent[0] = '\0';
+    initialize_reads((void *)1, s_rig);
+    CHECK(strstr(g_sent, "AI;") && !strstr(g_sent, "AI1;"), "unexpected AI reply is not silence");
+    fail_ai_write = true;
+    g_sent[0] = '\0';
+    initialize_reads((void *)1, s_rig);
+    CHECK(strstr(g_sent, "AI;") && !strstr(g_sent, "AI1;"), "USB write failure is not a radio response timeout");
+    fail_ai_write = false;
     startup_ai = "?;";
     g_sent[0] = '\0';
     initialize_reads((void *)1, s_rig);

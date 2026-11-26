@@ -522,7 +522,9 @@ CAT waits at least three seconds after USB enumeration or USB bus recovery. It p
 supported baud rate once per scan, starting with the last rate saved in NVS. Only an
 `ID` reply with four digits and a semicolon selects a CAT port. Initial reads go out one at a time.
 Startup writes, including TX0 and the DATA USB output level, wait until those reads finish.
-Automatic information is enabled only when `AI;` reports it off.
+Automatic information is enabled when `AI;` reports it off or the radio gives no reply after
+a successful write. The serial log reports the duration of the initial reads and the first
+`sync_all` refresh on each CAT connection.
 
 The authenticated `/status` counter `cat_rejected_commands` counts radio `?;` replies. An explicitly
 rejected periodic read is skipped for that USB connection. The CAT log records the command and
