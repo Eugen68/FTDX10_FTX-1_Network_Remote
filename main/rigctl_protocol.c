@@ -12,9 +12,9 @@ static const struct {
     const char *name;
     unsigned hamlib_bit;
 } modes[] = {
-    {'1', "LSB", 3}, {'2', "USB", 2}, {'3', "CW", 1}, {'4', "FM", 5},
-    {'5', "AM", 0}, {'6', "RTTY", 4}, {'7', "CWR", 7}, {'8', "PKTLSB", 10},
-    {'9', "RTTYR", 8}, {'A', "PKTFM", 12}, {'C', "PKTUSB", 11},
+    {'5', "AM", 0}, {'3', "CW", 1}, {'2', "USB", 2}, {'1', "LSB", 3},
+    {'6', "RTTY", 4}, {'4', "FM", 5}, {'7', "CWR", 7}, {'9', "RTTYR", 8},
+    {'8', "PKTLSB", 10}, {'C', "PKTUSB", 11}, {'A', "PKTFM", 12},
     {'B', "FMN", 21}, {'D', "AMN", 29}, {'F', "PKTFMN", 34},
 };
 
@@ -72,7 +72,7 @@ int rigctl_width_code(cat_rig_t rig, char mode, int hz)
 
 typedef enum {
     GET_FREQ, SET_FREQ, GET_MODE, SET_MODE, GET_VFO, SET_VFO, GET_SPLIT, SET_SPLIT,
-    GET_PTT, GET_POWER, CHECK_VFO, DUMP_STATE, VFO_INFO, RIG_INFO, VFO_LIST, GET_LOCK, GET_LEVEL, QUIT
+    GET_PTT, GET_POWER, CHECK_VFO, DUMP_STATE, VFO_INFO, RIG_INFO, VFO_LIST, GET_LOCK, GET_LEVEL, SET_LEVEL, SET_FUNC, GET_FUNC, VFO_OP, SET_PARM, GET_PARM, QUIT
 } command_id_t;
 
 static const struct {
@@ -98,6 +98,12 @@ static const struct {
     [VFO_LIST] = {0, "get_vfo_list", 0, {"VFO list"}},
     [GET_LOCK] = {0, "get_lock_mode", 0, {"Locked"}},
     [GET_LEVEL] = {'l', "get_level", 1},
+    [SET_LEVEL] = {'L', "set_level", 2},
+    [SET_FUNC] = {'U', "set_func", 2},
+    [GET_FUNC] = {'u', "get_func", 1},
+    [VFO_OP] = {'G', "vfo_op", 1},
+    [SET_PARM] = {'P', "set_parm", 2},
+    [GET_PARM] = {'p', "get_parm", 1},
     [QUIT] = {'q', "quit", 0},
 };
 
@@ -165,6 +171,42 @@ static bool supports_read_vfo(int cmd)
            cmd == GET_PTT || cmd == GET_LEVEL;
 }
 
+// Hamlib ends the extended reply with RPRT on either kind of separator.
+static rigctl_reply_t capability_reply(int cmd, char sep, const cat_state_t *cat, char *out)
+{
+    size_t used = 0;
+    const char *list = "";
+    char vfos[32];
+    if (cmd == SET_VFO || cmd == VFO_INFO) {
+        snprintf(vfos, sizeof(vfos), "%s %s currVFO ", vfo_name(cat, false), vfo_name(cat, true));
+        list = vfos;
+    } else if (cmd == GET_LEVEL) {
+        list = "RAWSTR STRENGTH ";
+    }
+    if (sep) used = (size_t)snprintf(out, RIGCTL_REPLY_SIZE, "%s: ?%c", commands[cmd].name, sep);
+    if (cmd == SET_MODE) {
+        // Hamlib prints mode names in capability bit order, without a trailing space.
+        for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i) {
+            used += (size_t)snprintf(out + used, RIGCTL_REPLY_SIZE - used, "%s%s", i ? " " : "", modes[i].name);
+        }
+    }
+    // Capability lists contain a literal newline. get_level has an extra
+    // separator after its list in Hamlib 4.6, even in the default mode.
+    const char level_sep[] = {cmd == GET_LEVEL ? (sep ? sep : '\n') : '\0', '\0'};
+    const bool status = sep || cmd == SET_VFO || cmd == SET_MODE || cmd == SET_LEVEL ||
+                        cmd == SET_FUNC || cmd == VFO_OP || cmd == SET_PARM;
+    used += (size_t)snprintf(out + used, RIGCTL_REPLY_SIZE - used, "%s%s\n%s",
+                             list, level_sep, status ? "RPRT 0\n" : "");
+    return (rigctl_reply_t){.length = used};
+}
+
+static bool supports_capability_query(int cmd)
+{
+    return cmd == SET_VFO || cmd == VFO_INFO || cmd == SET_MODE || cmd == GET_LEVEL ||
+           cmd == SET_LEVEL || cmd == SET_FUNC || cmd == GET_FUNC || cmd == VFO_OP ||
+           cmd == SET_PARM || cmd == GET_PARM;
+}
+
 static int dump_state(const cat_state_t *cat, char *out, size_t cap)
 {
     uint64_t mode_mask = 0;
@@ -199,11 +241,10 @@ static uint32_t rig_info_crc(const char *text, size_t length)
     return crc ^ UINT32_MAX;
 }
 
-static rigctl_reply_t rig_info(const cat_state_t *cat, bool extended, char *out)
+static rigctl_reply_t rig_info(const cat_state_t *cat, char sep, char *out)
 {
-    const char *header = extended ? "get_rig_info:\n" : "";
-    const size_t header_len = strlen(header);
-    memcpy(out, header, header_len);
+    // Hamlib keeps the body and CRC byte-for-byte in all response modes.
+    const size_t header_len = sep ? (size_t)snprintf(out, RIGCTL_REPLY_SIZE, "get_rig_info:%c", sep) : 0;
     size_t used = header_len;
     const bool rx_known = cat->connected && cat->rx_vfo_known;
     const bool tx_known = cat->connected && cat->tx_vfo != CAT_TX_VFO_UNKNOWN;
@@ -228,33 +269,28 @@ static rigctl_reply_t rig_info(const cat_state_t *cat, bool extended, char *out)
                              rig, hamlib_model(cat));
     const uint32_t crc = rig_info_crc(out + header_len, used - header_len);
     used += (size_t)snprintf(out + used, RIGCTL_REPLY_SIZE - used,
-                             "CRC=0x%08" PRIx32 "\n\n%s", crc, extended ? "RPRT 0\n" : "");
+                             "CRC=0x%08" PRIx32 "\n\n%s", crc, sep ? "RPRT 0\n" : "");
     return (rigctl_reply_t){.length = used};
 }
 
-static rigctl_reply_t vfo_info(const cat_state_t *cat, const char *arg, bool extended, char *out)
+static rigctl_reply_t vfo_info(const cat_state_t *cat, const char *arg, char sep, char *out)
 {
     const int target = read_vfo(cat, arg);
-    if (strcmp(arg, "?") == 0) {
-        const int len = snprintf(out, RIGCTL_REPLY_SIZE, "%s%s %s\n%s",
-                                 extended ? "get_vfo_info: ?\n" : "", vfo_name(cat, false),
-                                 vfo_name(cat, true), extended ? "RPRT 0\n" : "");
-        return (rigctl_reply_t){.length = (size_t)len};
-    }
     const uint32_t hz = target == 1 ? cat->freq_sub : cat->freq_main;
     const char mode = target == 1 ? cat->mode_sub_raw : cat->mode_main_raw;
     const char *name = rigctl_mode_name(mode);
     if (!cat->connected || target < 0 || !hz || !name || !cat->rx_vfo_known ||
         cat->tx_vfo == CAT_TX_VFO_UNKNOWN) {
-        strcpy(out, "RPRT -11\n");
-        return (rigctl_reply_t){.length = sizeof("RPRT -11\n") - 1, .rejected = true};
+        const int len = sep ? snprintf(out, RIGCTL_REPLY_SIZE, "get_vfo_info: %s%cRPRT -11\n", arg, sep)
+                            : snprintf(out, RIGCTL_REPLY_SIZE, "RPRT -11\n");
+        return (rigctl_reply_t){.length = (size_t)len, .rejected = true};
     }
     const unsigned width = rigctl_width_hz(cat->rig, mode, cat->width_code[target]);
     const unsigned split = (cat->tx_vfo == CAT_TX_VFO_SUB) != cat->rx_vfo_sub;
-    const int len = extended
+    const int len = sep
         ? snprintf(out, RIGCTL_REPLY_SIZE,
-                   "get_vfo_info: %s\nFreq: %" PRIu32 "\nMode: %s\nWidth: %u\nSplit: %u\nSatMode: 0\nRPRT 0\n",
-                   arg, hz, name, width, split)
+                   "get_vfo_info: %s%cFreq: %" PRIu32 "%cMode: %s%cWidth: %u%cSplit: %u%cSatMode: 0%cRPRT 0\n",
+                   arg, sep, hz, sep, name, sep, width, sep, split, sep, sep)
         : snprintf(out, RIGCTL_REPLY_SIZE, "%" PRIu32 "\n%s\n%u\n%u\n0\n", hz, name, width, split);
     return (rigctl_reply_t){.length = (size_t)len};
 }
@@ -263,7 +299,7 @@ static int execute(int cmd, char *const args[], const char *vfo, const cat_state
                    rigctl_set_fn set, void *context,
                    char first[24], char second[24])
 {
-    if (cmd == CHECK_VFO || cmd == GET_POWER || cmd == GET_LOCK) {
+    if (cmd == GET_POWER || cmd == GET_LOCK) {
         strcpy(first, cmd == GET_POWER && cat->connected ? "1" : "0");
         return 0;
     }
@@ -311,10 +347,6 @@ static int execute(int cmd, char *const args[], const char *vfo, const cat_state
         strcpy(second, vfo_name(cat, target));
         return 0;
     case GET_LEVEL: {
-        if (strcmp(args[0], "?") == 0) {
-            strcpy(first, "RAWSTR STRENGTH");
-            return 0;
-        }
         if (!cat->dual_rx && (!cat->rx_vfo_known || sub != cat->rx_vfo_sub)) return -11;
         const int raw = sub && cat->dual_rx ? cat->s_sub : cat->s_main;
         if (strcmp(args[0], "RAWSTR") == 0) {
@@ -367,8 +399,9 @@ rigctl_reply_t rigctl_command(char *line, const cat_state_t *cat, rigctl_set_fn 
     char *save;
     char *token = strtok_r(line, " \t\r", &save);
     if (!token) return (rigctl_reply_t){0};
-    const bool extended = token[0] == '+';
-    if (extended && !*++token) token = strtok_r(NULL, " \t\r", &save);
+    const char prefix = token[0];
+    const char sep = prefix == '+' ? '\n' : strchr(";,|", prefix) ? prefix : 0;
+    if (sep && !*++token) token = strtok_r(NULL, " \t\r", &save);
     const int cmd = token ? find_command(token) : -1;
     char *args[2] = {0};
     unsigned argc = 0;
@@ -379,42 +412,49 @@ rigctl_reply_t rigctl_command(char *line, const cat_state_t *cat, rigctl_set_fn 
 
     if (cmd >= 0) {
         const bool with_vfo = supports_read_vfo(cmd) && argc == commands[cmd].argc + 1;
+        if (supports_capability_query(cmd) && argc == 1 && !extra && strcmp(args[0], "?") == 0) {
+            return capability_reply(cmd, sep, cat, reply);
+        }
         if (extra || (argc != commands[cmd].argc && !with_vfo)) {
             err = -1;
         } else if (cmd == QUIT) {
             strcpy(reply, "RPRT 0\n");
             return (rigctl_reply_t){.length = sizeof("RPRT 0\n") - 1, .close = true};
         } else if (cmd == RIG_INFO) {
-            return rig_info(cat, extended, reply);
+            return rig_info(cat, sep, reply);
         } else if (cmd == VFO_INFO) {
-            return vfo_info(cat, args[0], extended, reply);
+            return vfo_info(cat, args[0], sep, reply);
         } else if (cmd == DUMP_STATE) {
             size_t used = 0;
-            if (extended) used = (size_t)snprintf(reply, RIGCTL_REPLY_SIZE, "dump_state:\n");
+            if (sep) used = (size_t)snprintf(reply, RIGCTL_REPLY_SIZE, "dump_state:%c", sep);
             used += dump_state(cat, reply + used, RIGCTL_REPLY_SIZE - used);
-            if (extended) used += (size_t)snprintf(reply + used, RIGCTL_REPLY_SIZE - used, "RPRT 0\n");
+            if (sep) used += (size_t)snprintf(reply + used, RIGCTL_REPLY_SIZE - used, "RPRT 0\n");
             return (rigctl_reply_t){.length = used};
+        } else if (cmd == CHECK_VFO) {
+            const int len = snprintf(reply, RIGCTL_REPLY_SIZE, "%s0\n%s",
+                                     sep ? "ChkVFO: " : "", sep && sep != '\n' ? "\n" : "");
+            return (rigctl_reply_t){.length = (size_t)len};
         } else {
             err = execute(cmd, args + with_vfo, with_vfo ? args[0] : NULL, cat, set, context, first, second);
         }
     }
 
     size_t used = 0;
-    if (extended && cmd >= 0 && cmd != CHECK_VFO) {
+    if (sep && cmd >= 0) {
         used += (size_t)snprintf(reply, RIGCTL_REPLY_SIZE, "%s:", commands[cmd].name);
         for (unsigned i = 0; i < argc; ++i) {
             used += (size_t)snprintf(reply + used, RIGCTL_REPLY_SIZE - used, " %s", args[i]);
         }
-        reply[used++] = '\n';
+        reply[used++] = sep;
     }
     const char *values[] = {first, second};
     for (unsigned i = 0; err == 0 && i < 2 && *values[i]; ++i) {
-        if (extended && commands[cmd].labels[i]) {
+        if (sep && commands[cmd].labels[i]) {
             used += (size_t)snprintf(reply + used, RIGCTL_REPLY_SIZE - used, "%s: ", commands[cmd].labels[i]);
         }
-        used += (size_t)snprintf(reply + used, RIGCTL_REPLY_SIZE - used, "%s\n", values[i]);
+        used += (size_t)snprintf(reply + used, RIGCTL_REPLY_SIZE - used, "%s%c", values[i], sep ? sep : '\n');
     }
-    if (extended || err || !*first) {
+    if (sep || err || !*first) {
         used += (size_t)snprintf(reply + used, RIGCTL_REPLY_SIZE - used, "RPRT %d\n", err);
     }
     return (rigctl_reply_t){.length = used, .rejected = err != 0};

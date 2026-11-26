@@ -431,7 +431,7 @@ save and restart. The server is off by default and accepts up to two clients.
 Rejected requests appear in the serial log with the client IPv4 address, request and
 response. The latest rejection is available as `rigctld.last_rejected` in HTTPS
 `/status`. To trace successful requests as well, enable **d** in the serial menu and
-save with **6**. Full tracing is off by default.
+save with **6**. The 1.9.42 Log4OM test firmware starts with tracing enabled. Use **d**, then **6**, to turn it off after the test.
 
 If a client stops reading and a reply cannot be queued within one second, the
 server closes that connection. TCP keepalive detects lost idle peers. HTTPS `/status` reports the current lwIP socket
