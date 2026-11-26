@@ -11,6 +11,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -31,6 +32,7 @@ extern "C" {
 /** Shortest accepted OTA / web password when it is entered on the console */
 #define APP_CONFIG_MIN_SECRET_LEN   12
 #define APP_CONFIG_MIN_TX_SECRET_LEN 6
+#define RIGCTL_DEFAULT_PORT 4532
 #define TX_DEFAULT_SECONDS 120
 #define TX_SWR_DEFAULT 30
 #define TX_SWR_MIN 15
@@ -52,6 +54,9 @@ typedef struct {
     char ota_pass[APP_CONFIG_OTA_PASS_MAX_LEN + 1];
     char web_user[APP_CONFIG_WEB_USER_MAX_LEN + 1];
     char web_pass[APP_CONFIG_WEB_PASS_MAX_LEN + 1];
+    bool rigctl_enabled;
+    uint16_t rigctl_port;
+    char rigctl_ip[16];
     bool tx_enabled;
     unsigned tx_max_seconds;
     unsigned swr_max; // tenths of the SWR ratio
@@ -86,6 +91,7 @@ void app_config_get(app_config_t *cfg);
 
 /** Remote PTT requires the serial-menu setting and a configured TX secret. */
 bool app_config_tx_enabled(void);
+bool app_config_rigctl_enabled(void);
 
 /**
  * @brief Check if the configuration has a valid Wi-Fi SSID configured.

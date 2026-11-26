@@ -20,6 +20,7 @@
 #include "driver/gpio.h"
 #include "driver/uart.h"
 #include "app_config.h"
+#include "lwip/inet.h"
 #include "build_info.h"
 #include "https_identity.h"
 #include "console_menu.h"
@@ -236,6 +237,7 @@ static void print_config_summary(const app_config_t *cfg)
         " p) TX password      : %s\r\n"
         " m) TX limit         : %u s\r\n"
         " s) SWR limit        : %u.%u:1\r\n"
+        " n) NET rigctl       : %s, TCP %u, IPv4: %s\r\n"
         " h) Host name        : %s.local\r\n"
         "==================================================\r\n",
         cfg->wifi_ssid[0] ? cfg->wifi_ssid : "(not set)",
@@ -246,7 +248,9 @@ static void print_config_summary(const app_config_t *cfg)
         cfg->web_pass[0] ? masked_web_pass : (cfg->ota_pass[0] ? "(empty: uses the OTA password)" : "(empty: web UI refuses all requests)"),
         cfg->tx_enabled ? "yes" : "no",
         cfg->tx_pass[0] ? masked_tx_pass : "(not set)", cfg->tx_max_seconds,
-        cfg->swr_max / 10, cfg->swr_max % 10, cfg->hostname
+        cfg->swr_max / 10, cfg->swr_max % 10,
+        cfg->rigctl_enabled ? "on" : "off", cfg->rigctl_port,
+        cfg->rigctl_ip[0] ? cfg->rigctl_ip : "any", cfg->hostname
     );
     console_write_str(msg);
 }
@@ -283,10 +287,13 @@ void console_menu_run(void)
             "  p: Set TX password (6+ chars)\r\n"
             "  m: Set TX time limit (10–600 seconds)\r\n"
             "  s: Set SWR limit (1.5–3.0)\r\n"
+            "  n: Toggle NET rigctl (trusted LAN/VPN only)\r\n"
+            "  r: Set NET rigctl port\r\n"
+            "  i: Set allowed NET rigctl IPv4 address\r\n"
             "  h: Set Host name (mDNS / DHCP)\r\n"
             "  c: Regenerate HTTPS certificate\r\n"
             "--------------------------------------------------\r\n"
-            "Enter selection (0-9, h, t, p, m, s, c): "
+            "Enter selection (0-9, h, t, p, m, s, c, n, r, i): "
         );
 
         char opt[8] = {0};
@@ -406,6 +413,38 @@ void console_menu_run(void)
                     }
                 }
                 console_write_str("-> Enter a limit from 1.5 to 3.0 with one decimal\r\n");
+                break;
+            }
+            case 'n':
+                cfg.rigctl_enabled = !cfg.rigctl_enabled;
+                break;
+            case 'r': {
+                char value[12] = {0};
+                console_write_str("NET rigctl port [1-65535] (Enter to keep): ");
+                read_line(value, sizeof(value), false);
+                if (!value[0]) break;
+                char *end;
+                const long port = strtol(value, &end, 10);
+                if (*end || port < 1 || port > 65535) {
+                    console_write_str("-> Enter a port from 1 to 65535\r\n");
+                } else {
+                    cfg.rigctl_port = (uint16_t)port;
+                }
+                break;
+            }
+            case 'i': {
+                char value[32] = {0};
+                console_write_str("Allowed client IPv4 (CLEAR for any, Enter to keep): ");
+                read_line(value, sizeof(value), false);
+                if (!value[0]) break;
+                struct in_addr address;
+                if (strcmp(value, "CLEAR") == 0) {
+                    cfg.rigctl_ip[0] = '\0';
+                } else if (inet_pton(AF_INET, value, &address) == 1) {
+                    strlcpy(cfg.rigctl_ip, value, sizeof(cfg.rigctl_ip));
+                } else {
+                    console_write_str("-> Enter one IPv4 address, e.g. 192.168.1.5\r\n");
+                }
                 break;
             }
             case 'h':

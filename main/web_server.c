@@ -28,6 +28,7 @@
 #include "app_config.h"
 #include "tx.h"
 #include "tx_voice.h"
+#include "rigctld.h"
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
 #include <math.h>
@@ -672,7 +673,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160];
+    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 140];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -794,6 +795,15 @@ static esp_err_t status_handler(httpd_req_t *req)
                       ",\"tx_voice\":{\"level_ms\":%u,\"target_ms\":%u,\"underruns\":%u,"
                       "\"dropped_frames\":%u,\"rate_ppm\":%d}}",
                       voice.level_ms, voice.target_ms, voice.underruns, voice.dropped_frames, voice.rate_ppm);
+    }
+    if (n > 0 && (size_t)n < sizeof(json)) {
+        const rigctld_stats_t rigctl = rigctld_stats();
+        n--;
+        n += snprintf(json + n, sizeof(json) - n,
+                      ",\"rigctld\":{\"enabled\":%s,\"listening\":%s,\"port\":%u,"
+                      "\"clients\":%u,\"commands\":%u,\"rejected\":%u}}",
+                      rigctl.enabled ? "true" : "false", rigctl.listening ? "true" : "false",
+                      rigctl.port, rigctl.clients, rigctl.commands, rigctl.rejected);
     }
     return send_json(req, json, n, sizeof(json));
 }

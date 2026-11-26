@@ -39,6 +39,7 @@ esp_err_t app_config_load(app_config_t *cfg)
 {
     if (!cfg) return ESP_ERR_INVALID_ARG;
     memset(cfg, 0, sizeof(*cfg));
+    cfg->rigctl_port = RIGCTL_DEFAULT_PORT;
     cfg->tx_max_seconds = TX_DEFAULT_SECONDS;
     cfg->swr_max = TX_SWR_DEFAULT;
 
@@ -75,6 +76,15 @@ esp_err_t app_config_load(app_config_t *cfg)
             cfg->tx_max_seconds = tx_seconds;
         }
         read_nvs_str_or_default(handle, "tx_pass", cfg->tx_pass, sizeof(cfg->tx_pass), "");
+        uint8_t rigctl_enabled = 0;
+        nvs_get_u8(handle, "rigctl_enable", &rigctl_enabled);
+        cfg->rigctl_enabled = rigctl_enabled != 0;
+        nvs_get_u16(handle, "rigctl_port", &cfg->rigctl_port);
+        if (!cfg->rigctl_port) cfg->rigctl_port = RIGCTL_DEFAULT_PORT;
+        // Fail closed if the stored IP is invalid. Only an absent key allows all IPs.
+        size_t ip_size = sizeof(cfg->rigctl_ip);
+        esp_err_t ip_err = nvs_get_str(handle, "rigctl_ip", cfg->rigctl_ip, &ip_size);
+        if (ip_err != ESP_OK && ip_err != ESP_ERR_NVS_NOT_FOUND) cfg->rigctl_enabled = false;
         nvs_close(handle);
     } else {
         // NVS namespace not created yet; fall back to defaults
@@ -118,6 +128,9 @@ esp_err_t app_config_save(const app_config_t *cfg)
     if (err == ESP_OK) err = nvs_set_str(handle, "tx_pass", cfg->tx_pass);
     if (err == ESP_OK) err = nvs_set_u16(handle, "tx_max_seconds", cfg->tx_max_seconds);
     if (err == ESP_OK) err = nvs_set_u8(handle, "swr_max", cfg->swr_max);
+    if (err == ESP_OK) err = nvs_set_u8(handle, "rigctl_enable", cfg->rigctl_enabled);
+    if (err == ESP_OK) err = nvs_set_u16(handle, "rigctl_port", cfg->rigctl_port);
+    if (err == ESP_OK) err = nvs_set_str(handle, "rigctl_ip", cfg->rigctl_ip);
 
     if (err == ESP_OK) {
         err = nvs_commit(handle);
@@ -184,6 +197,11 @@ bool app_config_hostname_is_valid(const char *s)
         }
     }
     return true;
+}
+
+bool app_config_rigctl_enabled(void)
+{
+    return s_active_config.rigctl_enabled;
 }
 
 bool app_config_tx_enabled(void)

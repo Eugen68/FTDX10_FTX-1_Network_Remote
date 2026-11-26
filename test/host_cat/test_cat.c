@@ -22,6 +22,7 @@ int64_t g_write_duration_us;
 esp_err_t g_write_result;
 
 static bool tx_enabled, tx_password;
+bool app_config_rigctl_enabled(void) { return false; }
 bool app_config_tx_enabled(void) { return tx_enabled && tx_password; }
 
 static int fails = 0;
@@ -132,6 +133,34 @@ static void test_startup(void)
     g_cdc_send_hook = NULL;
 }
 
+static void test_rigctl_cat_writes(void)
+{
+    use("0761");
+    s_disconnected = false;
+    atomic_store(&s_link_starting, false);
+    publish_profile();
+    inject("VS0;FT1;SH0013;TX0;");
+    cat_state_t state;
+    cat_get_state(&state);
+    CHECK(state.rx_vfo_known && !state.rx_vfo_sub && state.tx_vfo == CAT_TX_VFO_SUB &&
+          state.width_code[0] == 13, "NET getters use cached VS/FT/SH");
+    CHECK(cat_rigctl_set_freq(false, 14074000, 2) == ESP_OK, "fresh RX permits tuning");
+    inject("TX1;");
+    CHECK(cat_rigctl_set_freq(false, 14074000, 2) == ESP_ERR_INVALID_STATE, "reject during external TX");
+    const cat_cmd_item_t item = {
+        .cmd = "FA014074000;", .rig = CAT_RIG_FTDX10, .ticket = 2,
+        .expires_us = g_now_us + 1000000
+    };
+    g_sent[0] = '\0';
+    CHECK(!run_rigctl_write((void *)1, item) && !g_sent[0], "queued SET is rejected when TX starts");
+    inject("TX0;VS1;SH0017;");
+    CHECK(s_state.width_code[1] == 17, "associate SH0 with selected FTDX10 VFO");
+    CHECK(!run_rigctl_write((void *)1, item) && !g_sent[0], "queued SET cannot target previous VFO");
+    use("0840");
+    inject("VS1;SH1009;SH0013;");
+    CHECK(s_state.width_code[0] == 13 && s_state.width_code[1] == 9, "FTX-1 has independent SH codes");
+}
+
 int main(void) {
     s_lock = (void*)1; s_cmd_queue = (void*)1;
     // profile tables: every polled string must pass its own allow-list
@@ -153,10 +182,20 @@ int main(void) {
     CHECK(!ok("TX00;") && !ok("TX01;"), "only the exact TX0 command is unconditional");
 
     // never: transmit commands on any profile
-    const char *never[] = {"TX1;", "TX2;", "MX1;", "KY0;", "VX1;", "PC100;", "FT0;", "FT1;", "FT2;", "FT3;", "EX010411100;x", "AI0;", NULL};
+    const char *never[] = {"TX1;", "TX2;", "MX1;", "KY0;", "VX1;", "PC100;", "EX010411100;x", "AI0;", NULL};
     const char *ids[] = {"0840", "0761", "9999", NULL};
     for (int r = 0; ids[r]; r++) { use(ids[r]); for (int k = 0; never[k]; k++) CHECK(!ok(never[k]), "%s allowed %s", ids[r], never[k]); }
 
+
+    use("0840");
+    CHECK(ok("FT0;") && ok("FT1;") && !ok("FT2;") && !ok("FT3;"), "FTX-1 TX VFO selection codes");
+    CHECK(ok("VS;") && ok("VS1;") && !ok("VS2;"), "VFO selection restricted to 0/1");
+    CHECK(ok("SH1;") && ok("SH1023;") && !ok("SH1024;"), "FTX-1 SUB permits bounded SH");
+    use("0761");
+    CHECK(!ok("FT0;") && !ok("FT1;") && ok("FT2;") && ok("FT3;"), "FTDX10 TX VFO selection codes");
+    CHECK(ok("SH0013;") && !ok("SH1;") && !ok("SH1013;"), "FTDX10 SH fixed receiver field");
+    use("9999");
+    CHECK(!ok("FT0;") && !ok("FT2;") && !ok("VS1;") && !ok("SH0013;"), "unknown rig cannot set VFO/filter");
 
     tx_enabled = true;
     use("0840");
@@ -608,6 +647,7 @@ int main(void) {
     handle_cat_packet("MD0C;");
     CHECK(cat_voice_mode_error(false) != NULL, "voice stops if radio leaves SSB");
     test_startup();
+    test_rigctl_cat_writes();
     printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     return fails != 0;
 }
