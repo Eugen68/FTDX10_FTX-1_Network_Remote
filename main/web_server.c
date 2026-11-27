@@ -32,6 +32,7 @@
 #include "tx.h"
 #include "tx_voice.h"
 #include "rigctld.h"
+#include "yaesu_catd.h"
 #include "lwip/sockets.h"
 #include "esp_heap_caps.h"
 #include "esp_memory_utils.h"
@@ -692,7 +693,8 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 400 + 2 * RIGCTL_LINE_SIZE + 736];
+    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 400 + 2 * RIGCTL_LINE_SIZE + 736 +
+              2 * YAESU_CAT_CMD_MAX + 256];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -859,6 +861,20 @@ static esp_err_t status_handler(httpd_req_t *req)
                       rigctl.debug ? "true" : "false", last_rejected,
                       rigctl.clients + rigctl.listening, rigctl.opened, rigctl.closed,
                       rigctl.accept_errors, rigctl.send_errors, rigctl.send_timeouts);
+    }
+    if (n > 0 && (size_t)n < sizeof(json)) {
+        const yaesu_catd_stats_t yaesu = yaesu_catd_stats();
+        char last_rejected[2 * sizeof(yaesu.last_rejected) + 1];
+        json_escape(yaesu.last_rejected, last_rejected, sizeof(last_rejected));
+        n--;
+        n += snprintf(json + n, sizeof(json) - n,
+                      ",\"yaesu_cat\":{\"enabled\":%s,\"listening\":%s,\"port\":%u,\"clients\":%u,"
+                      "\"commands\":%u,\"writes\":%u,\"rejected\":%u,\"debug\":%s,\"last_rejected\":\"%s\","
+                      "\"opened\":%u,\"closed\":%u,\"accept_errors\":%u,\"send_errors\":%u}}",
+                      yaesu.enabled ? "true" : "false", yaesu.listening ? "true" : "false",
+                      yaesu.port, yaesu.clients, yaesu.commands, yaesu.writes, yaesu.rejected,
+                      yaesu.debug ? "true" : "false", last_rejected,
+                      yaesu.opened, yaesu.closed, yaesu.accept_errors, yaesu.send_errors);
     }
     return send_json(req, json, n, sizeof(json));
 }

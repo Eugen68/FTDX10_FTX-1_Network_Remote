@@ -456,6 +456,59 @@ station returned its default code or the width has yet to be read. All getters u
 cached CAT state. When this feature is enabled, the existing CAT refresh also reads
 the active VFO, transmit VFO and filter settings one command at a time.
 
+### OmniRig (SDRuno, CW Skimmer …) over Wi-Fi (Yaesu CAT over TCP)
+
+OmniRig talks only to COM ports. The board can act as the radio on a TCP port, and a virtual
+COM port on the PC connects OmniRig to it:
+
+```
+Program → OmniRig (FTDX10 or FTX-1 profile) → COM10 (virtual) → Wi-Fi → board, TCP 4533 → radio
+```
+
+1. In the USB serial menu, use **y** to enable the Yaesu CAT server, **u** to change its TCP
+   port (default **4533**) and **i** for the optional allowed client IPv4 address (shared with
+   NET rigctl). Save with **6**. The server is off by default and accepts up to two clients.
+2. On the PC, create a virtual COM port mapped to TCP, for example with
+   **HW Virtual Serial Port** (HW group): a new port such as **COM10**, connected to the board's
+   IPv4 address and port `4533`. com0com with hub4com works as well.
+3. In **OmniRig**, set Rig 1 to the radio's profile (FTDX10 or FTX-1) on **COM10**. The baud rate
+   setting is not used on a virtual port, but choose one (for example 38400). Set **DTR** and
+   **RTS** to **Low**, **Poll interval 1000 ms** and **Timeout 4000 ms**. With the default 500 ms,
+   a cycle of eight commands through the virtual COM port and Wi-Fi does not always fit, and
+   OmniRig (and CW Skimmer) flip between on-line and off-line. Set this on every rig in OmniRig
+   that uses the board.
+4. Point the programs at OmniRig Rig 1. Several programs can share it, for example **SDRuno**
+   following the radio's frequency and **CW Skimmer** reading it and sending click-to-QSY.
+
+How the board answers:
+
+- Reads (`ID;`, `FA;`, `FB;`, `IF;`, `OI;`, `MD0;`, `MD1;`, `FT;`, `ST;`, `VS;`, `TX;`, `KP;`, `AI;`, `PS;`,
+  `SM0;`, `SH0;` …) are answered from the CAT state the board already keeps, in the connected
+  radio's exact format (`IF;` is 28 bytes on the FTDX10 and 30 on the FTX-1). They add no traffic
+  on the radio's CAT port; while the server is enabled the board also reads the CW pitch (`KP;`)
+  every 5 s. Unknown reads get `?;`, as from the radio.
+- OmniRig's FTDX10 profile polls `VS;`, `FT;`, `TX;`, `MD0;`, `IF;`, `FA;`, `FB;` and `KP;` in
+  every cycle. A wrong reply length there makes OmniRig (and CW Skimmer) flip between on-line
+  and off-line.
+- Writes for frequency, mode, active VFO, transmit VFO, split on / off (`ST1;` / `ST0;`, as
+  OmniRig sends them) and VFO swap or copy go through the same
+  allow-list as the web page. They are refused while transmitting. Like the radio, the board
+  never answers a write, so programs that read fixed-length replies stay in step.
+- Fast frequency changes (a program following a tuning knob) are combined: at most one per VFO
+  every 100 ms reaches the radio, always the latest. Reads report the requested frequency until
+  the radio confirms it.
+- `TX1;` and `TX2;` are refused, as are power, menu, memory and keyer writes. `TX0;` is accepted
+  without effect. `AI1;` from a program is kept for that program: the board sends it `FA`, `FB`,
+  `MD0` and `MD1` changes, while the radio's own auto information stays on for the board.
+- While no radio answers CAT (off or still starting), the board does not answer at all, so
+  OmniRig shows the radio as offline.
+
+HTTPS `/status` reports the server under `yaesu_cat`: clients, commands, writes, rejections and
+the latest rejected command. Use **g** in the serial menu to trace every command and reply.
+
+Like NET rigctl, this is plain TCP with no password: use it only on a trusted local network or
+over a VPN.
+
 ## The FTDX10's own scope from the ACC socket
 
 With an FTDX10, the page can show the radio's own spectrum and waterfall (up to a 1 MHz span) instead of the audio

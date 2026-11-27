@@ -58,6 +58,7 @@ typedef struct {
     bool rx_vfo_known;
     bool rx_vfo_sub;
     int8_t width_code[2];     /*!< SH code for each receiver, -1 if unavailable */
+    int8_t key_pitch;         /*!< CW key pitch, KP code 0-75 (300-1050 Hz in 10 Hz steps), -1 if unread */
     bool tx_cat;
     bool tx_radio;
     bool tx_radio_known;

@@ -221,7 +221,7 @@ static void print_config_summary(const app_config_t *cfg)
     mask_string(cfg->ota_pass, masked_ota_pass, sizeof(masked_ota_pass));
     mask_string(cfg->web_pass, masked_web_pass, sizeof(masked_web_pass));
 
-    char msg[1024];
+    char msg[1536];
     snprintf(msg, sizeof(msg),
         "\r\n"
         "==================================================\r\n"
@@ -239,6 +239,8 @@ static void print_config_summary(const app_config_t *cfg)
         " s) SWR limit        : %u.%u:1\r\n"
         " n) NET rigctl       : %s, TCP %u, IPv4: %s\r\n"
         " d) NET rigctl trace : %s\r\n"
+        " y) Yaesu CAT (TCP)  : %s, TCP %u (same allowed IPv4)\r\n"
+        " g) Yaesu CAT trace  : %s\r\n"
         " h) Host name        : %s.local\r\n"
         "==================================================\r\n",
         cfg->wifi_ssid[0] ? cfg->wifi_ssid : "(not set)",
@@ -251,7 +253,8 @@ static void print_config_summary(const app_config_t *cfg)
         cfg->tx_pass[0] ? masked_tx_pass : "(not set)", cfg->tx_max_seconds,
         cfg->swr_max / 10, cfg->swr_max % 10,
         cfg->rigctl_enabled ? "on" : "off", cfg->rigctl_port,
-        cfg->rigctl_ip[0] ? cfg->rigctl_ip : "any", cfg->rigctl_debug ? "on" : "off", cfg->hostname
+        cfg->rigctl_ip[0] ? cfg->rigctl_ip : "any", cfg->rigctl_debug ? "on" : "off",
+        cfg->yaesu_enabled ? "on" : "off", cfg->yaesu_port, cfg->yaesu_debug ? "on" : "off", cfg->hostname
     );
     console_write_str(msg);
 }
@@ -291,11 +294,14 @@ void console_menu_run(void)
             "  n: Toggle NET rigctl (trusted LAN/VPN only)\r\n"
             "  r: Set NET rigctl port\r\n"
             "  d: Toggle tracing of all NET rigctl commands and replies\r\n"
-            "  i: Set allowed NET rigctl IPv4 address\r\n"
+            "  i: Set allowed IPv4 address (NET rigctl and Yaesu CAT)\r\n"
+            "  y: Toggle Yaesu CAT over TCP for OmniRig (trusted LAN/VPN only)\r\n"
+            "  u: Set Yaesu CAT TCP port\r\n"
+            "  g: Toggle tracing of all Yaesu CAT commands and replies\r\n"
             "  h: Set Host name (mDNS / DHCP)\r\n"
             "  c: Regenerate HTTPS certificate\r\n"
             "--------------------------------------------------\r\n"
-            "Enter selection (0-9, h, t, p, m, s, c, n, r, i, d): "
+            "Enter selection (0-9, h, t, p, m, s, c, n, r, i, d, y, u, g): "
         );
 
         char opt[8] = {0};
@@ -423,6 +429,26 @@ void console_menu_run(void)
             case 'n':
                 cfg.rigctl_enabled = !cfg.rigctl_enabled;
                 break;
+            case 'y':
+                cfg.yaesu_enabled = !cfg.yaesu_enabled;
+                break;
+            case 'g':
+                cfg.yaesu_debug = !cfg.yaesu_debug;
+                break;
+            case 'u': {
+                char value[12] = {0};
+                console_write_str("Yaesu CAT TCP port [1-65535] (Enter to keep): ");
+                read_line(value, sizeof(value), false);
+                if (!value[0]) break;
+                char *end;
+                const long port = strtol(value, &end, 10);
+                if (*end || port < 1 || port > 65535 || port == cfg.rigctl_port || port == 80 || port == 443) {
+                    console_write_str("-> Enter a free port from 1 to 65535 (not 80, 443 or the rigctl port)\r\n");
+                } else {
+                    cfg.yaesu_port = (uint16_t)port;
+                }
+                break;
+            }
             case 'r': {
                 char value[12] = {0};
                 console_write_str("NET rigctl port [1-65535] (Enter to keep): ");

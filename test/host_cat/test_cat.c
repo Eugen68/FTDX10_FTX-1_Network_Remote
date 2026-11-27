@@ -45,6 +45,7 @@ bool usb_audio_recover_cat(unsigned attempt)
     return true;
 }
 bool app_config_rigctl_enabled(void) { return false; }
+bool app_config_yaesu_enabled(void) { return false; }
 bool app_config_tx_enabled(void) { return tx_enabled && tx_password; }
 
 static int fails = 0;
