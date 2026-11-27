@@ -13,7 +13,7 @@
  *
  * CAT commands used by this file, for comparing with a radio's CAT manual.
  * Every command is "<2 letters><parameters>;".  R = receiver: 0 = MAIN, 1 = SUB.  n = a digit.
- * All writes use the CAT allow-list. Discovery also permits one standalone parser delimiter.
+ * All writes use the CAT allow-list.
  * Unless marked otherwise, a line applies to both radios.
  *
  *   Command         Dir    Meaning (as used here)
@@ -75,6 +75,7 @@
 #include "usb/usb_host.h"
 #include "usb/cdc_acm_host.h"
 #include "cat.h"
+#include "cat_cdc_trace.h"
 #include "rigctl_protocol.h"
 #include "app_config.h"
 #include "nvs.h"
@@ -85,8 +86,6 @@
 // opened by USB device address. Whichever returns a valid ID at a supported speed is used as the CAT port.
 #define SILABS_VID          0x10C4
 #define CAT_SETTLE_US       3000000LL
-#define CAT_BAUD_SETTLE_MS  50
-#define CAT_DELIMITER_MS    60
 #define CAT_CACHED_SCAN_MS  1000
 #define CAT_CACHED_ONLY_US  10000000LL
 #define CAT_RECOVER_US      30000000LL
@@ -378,7 +377,7 @@ static void record_query_answer(const char *pkt, size_t length)
         if (!transient) atomic_fetch_add(&s_effective_rejects, 1);
     }
     taskENTER_CRITICAL(&s_query_mux);
-    // A trailing rejection of the standalone delimiter must not terminate an ID probe.
+    // Keep listening for a valid ID even if the port first returns a rejection.
     if (s_query.waiting && ((rejected && strcmp(s_query.command, "ID;") != 0) ||
                             matches_query(pkt, length, s_query.command))) {
         memcpy(s_query.answer, pkt, length + 1);
@@ -777,10 +776,7 @@ static unsigned keyed_write_timeout_ms(void)
 /** The only place that writes to the radio */
 static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_kind_t kind, bool keyed_poll)
 {
-    const bool discovery_delimiter = kind == CAT_LOG_POLL && !keyed_poll &&
-        cmds && strcmp(cmds, ";") == 0 && s_rig == &s_profile_none &&
-        atomic_load(&s_link_starting) && atomic_load(&s_cat_session);
-    if (!discovery_delimiter && !cat_cmds_allowed(cmds, CAT_TX_MAX_CMDS)) {
+    if (!cat_cmds_allowed(cmds, CAT_TX_MAX_CMDS)) {
         ESP_LOGE(TAG, "Blocked a CAT command that is not on the allow-list");
         if (cmds != NULL) {
             log_cmds('T', CAT_LOG_BLOCKED, cmds);
@@ -1906,18 +1902,23 @@ static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool
             diag("setup addr %u: %s", addr, esp_err_to_name(err));
             break;
         }
-        vTaskDelay(pdMS_TO_TICKS(CAT_BAUD_SETTLE_MS));
-        observe_usb_events();
-        if (cat_tx_kind(*dev, ";", CAT_LOG_POLL, false) != ESP_OK) break;
-        vTaskDelay(pdMS_TO_TICKS(CAT_DELIMITER_MS));
-        observe_usb_events();
-        if (s_disconnected || !cat_usb_ready()) break;
-
         char answer[RX_BUF_BYTES];
         atomic_store(&s_rx_restart, true);
         s_rx_bytes = 0;
         ++attempted;
-        if (query(*dev, "ID;", answer, sizeof(answer), ANSWER_TIMEOUT_MS, false) == QUERY_ANSWER) {
+        cat_cdc_probe_begin();
+        const query_result_t result = query(*dev, "ID;", answer, sizeof(answer), ANSWER_TIMEOUT_MS, false);
+        const cat_cdc_probe_t trace = cat_cdc_probe_end();
+        char hex[3 * sizeof(trace.sample) + 1] = {0};
+        for (size_t i = 0; i < trace.sample_len; ++i) {
+            snprintf(hex + 3 * i, sizeof(hex) - 3 * i, "%02X ", trace.sample[i]);
+        }
+        ESP_LOGI(TAG, "ID probe addr=%u baud=%lu result=%s bulk_in_completed=%u short=%u failed=%u "
+                 "submit_failed=%u bytes=%u raw=%s", addr, (unsigned long)bauds[b],
+                 result == QUERY_ANSWER ? "valid" : result == QUERY_FAILED ? "write/link error" : "no ID",
+                 trace.completed, trace.short_packets, trace.failed, trace.submit_failed, trace.bytes,
+                 trace.sample_len ? hex : "(none)");
+        if (result == QUERY_ANSWER) {
             memcpy(s_rig_id, answer + 2, 4);
             s_rig_id[4] = '\0';
             s_rig = profile_for_id(s_rig_id);

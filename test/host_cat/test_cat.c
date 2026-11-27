@@ -32,6 +32,8 @@ esp_err_t g_write_result;
 static bool tx_enabled, tx_password;
 static bool mock_allow_reset = true;
 static unsigned mock_resets, mock_restarts;
+void cat_cdc_probe_begin(void) {}
+cat_cdc_probe_t cat_cdc_probe_end(void) { return (cat_cdc_probe_t){0}; }
 static esp_reset_reason_t mock_reset_reason = ESP_RST_POWERON;
 esp_reset_reason_t esp_reset_reason(void) { return mock_reset_reason; }
 bool tx_begin_usb_recovery(void) { return mock_allow_reset; }
@@ -263,9 +265,8 @@ static void test_rejected_tx_read_after_unkey(void)
 static unsigned open_attempts[16], open_attempt_count, closes;
 static uint8_t open_addr;
 static uint32_t mock_baud;
-static bool swap_to_ftx1, fail_first_open, suppress_id, delimited;
+static bool swap_to_ftx1, fail_first_open, suppress_id;
 static unsigned cached_attempts, other_attempts, boot_probes_left;
-static int64_t baud_set_us, delimiter_us;
 
 static esp_err_t swap_open(const cdc_acm_host_open_config_t *config, cdc_acm_dev_hdl_t *out)
 {
@@ -290,8 +291,6 @@ static esp_err_t swap_request(cdc_acm_dev_hdl_t dev, uint8_t request, uint16_t l
     assert(open_addr == (uintptr_t)dev);
     if (request == CP210X_SET_BAUDRATE && length == sizeof(mock_baud)) {
         memcpy(&mock_baud, data, length);
-        baud_set_us = g_now_us;
-        delimited = false;
     }
     return ESP_OK;
 }
@@ -299,16 +298,7 @@ static esp_err_t swap_request(cdc_acm_dev_hdl_t dev, uint8_t request, uint16_t l
 static void swap_reply(const char *cmd, size_t length)
 {
     assert(cat_usb_ready());
-    if (length == 1 && *cmd == ';') {
-        assert(!delimited && g_now_us - baud_set_us >= CAT_BAUD_SETTLE_MS * 1000);
-        delimiter_us = g_now_us;
-        delimited = true;
-        inject("?;junk");
-        return;
-    }
     assert(length == 3 && memcmp(cmd, "ID;", 3) == 0);
-    assert(delimited && g_now_us - delimiter_us >= CAT_DELIMITER_MS * 1000);
-    delimited = false;
     if (mock_baud == s_last_baud) ++cached_attempts;
     else ++other_attempts;
     if (suppress_id || boot_probes_left) {
@@ -377,8 +367,8 @@ static void test_hot_swap(void)
     g_sent[0] = '\0';
     dev = find_cat_port();
     CHECK(dev && s_cat_addr == 4 && s_rig->rig == CAT_RIG_FTX1, "find the second FTX-1 CP210x after the first open fails");
-    CHECK(s_last_baud == 38400 && strcmp(g_sent, ";ID;;ID;") == 0,
-          "delimiter before each probe, then find the new baud");
+    CHECK(s_last_baud == 38400 && strcmp(g_sent, "ID;ID;") == 0,
+          "probe directly with ID at each speed, then find the new baud");
     const cdc_acm_host_dev_event_data_t delayed = {.type = CDC_ACM_HOST_DEVICE_DISCONNECTED};
     event_cb(&delayed, (void *)(uintptr_t)old_session);
     CHECK(!s_disconnected && s_cat_addr == 4 && cat_usb_ready(), "ignore a disconnect from the old CDC session");
