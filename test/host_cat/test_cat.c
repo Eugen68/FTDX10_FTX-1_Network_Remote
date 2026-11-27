@@ -156,7 +156,7 @@ static void test_startup(void)
     reject_notch = true;
     const unsigned rejected = cat_rejected_commands();
     initialize_reads((void *)1, s_rig);
-    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;AG1;SQ0;SQ1;RI0;TX;RM0;BP00;BP01;BP10;BP11;FT;AI1;") == 0,
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;AG1;SQ0;SQ1;RI0;TX;RM0;BP00;BP01;BP10;BP11;FT;PA0;PA1;PA2;RA0;RG0;RG1;GT0;GT1;AI1;") == 0,
           "FTX-1 reads before first write");
     CHECK(cat_rejected_commands() == rejected + 1 && !poll_rejected("BP00;"),
           "one explicit rejection does not suppress a read");
@@ -187,12 +187,12 @@ static void test_startup(void)
     startup_ai = "AI1;";
     g_sent[0] = '\0';
     initialize_reads((void *)1, s_rig);
-    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;") == 0, "FTDX10 leaves AI1 alone");
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;PA0;RA0;RG0;GT0;") == 0, "FTDX10 leaves AI1 alone");
     startup_ai = NULL;
     g_sent[0] = '\0';
     const int64_t before = g_now_us;
     initialize_reads((void *)1, s_rig);
-    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;AI1;") == 0 &&
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;PA0;RA0;RG0;GT0;AI1;") == 0 &&
           g_now_us - before >= ANSWER_TIMEOUT_MS * 1000, "silent AI enables it after timeout and all reads");
     startup_ai = "AI2;";
     g_sent[0] = '\0';
@@ -600,6 +600,21 @@ int main(void) {
     use("9999");
     CHECK(!ok("FT0;") && !ok("FT2;") && !ok("VS1;") && !ok("SH0013;"), "unknown rig cannot set VFO/filter");
 
+    // front-end: pre-amp, attenuator, RF gain, AGC, each with the radio's own parameter ranges
+    use("0840");
+    CHECK(ok("PA0;") && ok("PA1;") && ok("PA2;") && !ok("PA3;") && !ok("PA;"), "FTX-1 PA bands");
+    CHECK(ok("PA02;") && !ok("PA03;") && ok("PA11;") && !ok("PA12;") && ok("PA21;") && !ok("PA22;"), "FTX-1 PA values");
+    CHECK(ok("RA0;") && ok("RA01;") && !ok("RA02;") && !ok("RA1;") && !ok("RA11;"), "FTX-1 ATT on/off");
+    CHECK(ok("RG1;") && ok("RG1255;") && !ok("RG1256;") && !ok("RG2100;") && !ok("RG112;"), "FTX-1 RF gain");
+    CHECK(ok("GT1;") && ok("GT14;") && !ok("GT15;") && !ok("GT2;") && !ok("GT1A;"), "FTX-1 AGC");
+    use("0761");
+    CHECK(ok("PA0;") && ok("PA02;") && !ok("PA1;") && !ok("PA11;") && !ok("PA03;"), "FTDX10 PA");
+    CHECK(ok("RA03;") && !ok("RA04;"), "FTDX10 ATT 6/12/18 dB");
+    CHECK(ok("RG0128;") && !ok("RG1;") && !ok("RG1128;"), "FTDX10 RF gain, one receiver");
+    CHECK(ok("GT04;") && !ok("GT1;") && !ok("GT10;"), "FTDX10 AGC, one receiver");
+    use("9999");
+    CHECK(!ok("PA0;") && !ok("RA0;") && !ok("RG0;") && !ok("GT0;") && !ok("PA00;"), "unknown rig: no front-end");
+
     tx_enabled = true;
     use("0840");
     CHECK(!ok("TX1;") && ok("TX0;"), "unkey allowed without password");
@@ -647,6 +662,34 @@ int main(void) {
     CHECK(cat_set_freq(false, 14074000) == ESP_ERR_INVALID_STATE, "unknown set");
     use("0840");
     CHECK(cat_set_squelch(true, 255) == ESP_OK && cat_set_freq(true, 433000000) == ESP_OK, "ftx1 setters");
+
+    // front-end setters and answers
+    g_queue_send_hook = capture_cat_item;
+    CHECK(cat_set_preamp(1, 1) == ESP_OK && strcmp(queued_rigctl.cmd, "PA11;") == 0, "ftx1 VHF preamp");
+    CHECK(cat_set_preamp(1, 2) == ESP_ERR_INVALID_ARG && cat_set_att(2) == ESP_ERR_INVALID_ARG, "ftx1 ranges");
+    CHECK(cat_set_rf_gain(true, 7) == ESP_OK && strcmp(queued_rigctl.cmd, "RG1007;") == 0, "ftx1 sub RF gain");
+    CHECK(cat_set_agc(false, 5) == ESP_ERR_INVALID_ARG, "AGC set range");
+    use("0761");
+    CHECK(cat_set_att(3) == ESP_OK && strcmp(queued_rigctl.cmd, "RA03;") == 0, "ftdx10 18 dB");
+    CHECK(cat_set_agc(false, 4) == ESP_OK && strcmp(queued_rigctl.cmd, "GT04;") == 0, "ftdx10 AGC auto");
+    CHECK(cat_set_preamp(1, 0) == ESP_ERR_NOT_SUPPORTED && cat_set_rf_gain(true, 1) == ESP_ERR_NOT_SUPPORTED,
+          "ftdx10 has one receiver and no VHF band");
+    use("9999");
+    CHECK(cat_set_preamp(0, 0) == ESP_ERR_NOT_SUPPORTED && cat_set_agc(false, 1) == ESP_ERR_NOT_SUPPORTED, "unknown");
+    g_queue_send_hook = NULL;
+    use("0840");
+    {
+        cat_state_t fe;
+        handle_cat_packet("PA02;");
+        handle_cat_packet("PA21;");
+        handle_cat_packet("RA01;");
+        handle_cat_packet("RG1100;");
+        handle_cat_packet("GT06;");
+        handle_cat_packet("RG0999;");   // out of range: ignored
+        cat_get_state(&fe);
+        CHECK(fe.preamp[0] == 2 && fe.preamp[2] == 1 && fe.att == 1 && fe.rf_gain[1] == 100 && fe.agc[0] == 6 &&
+              fe.rf_gain[0] != 999, "front-end answers");
+    }
 
     // parsers
     int m, sb; bool b;

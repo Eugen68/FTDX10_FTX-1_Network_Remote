@@ -49,7 +49,7 @@
 #define WEB_CORE             0
 #define STREAM_CHUNK_BYTES   4096
 #define CAT_POST_MAX_BYTES   192     // largest accepted POST /cat body, including the NUL
-#define CAT_JSON_BYTES       1408    // GET /cat response
+#define CAT_JSON_BYTES       1536    // GET /cat response
 #define STREAM_READ_TIMEOUT  pdMS_TO_TICKS(200)
 #define KEEPALIVE_IDLE_READS 5       // idle waits (about 1 s) before a keep-alive silence block is sent
 #define KEEPALIVE_FRAMES     64      // length of that block in audio frames
@@ -929,10 +929,13 @@ static esp_err_t cat_handler(httpd_req_t *req)
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,"
-                      "\"rx_vfo\":%s,\"tx_vfo\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\"}",
+                      "\"rx_vfo\":%s,\"tx_vfo\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\","
+                      "\"pa_bands\":%u,\"att_max\":%u,\"preamp\":[%d,%d,%d],\"att\":%d,\"rfg\":[%d,%d],\"agc\":[%d,%d]}",
                       (unsigned)st.voice_source, app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
-                      st.tx_radio_known ? "true" : "false", rx_vfo, tx_vfo, (unsigned long)st.write_error_seq, write_error);
+                      st.tx_radio_known ? "true" : "false", rx_vfo, tx_vfo, (unsigned long)st.write_error_seq, write_error,
+                      st.connected ? st.pa_bands : 0u, st.att_max, st.preamp[0], st.preamp[1], st.preamp[2], st.att,
+                      st.rf_gain[0], st.rf_gain[1], st.agc[0], st.agc[1]);
     }
     return send_json(req, json, n, sizeof(json));
 }
@@ -945,6 +948,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
 //   vol, sq integer 0-255
 //   notch   0 | 1 | false | true           notch_hz integer 10-3200
 //   power   0 | 1 | false | true
+//   preamp  0-2 (with pa_band 0-2 on the FTX-1)   att 0-3   rfg 0-255   agc 0-4   (range checked again in cat.c)
 //   action  "swap" | "copy_main_to_sub" | "copy_sub_to_main"
 // Unknown or repeated keys, escapes, nesting and trailing data are rejected. There is no way to send a
 // raw CAT string.
@@ -965,6 +969,8 @@ typedef struct {
     uint16_t notch_hz;
     bool has_power;
     bool power;
+    bool has_preamp, has_pa_band, has_att, has_rfg, has_agc;
+    uint8_t preamp, pa_band, att, rfg, agc;
     bool has_action;
     char action[24];
 } cat_req_t;
@@ -1381,6 +1387,26 @@ static bool parse_cat_request(const char *s, cat_req_t *r)
         } else if (strcmp(key, "power") == 0) {
             if (is_text || r->has_power || !token_to_bool(token, &r->power)) return false;
             r->has_power = true;
+        } else if (strcmp(key, "preamp") == 0) {
+            if (is_text || r->has_preamp || !token_to_uint(token, 2, &num)) return false;
+            r->preamp = (uint8_t)num;
+            r->has_preamp = true;
+        } else if (strcmp(key, "pa_band") == 0) {
+            if (is_text || r->has_pa_band || !token_to_uint(token, 2, &num)) return false;
+            r->pa_band = (uint8_t)num;
+            r->has_pa_band = true;
+        } else if (strcmp(key, "att") == 0) {
+            if (is_text || r->has_att || !token_to_uint(token, 3, &num)) return false;
+            r->att = (uint8_t)num;
+            r->has_att = true;
+        } else if (strcmp(key, "rfg") == 0) {
+            if (is_text || r->has_rfg || !token_to_uint(token, 255, &num)) return false;
+            r->rfg = (uint8_t)num;
+            r->has_rfg = true;
+        } else if (strcmp(key, "agc") == 0) {
+            if (is_text || r->has_agc || !token_to_uint(token, 4, &num)) return false;
+            r->agc = (uint8_t)num;
+            r->has_agc = true;
         } else if (strcmp(key, "action") == 0) {
             if (!is_text || r->has_action) return false;
             strlcpy(r->action, text, sizeof(r->action));
@@ -1552,6 +1578,11 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     if (r.has_notch) APPLY(cat_set_notch(r.sub, r.notch));
     if (r.has_notch_hz) APPLY(cat_set_notch_freq(r.sub, r.notch_hz));
     if (r.has_power) APPLY(cat_set_power(r.power));
+    if (r.has_pa_band && !r.has_preamp) err = ESP_ERR_INVALID_ARG, ops++;
+    if (r.has_preamp) APPLY(cat_set_preamp(r.has_pa_band ? r.pa_band : 0, r.preamp));
+    if (r.has_att) APPLY(cat_set_att(r.att));
+    if (r.has_rfg) APPLY(cat_set_rf_gain(r.sub, r.rfg));
+    if (r.has_agc) APPLY(cat_set_agc(r.sub, r.agc));
 #undef APPLY
 
     httpd_resp_set_type(req, "application/json");

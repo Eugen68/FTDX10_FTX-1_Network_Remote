@@ -59,6 +59,12 @@ typedef struct {
     bool rx_vfo_sub;
     int8_t width_code[2];     /*!< SH code for each receiver, -1 if unavailable */
     int8_t key_pitch;         /*!< CW key pitch, KP code 0-75 (300-1050 Hz in 10 Hz steps), -1 if unread */
+    uint8_t pa_bands;         /*!< PA P1 values: 1 (FTDX10), 3 (FTX-1: HF/50, VHF, UHF), 0 = no front-end controls */
+    uint8_t att_max;          /*!< Highest attenuator value: 3 (FTDX10: 6/12/18 dB), 1 (FTX-1: ON) */
+    int8_t preamp[3];         /*!< PA per P1: 0 IPO, 1 AMP1, 2 AMP2 (HF/50); VHF/UHF 0 OFF, 1 ON; -1 unread */
+    int8_t att;               /*!< RA: 0 OFF, 1.. as above; -1 unread */
+    int16_t rf_gain[2];       /*!< RG 0-255 per receiver, -1 unread */
+    int8_t agc[2];            /*!< GT per receiver: 0 OFF, 1 FAST, 2 MID, 3 SLOW, 4-6 AUTO-FAST/MID/SLOW; -1 unread */
     bool tx_cat;
     bool tx_radio;
     bool tx_radio_known;
@@ -173,7 +179,7 @@ const char *cat_data_mode_error(void);
 /*
  * There is deliberately no function that sends a free-form CAT string. Every command is built here from
  * typed arguments, and cat.c only lets an allow-list of commands (frequency, mode, AF gain, squelch,
- * notch, VFO swap/copy, power) reach the radio. Nothing in this firmware can make the radio transmit.
+ * notch, VFO swap/copy, pre-amp, attenuator, RF gain, AGC, power) reach the radio. Nothing in this firmware can make the radio transmit.
  */
 
 /** @brief Swap the MAIN and SUB VFOs (CAT "SV") */
@@ -184,6 +190,19 @@ esp_err_t cat_copy_main_to_sub(void);
 
 /** @brief Copy SUB to MAIN (CAT "BA") */
 esp_err_t cat_copy_sub_to_main(void);
+
+/** @brief Pre-amp / IPO (CAT "PA"). band: 0 (FTDX10; FTX-1 HF/50), 1 VHF, 2 UHF (FTX-1). value: 0 IPO,
+ *  1 AMP1, 2 AMP2 on HF/50; 0 OFF, 1 ON on VHF/UHF */
+esp_err_t cat_set_preamp(uint8_t band, uint8_t value);
+
+/** @brief RF attenuator (CAT "RA"): 0 OFF, FTDX10 1-3 = 6/12/18 dB, FTX-1 1 = ON */
+esp_err_t cat_set_att(uint8_t value);
+
+/** @brief RF gain 0-255 (CAT "RG") */
+esp_err_t cat_set_rf_gain(bool sub, uint8_t value);
+
+/** @brief AGC (CAT "GT"): 0 OFF, 1 FAST, 2 MID, 3 SLOW, 4 AUTO */
+esp_err_t cat_set_agc(bool sub, uint8_t value);
 
 /**
  * @brief Set frequency in Hz

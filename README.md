@@ -391,6 +391,17 @@ Enter Host name without ".local" [Current: trx-remote] (a-z, 0-9, '-'; DEFAULT t
 
 ## Usage
 
+### Front end: pre-amp, attenuator, RF gain, AGC
+
+Below the notch, each receiver has a **FRONT END** row read from the radio every 5 s and after each change:
+
+- **AMP**: IPO / AMP1 / AMP2. On the FTX-1 the pre-amp is set per band, so the choices follow that receiver's frequency: IPO / AMP1 / AMP2 on HF and 50 MHz, OFF / ON on VHF and on UHF.
+- **ATT** (MAIN only): OFF / 6 / 12 / 18 dB on the FTDX10, OFF / ON on the FTX-1.
+- **RF GAIN**: 0–255.
+- **AGC**: OFF / FAST / MID / SLOW / AUTO. In AUTO the radio reports which speed it chose (AUTO-FAST / -MID / -SLOW).
+
+On the FTX-1, RF GAIN and AGC are separate for MAIN and SUB; the FTDX10 has one receiver. These are receive settings only.
+
 ### Endpoints
 
 All of them require Basic authentication (see "Security notes" below).
@@ -723,9 +734,9 @@ All endpoints (`/`, `/map`, `/status`, `/cat`, `POST /reboot`, `/stream.*`, `POS
 
 Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
 
-- The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `action`.
+- The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `preamp` / `pa_band` / `att` / `rfg` / `agc` / `action`.
   Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main`.
-- Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `EX`), checked against the profile of the connected radio.
+- Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `PA` `RA` `RG` `GT` `EX`), checked against the profile of the connected radio.
   For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
   Supported radios also allow modulation menu queries and transmit VFO status (`FT;`). NET rigctl can set the active VFO, transmit VFO selection and filter width through radio-specific allow-listed commands. These commands cannot key the radio. `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.
   The ordinary CAT endpoint has no raw-command or PTT operation.
