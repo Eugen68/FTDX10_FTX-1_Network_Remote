@@ -86,6 +86,9 @@ static yaesu_reply_t read_command(const char *name, const char *p, const cat_sta
         snprintf(buf, sizeof(buf), "TX%c;", tx_state(cat));
     } else if (!strcmp(name, "AI") && !pl) {
         snprintf(buf, sizeof(buf), "AI%c;", session->ai ? '1' : '0');
+    } else if (!strcmp(name, "KP") && !pl) {
+        // Until the radio's value is read, answer 600 Hz so fixed-length readers stay in step.
+        snprintf(buf, sizeof(buf), "KP%02d;", cat->key_pitch >= 0 && cat->key_pitch <= 75 ? cat->key_pitch : 30);
     } else if (!strcmp(name, "PS") && !pl) {
         strcpy(buf, "PS1;");
     } else if (!strcmp(name, "SH") && pl == 1 && (p[0] == '0' || (p[0] == '1' && cat->dual_rx))) {

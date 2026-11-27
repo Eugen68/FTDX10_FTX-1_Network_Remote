@@ -479,10 +479,14 @@ Program → OmniRig (FTDX10 or FTX-1 profile) → COM10 (virtual) → Wi-Fi → 
 
 How the board answers:
 
-- Reads (`ID;`, `FA;`, `FB;`, `IF;`, `OI;`, `MD0;`, `MD1;`, `FT;`, `VS;`, `TX;`, `AI;`, `PS;`, `SM0;`,
-  `SH0;` …) are answered from the CAT state the board already keeps, in the connected radio's
-  exact format (`IF;` is 28 bytes on the FTDX10 and 30 on the FTX-1). They add no traffic on
-  the radio's CAT port. Unknown reads get `?;`, as from the radio.
+- Reads (`ID;`, `FA;`, `FB;`, `IF;`, `OI;`, `MD0;`, `MD1;`, `FT;`, `VS;`, `TX;`, `KP;`, `AI;`, `PS;`,
+  `SM0;`, `SH0;` …) are answered from the CAT state the board already keeps, in the connected
+  radio's exact format (`IF;` is 28 bytes on the FTDX10 and 30 on the FTX-1). They add no traffic
+  on the radio's CAT port; while the server is enabled the board also reads the CW pitch (`KP;`)
+  every 5 s. Unknown reads get `?;`, as from the radio.
+- OmniRig's FTDX10 profile polls `VS;`, `FT;`, `TX;`, `MD0;`, `IF;`, `FA;`, `FB;` and `KP;` in
+  every cycle. A wrong reply length there makes OmniRig (and CW Skimmer) flip between on-line
+  and off-line.
 - Writes for frequency, mode, active VFO, transmit VFO and VFO swap or copy go through the same
   allow-list as the web page. They are refused while transmitting. Like the radio, the board
   never answers a write, so programs that read fixed-length replies stay in step.

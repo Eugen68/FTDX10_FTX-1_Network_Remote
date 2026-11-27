@@ -8,13 +8,14 @@ static cat_state_t ftdx10 = {
     .connected = true, .rig = CAT_RIG_FTDX10, .rig_id = "0761", .can_control = true,
     .freq_min = 30000, .freq_max = 75000000, .freq_main = 14074000, .freq_sub = 7074000,
     .mode_main_raw = 'C', .mode_sub_raw = '3', .tx_vfo = CAT_TX_VFO_MAIN,
-    .rx_vfo_known = true, .rx_vfo_sub = false, .s_main = 120, .width_code = {13, -1},
+    .rx_vfo_known = true, .rx_vfo_sub = false, .s_main = 120, .width_code = {13, -1}, .key_pitch = 30,
 };
 static cat_state_t ftx1 = {
     .connected = true, .rig = CAT_RIG_FTX1, .rig_id = "0840", .can_control = true, .dual_rx = true,
     .c4fm = true, .freq_min = 30000, .freq_max = 470000000, .freq_main = 145500000, .freq_sub = 21074000,
     .mode_main_raw = 'H', .mode_sub_raw = '2', .tx_vfo = CAT_TX_VFO_SUB,
     .rx_vfo_known = true, .rx_vfo_sub = true, .s_main = 7, .s_sub = 255, .width_code = {9, 13},
+    .key_pitch = -1,
 };
 
 static unsigned applied;
@@ -90,6 +91,13 @@ static void test_reads(void)
     read_is(&ftdx10, "SM1", "?;");
     read_is(&ftdx10, "SH0", "SH0013;");
     read_is(&ftdx10, "FR", "?;");
+    // CW pitch: OmniRig polls KP; in every cycle and reads 5 bytes.
+    read_is(&ftdx10, "KP", "KP30;");
+    cat_state_t pitch = ftdx10;
+    pitch.key_pitch = 45;
+    read_is(&pitch, "KP", "KP45;");
+    read_is(&ftx1, "KP", "KP30;");            // not read yet: 600 Hz, never ?;
+    refused_silently(&ftdx10, "KP40");        // the pitch is never changed from the network
 
     // FTX-1 IF / OI: 30 bytes with a 5-digit memory field and the C4FM modes.
     read_is(&ftx1, "IF", "IF00000145500000+000000H00000;");

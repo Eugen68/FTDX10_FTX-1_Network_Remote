@@ -576,6 +576,8 @@ static bool cat_cmd_allowed(const char *c, size_t len)
             (rig->dual_rx ? is_side(p[0]) : (p[0] == '2' || p[0] == '3'))));
     case CAT_TWO('V', 'S'):         // active VFO
         return ctl && (pl == 0 || (pl == 1 && is_side(p[0])));
+    case CAT_TWO('K', 'P'):         // CW key pitch (read only), for network CAT clients
+        return ctl && pl == 0;
     case CAT_TWO('S', 'H'):         // receiver filter bandwidth
         return ctl && (pl == 1 || pl == 4) && is_rx_side(rig, p[0]) &&
                (pl == 1 || (p[1] == '0' && all_digits(p + 2, 2) && digits_value(p + 2, 2) <= 23));
@@ -950,6 +952,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_state.rx_vfo_known = false;
         s_state.rx_vfo_sub = false;
         s_state.width_code[0] = s_state.width_code[1] = -1;
+        s_state.key_pitch = -1;
         s_last_ptt_status_us = 0;
         s_ptt_mode = 0;
         s_state.tx_cat = false;
@@ -1291,6 +1294,14 @@ static void handle_cat_packet(const char *pkt)
         is_side(pkt[2]) && xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
         s_state.rx_vfo_known = true;
         s_state.rx_vfo_sub = pkt[2] == '1';
+        s_last_answer_us = now_pkt_us;
+        xSemaphoreGive(s_lock);
+        return;
+    }
+    if (pkt[0] == 'K' && s_rig->can_control && strncmp(pkt, "KP", 2) == 0 && strlen(pkt) == 5 &&
+        all_digits(pkt + 2, 2) && digits_value(pkt + 2, 2) <= 75 &&
+        xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+        s_state.key_pitch = (int8_t)digits_value(pkt + 2, 2);
         s_last_answer_us = now_pkt_us;
         xSemaphoreGive(s_lock);
         return;
@@ -1707,6 +1718,8 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
                          (long long)((esp_timer_get_time() - sync_start) / 1000));
             }
             if (net_rigctl) send_poll(dev, rig->dual_rx ? "VS;SH0;SH1;" : "VS;SH0;");
+            // OmniRig reads the CW pitch in every cycle; the board answers from this value.
+            if (rig->can_control && app_config_yaesu_enabled()) send_poll(dev, "KP;");
             if (rig->can_tx && app_config_tx_enabled()) {
                 if (rig->rig == CAT_RIG_FTDX10) {
                     send_poll(dev, "EX010113;EX010114;EX010415;EX010416;");
@@ -2099,6 +2112,9 @@ esp_err_t cat_init(void)
     s_ptt_lock = xSemaphoreCreateMutex();
     s_wire_lock = xSemaphoreCreateMutex();
     ESP_RETURN_ON_FALSE(s_lock && s_ptt_lock && s_wire_lock, ESP_ERR_NO_MEM, TAG, "no memory");
+    // Values not read yet, the same as after a disconnect.
+    s_state.width_code[0] = s_state.width_code[1] = -1;
+    s_state.key_pitch = -1;
     s_cmd_queue = xQueueCreate(10, sizeof(cat_cmd_item_t));
     ESP_RETURN_ON_FALSE(s_cmd_queue, ESP_ERR_NO_MEM, TAG, "no queue memory");
     const usb_host_client_config_t observer = {
