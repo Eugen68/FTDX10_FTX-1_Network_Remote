@@ -391,6 +391,13 @@ Enter Host name without ".local" [Current: trx-remote] (a-z, 0-9, '-'; DEFAULT t
 
 ## Usage
 
+### Split
+
+**SPLIT** (beside SWAP and A→B) turns split on or off: receive on MAIN, transmit on SUB. It
+lights up whenever the radio transmits on SUB, also when split was set on the radio itself.
+**SPLIT +1k** copies MAIN to SUB, puts SUB 1 kHz up and turns split on. Neither button keys the
+radio, and the change is refused while the radio transmits.
+
 ### Endpoints
 
 All of them require Basic authentication (see "Security notes" below).
@@ -724,10 +731,10 @@ All endpoints (`/`, `/map`, `/status`, `/cat`, `POST /reboot`, `/stream.*`, `POS
 Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
 
 - The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `action`.
-  Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main`.
+  Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main` / `split_on` / `split_off`.
 - Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `EX`), checked against the profile of the connected radio.
   For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
-  Supported radios also allow modulation menu queries and transmit VFO status (`FT;`). NET rigctl can set the active VFO, transmit VFO selection and filter width through radio-specific allow-listed commands. These commands cannot key the radio. `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.
+  Supported radios also allow modulation menu queries and transmit VFO status (`FT;`). NET rigctl can set the active VFO, transmit VFO selection and filter width through radio-specific allow-listed commands. The page's **SPLIT** button selects the transmit VFO the same way (`FT1;`/`FT0;` on the FTX-1, `FT3;`/`FT2;` on the FTDX10); `FT;` is read every 500 ms so the button also follows the radio's own SPLIT key. These commands cannot key the radio. `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.
   The ordinary CAT endpoint has no raw-command or PTT operation.
 - Frequency settings are range-checked against the radio's profile (FTX-1 30 kHz – 470 MHz, FTDX10 30 kHz – 75 MHz); anything outside it is rejected.
 - The allow list and the answer parsers are covered by a host test that runs without the board: `test/host_cat/run.sh`.
