@@ -858,6 +858,31 @@ playback lead by the repeatable RF lateness relative to `rf_target_utc`, in mill
 `CONFIG_FT8_FTX1_AUDIO_LEAD_MS` and `CONFIG_FT8_FTDX10_AUDIO_LEAD_MS` are independent and
 default to 20 ms. `CONFIG_FT8_NTP_SERVER` configures the SNTP server.
 
+### Assisted FT8 QSO sequence
+
+With **Auto seq** on (the default), the page fills in the next message of the QSO from each decode
+addressed to your call, as WSJT-X does, and sets **Slot** opposite to the other station:
+
+| They send | Next message filled in |
+| --- | --- |
+| their locator (answering your CQ) | `DX YOURCALL -07` (their SNR as you decoded it) |
+| a report `-07` | `DX YOURCALL R-12` |
+| `R-07` | `DX YOURCALL RR73` |
+| `RR73` or `RRR` | `DX YOURCALL 73` |
+| `73` | nothing: the QSO is over |
+
+Clicking a decoded CQ also picks the opposite slot. **The page never transmits by itself**: the
+next message shows in green with **Enable TX** highlighted and focused, so Enter or Space arms it.
+When the other station moves on, a still armed message for that station (or your CQ) is halted
+so it is not repeated. A final RR73 or 73 is sent once. Another station calling during the QSO is
+not answered. A message you armed for something else is left alone. Untick **Auto seq** to type
+every message yourself.
+
+The decoder runs 14 s into each slot, so a reply usually appears just as your next slot begins.
+A transmission armed after the slot has started goes out in the following slot of the same
+parity, 30 s later. The other station normally repeats its message meanwhile, so the QSO still
+completes, more slowly than in WSJT-X.
+
 ### FT8 QSO log (ADIF)
 
 The page follows the QSO in progress, as WSJT-X does: the station you answer or that answers your
