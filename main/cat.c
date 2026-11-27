@@ -70,6 +70,8 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_timer.h"
+#include "esp_attr.h"
+#include "esp_system.h"
 #include "usb/usb_host.h"
 #include "usb/cdc_acm_host.h"
 #include "cat.h"
@@ -77,6 +79,7 @@
 #include "app_config.h"
 #include "nvs.h"
 #include "usb_audio.h"
+#include "tx.h"
 
 // The FTX-1 exposes two CP210x UARTs (Silicon Labs VID 0x10C4). Both have the same VID/PID, so they are
 // opened by USB device address. Whichever returns a valid ID at a supported speed is used as the CAT port.
@@ -88,6 +91,8 @@
 #define CAT_CACHED_ONLY_US  10000000LL
 #define CAT_RECOVER_US      30000000LL
 #define CAT_RECOVER_MAX     3
+#define CAT_EXHAUSTED_SCAN_MS 10000
+#define CAT_RESTART_COOKIE  0x43415452u
 #define NORMAL_ANSWER_MS    100
 #define CAT_CACHE_NVS       "cat_link"
 #define CAT_CACHE_BAUD      "last_baud"
@@ -135,6 +140,8 @@ static atomic_uint s_cat_session;
 static unsigned s_next_cat_session;    // assigned by the CAT task
 static int64_t s_cat_missing_since;
 static unsigned s_cat_recoveries;
+static bool s_cat_restart_used;
+RTC_NOINIT_ATTR static uint32_t s_cat_restart_cookie;
 static uint8_t s_scan_after_addr;       // rotate after the first port that exhausted its baud probes
 static atomic_bool s_link_starting;
 static uint32_t s_last_baud;
@@ -1938,17 +1945,40 @@ static bool cat_cached_only(int64_t now)
     return false;
 }
 
+static void load_cat_recovery_budget(void)
+{
+    s_cat_restart_used = esp_reset_reason() != ESP_RST_POWERON &&
+                         s_cat_restart_cookie == CAT_RESTART_COOKIE;
+    s_cat_restart_cookie = s_cat_restart_used ? CAT_RESTART_COOKIE : 0;
+    s_cat_recoveries = s_cat_restart_used ? CAT_RECOVER_MAX : 0;
+    if (s_cat_restart_used) {
+        ESP_LOGW(TAG, "CAT recovery restart already used; scanning until an ID arrives");
+    }
+}
+
 static void recover_missing_cat(int64_t now)
 {
-    if (!s_cat_missing_since || now - s_cat_missing_since < CAT_RECOVER_US ||
-        s_cat_recoveries >= CAT_RECOVER_MAX) return;
-
-    if (usb_audio_recover_cat(s_cat_recoveries + 1, CAT_RECOVER_MAX)) {
-        s_cat_missing_since = 0;
-        ++s_cat_recoveries;
-        if (s_cat_recoveries == CAT_RECOVER_MAX) {
-            ESP_LOGW(TAG, "CAT USB recovery limit reached; continuing to probe without cycling power");
+    if (!s_cat_missing_since || now - s_cat_missing_since < CAT_RECOVER_US) return;
+    if (s_cat_recoveries < CAT_RECOVER_MAX) {
+        if (usb_audio_recover_cat(s_cat_recoveries + 1, CAT_RECOVER_MAX)) {
+            s_cat_missing_since = 0;
+            ++s_cat_recoveries;
+            if (s_cat_recoveries == CAT_RECOVER_MAX) {
+                ESP_LOGW(TAG, "CAT USB recovery limit reached; checking CAT again before considering a board restart");
+            }
         }
+        return;
+    }
+
+    // A warm restart reproduces the recovery that works from the web menu.
+    // Keep the one-shot guard in RTC RAM until a radio identifies successfully.
+    if (!s_cat_restart_used && s_last_baud && tx_begin_usb_recovery()) {
+        s_cat_restart_cookie = CAT_RESTART_COOKIE;
+        s_cat_restart_used = true;
+        ESP_LOGW(TAG, "CAT still silent after USB recovery; restarting the board once");
+        cat_usb_reset_begin();
+        usb_audio_prepare_restart();
+        esp_restart();
     }
 }
 
@@ -2011,6 +2041,8 @@ static cdc_acm_dev_hdl_t find_cat_port(void)
         if (try_port(addr, &dev, &opened, &no_id, cached_only)) {
             s_cat_missing_since = 0;
             s_cat_recoveries = 0;
+            s_cat_restart_used = false;
+            s_cat_restart_cookie = 0;
             s_scan_after_addr = 0;
             diag_counts((uint8_t)count, opened, 1);
             diag("%s", "");
@@ -2029,6 +2061,7 @@ static void cat_task(void *arg)
 {
     s_task = xTaskGetCurrentTaskHandle();
     read_cached_baud();
+    load_cat_recovery_budget();
     for (;;) {
         s_disconnected = false;
         s_rig = &s_profile_none;          // only discovery probes may be sent before identification
@@ -2068,7 +2101,8 @@ static void cat_task(void *arg)
         }
         const bool cached_only = cat_cached_only(esp_timer_get_time());
         const int64_t wait_ms = cached_only
-            ? CAT_CACHED_SCAN_MS - (esp_timer_get_time() - scan_start) / 1000 : SCAN_PERIOD_MS;
+            ? CAT_CACHED_SCAN_MS - (esp_timer_get_time() - scan_start) / 1000
+            : s_cat_restart_used && s_cat_missing_since ? CAT_EXHAUSTED_SCAN_MS : SCAN_PERIOD_MS;
         vTaskDelay(pdMS_TO_TICKS(wait_ms > 1 ? wait_ms : 1));
     }
 }

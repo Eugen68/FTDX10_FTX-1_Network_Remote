@@ -31,7 +31,12 @@ esp_err_t g_write_result;
 
 static bool tx_enabled, tx_password;
 static bool mock_allow_reset = true;
-static unsigned mock_resets;
+static unsigned mock_resets, mock_restarts;
+static esp_reset_reason_t mock_reset_reason = ESP_RST_POWERON;
+esp_reset_reason_t esp_reset_reason(void) { return mock_reset_reason; }
+bool tx_begin_usb_recovery(void) { return mock_allow_reset; }
+void usb_audio_prepare_restart(void) { assert(!cat_usb_ready()); }
+void esp_restart(void) { ++mock_restarts; mock_reset_reason = ESP_RST_SW; }
 
 bool usb_audio_recover_cat(unsigned attempt, unsigned limit)
 {
@@ -413,14 +418,27 @@ static void test_hot_swap(void)
     }
     s_cat_missing_since = g_now_us;
     g_now_us += CAT_RECOVER_US;
+    mock_allow_reset = false;
+    recover_missing_cat(g_now_us);
+    CHECK(mock_restarts == 0 && !s_cat_restart_cookie, "TX guard also defers the board restart");
+    mock_allow_reset = true;
     recover_missing_cat(g_now_us);
     CHECK(mock_resets == CAT_RECOVER_MAX, "bound the number of automatic power cycles");
+    CHECK(mock_restarts == 1 && s_cat_restart_cookie == CAT_RESTART_COOKIE, "one board restart after USB recovery is exhausted");
+    load_cat_recovery_budget();
+    CHECK(s_cat_restart_used && s_cat_recoveries == CAT_RECOVER_MAX, "restore attempt guard after warm restart");
+    recover_missing_cat(g_now_us);
+    CHECK(mock_restarts == 1 && mock_resets == CAT_RECOVER_MAX, "persistent CAT failure cannot create a reboot loop");
+    cat_usb_reset_end();
     usb_added(2);
     usb_added(4);
     g_now_us += CAT_SETTLE_US;
     suppress_id = false;
     dev = find_cat_port();
-    CHECK(dev && s_rig->rig == CAT_RIG_FTX1 && !s_cat_recoveries, "valid ID restores the recovery budget");
+    CHECK(dev && s_rig->rig == CAT_RIG_FTX1 && !s_cat_recoveries && !s_cat_restart_used && !s_cat_restart_cookie,
+          "valid ID restores the recovery budget");
+    load_cat_recovery_budget();
+    CHECK(!s_cat_restart_used, "an ordinary restart after CAT connected does not use the recovery budget");
     close_cat_port(&dev);
     CHECK(!ok(";") && !ok(";ID;"), "parser delimiter is not in the normal CAT allow-list");
     s_scan_after_addr = 0;
