@@ -1913,6 +1913,8 @@ const ACC_STREAM_IDLE_MS = 5000, ACC_STREAM_RETRY_MS = 1000;
 // squash everything; at least ACC_MIN_RANGE steps are always shown.
 const ACC_MIN_RANGE = 24;
 const ACC_REFINE = 0.25;               // share of each new frame in the average (smaller = smoother, slower)
+// Transmit / receive VFO reported by CAT ("main", "sub" or null), for the split marker on the ACC scope
+let catTxVfo = null, catRxVfo = null;
 const accState = { row: null, lastMs: 0, refined: new Float32Array(ACC_POINTS), floor: 0, range: 60, pending: [],
                     note: '', hoverX: null, ctrl: null, frames: 0 };
 const wfSourceSel = document.getElementById('wfSource');
@@ -2199,6 +2201,24 @@ function makeScope(name, idx) {
       sctx.lineWidth = 1;
       sctx.beginPath(); sctx.moveTo(xm, 0); sctx.lineTo(xm, specH); sctx.stroke();
       sctx.setLineDash([]);
+    }
+    // Split: receive on VFO-A, transmit on VFO-B. Show the transmit frequency (or the side it is on).
+    if (catTxVfo === 'sub' && catRxVfo !== 'sub' && curFreqSub > 0 && curFreqSub !== r.vfo) {
+      const xt = xOf(curFreqSub);
+      sctx.font = 'bold 10px monospace';
+      sctx.fillStyle = '#22d3ee';
+      if (xt >= 0 && xt <= w) {
+        sctx.strokeStyle = '#22d3ee';
+        sctx.lineWidth = 1.5;
+        sctx.setLineDash([6, 3]);
+        sctx.beginPath(); sctx.moveTo(xt, 0); sctx.lineTo(xt, specH + wfH); sctx.stroke();
+        sctx.setLineDash([]);
+        sctx.textAlign = xt > w - 24 ? 'right' : 'left';
+        sctx.fillText('TX', xt + (xt > w - 24 ? -3 : 3), specH - 4);
+      } else {
+        sctx.textAlign = xt < 0 ? 'left' : 'right';
+        sctx.fillText(xt < 0 ? '\u25C0 TX' : 'TX \u25B6', xt < 0 ? 3 : w - 3, specH - 4);
+      }
     }
     if (accState.hoverX !== null) {
       const hz = f0 + accState.hoverX / w * (f1 - f0);
@@ -4429,6 +4449,8 @@ async function smPoll() {
     }
     const now = Date.now();
     applyRigProfile(d);
+    catTxVfo = d.connected ? (d.tx_vfo || null) : null;
+    catRxVfo = d.connected ? (d.rx_vfo || null) : null;
     const recovery = document.getElementById('catRecoveryStatus');
     const resetCount = Number.isInteger(d.cat_usb_resets) ? d.cat_usb_resets : 0;
     const recoveryText = !d.connected && d.waiting_for_cat
