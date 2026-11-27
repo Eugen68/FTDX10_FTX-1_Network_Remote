@@ -641,6 +641,9 @@
   #ft8LogEntry[hidden] { display: none; }
   #ft8LogDownload { text-decoration: none; }
   #ft8LogDownload[hidden] { display: none; }
+  #ft8TxNext { color: #22c55e; font-weight: bold; }
+  #ft8TxNext[hidden] { display: none; }
+  #ft8TxArm.ft8-next { color: #0f172a; background: #22c55e; border-color: #22c55e; }
   #ft8LogSave.ft8-log-ready { color: #0f172a; background: #22c55e; border-color: #22c55e; }
   .acc-only { display: none; }
   body.has-acc .acc-only { display: inline-flex; }
@@ -1332,9 +1335,12 @@
             <span id="ft8TxAlcValue">—</span></label>
           <button type="button" class="ft8-btn" id="ft8TxArm">Enable TX</button>
           <button type="button" class="ft8-btn" id="ft8TxHalt" disabled>Halt</button>
+          <label title="Fill the next message of the QSO from each decode addressed to you, as WSJT-X does. Every transmission is still started with Enable TX">
+            <input type="checkbox" id="ft8TxAuto" checked> Auto seq</label>
           <label>My call <input id="ft8TxCall" maxlength="11" autocomplete="off" size="7"></label>
           <label>Grid <input id="ft8TxGrid" maxlength="4" autocomplete="off" size="4"></label>
           <span id="ft8TxInfo" role="status"></span>
+          <span id="ft8TxNext" role="status" hidden></span>
         </div>
         <div class="ft8-ctrls" id="ft8LogControls">
           <span id="ft8LogEntry" hidden>
@@ -4029,9 +4035,10 @@ let micOpening = false;
 let micGeneration = 0;
 let pendingMicFrame = null;
 
-const ft8Tx = Object.fromEntries(['Controls', 'Message', 'Hz', 'Slot', 'Level', 'LevelValue', 'Alc', 'AlcValue', 'Arm', 'Halt', 'Call', 'Grid', 'Info']
+const ft8Tx = Object.fromEntries(['Controls', 'Message', 'Hz', 'Slot', 'Level', 'LevelValue', 'Alc', 'AlcValue', 'Arm', 'Halt', 'Call', 'Grid', 'Info', 'Auto', 'Next']
   .map(k => [k, document.getElementById('ft8Tx' + k)]));
 let ft8Armed = false, ft8Pending = false, ft8Clock = 'none';
+let ft8ArmedMessage = '', ft8WasOnAir = false;
 let ft8SentLevel = null;
 let ft8Probe = null, ft8ProbeRound = null, ft8LastProbe = 0;
 const activeTxPage = () => !document.hidden && document.hasFocus();
@@ -4101,6 +4108,8 @@ ft8Tx.Arm.addEventListener('click', async () => {
   const ft8Message = ft8Tx.Message.value.trim().toUpperCase();
   sendTx({t: 'ft8_arm', msg: ft8Message, hz: ft8Tx.Hz.valueAsNumber,
           odd: ft8Tx.Slot.value === 'odd', dbfs: ft8SentLevel});
+  ft8ArmedMessage = ft8Message;
+  showFt8Next('');
   ft8LogTransmitted(ft8Message, ft8Tx.Hz.valueAsNumber);
 });
 
@@ -4149,14 +4158,17 @@ function ft8LogTransmitted(msg, hz) {
   showFt8Qso();
 }
 
-// A decoded message "<MYCALL> <DX> <grid | report | R+report | RRR | RR73 | 73>"
-function ft8LogDecoded(msg) {
+// A decoded message "<MYCALL> <DX> <grid | report | R+report | RRR | RR73 | 73>", heard at snr dB in the
+// slot that started at utc ("HH:MM:SS"). Returns the QSO it belongs to, or null.
+function ft8LogDecoded(msg, snr, utc) {
   const [to, from, extra = '', more] = msg.split(' ');
   const me = ft8MyCall();
-  if (more !== undefined || !me || to !== me || !FT8_CALL_RE.test(from)) return;
+  if (more !== undefined || !me || to !== me || !FT8_CALL_RE.test(from)) return null;
   // Someone new calling us starts a QSO, unless one with another station is under way or waits to be logged.
-  if (ft8Qso && ft8Qso.call !== from && (ft8Qso.done || ft8Qso.sent || ft8Qso.rcvd)) return;
+  if (ft8Qso && ft8Qso.call !== from && (ft8Qso.done || ft8Qso.sent || ft8Qso.rcvd)) return null;
   const q = ft8QsoWith(from);
+  if (Number.isFinite(snr)) q.snr = snr;
+  if (utc) q.dxOdd = ft8SlotIsOdd(utc);
   const report = FT8_REPORT_RE.exec(extra);
   if (FT8_GRID_RE.test(extra) && extra !== 'RR73') q.grid = extra;
   else if (report) q.rcvd = report[1];
@@ -4165,6 +4177,61 @@ function ft8LogDecoded(msg) {
     q.done = true;
   }
   showFt8Qso();
+  return q;
+}
+
+// Assisted QSO sequence (phase 5c). From each decode of the QSO partner, work out our next message as WSJT-X
+// does, put it in the message field and set the slot opposite the partner. It never arms: the operator
+// starts every transmission with Enable TX. An armed message the partner has moved past is halted.
+const ft8SlotIsOdd = utc => Number(utc.slice(6, 8)) % 30 === 15;
+const ft8FormatReport = snr => {
+  const v = Math.max(-50, Math.min(49, Math.round(snr)));
+  return (v < 0 ? '-' : '+') + String(Math.abs(v)).padStart(2, '0');
+};
+
+function showFt8Next(message) {
+  ft8Tx.Next.textContent = message ? `Next: ${message} · press Enable TX` : '';
+  ft8Tx.Next.hidden = !message;
+  ft8Tx.Arm.classList.toggle('ft8-next', !!message);
+}
+
+// Enter or Space then arms the message, unless the operator is typing in another field.
+function focusFt8Arm() {
+  const el = document.activeElement;
+  if (!el || el === ft8Tx.Message || !/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) ft8Tx.Arm.focus();
+}
+
+function ft8NextMessage(q, extra) {
+  const head = `${q.call} ${ft8MyCall()}`;
+  const report = q.snr === undefined ? '' : ft8FormatReport(q.snr);
+  if (extra === '' || (FT8_GRID_RE.test(extra) && extra !== 'RR73')) return report && `${head} ${report}`;
+  if (/^[+-][0-9]{1,2}$/.test(extra)) return report && `${head} R${report}`;
+  if (/^R[+-][0-9]{1,2}$/.test(extra)) return `${head} RR73`;
+  if (extra === 'RR73' || extra === 'RRR') return `${head} 73`;
+  return '';   // 73: the QSO is over
+}
+
+function ft8AutoSequence(q, msg) {
+  if (!q || !ft8Tx.Auto.checked || !txAuthenticated) return;
+  const extra = msg.split(' ')[2] || '';
+  const next = ft8NextMessage(q, extra);
+  const armedForPartner = (ft8Armed || ft8Pending) && ft8ArmedMessage.split(' ')[0] === q.call;
+  const armedCq = (ft8Armed || ft8Pending) && ft8ArmedMessage.startsWith('CQ ');
+  if (!next) {
+    // The partner sent 73: stop repeating our RR73 / 73.
+    if (extra === '73' && armedForPartner) haltFt8();
+    if (extra === '73') showFt8Next('');
+    return;
+  }
+  if (ft8Armed || ft8Pending) {
+    if (ft8ArmedMessage === next) return;              // already sending it
+    if (!armedForPartner && !armedCq) return;          // busy with something the operator chose
+    haltFt8();
+  }
+  if (q.dxOdd !== undefined) ft8Tx.Slot.value = q.dxOdd ? 'even' : 'odd';
+  ft8Tx.Message.value = next;
+  showFt8Next(next);
+  focusFt8Arm();
 }
 
 async function ft8LogStats(response) {
@@ -4178,8 +4245,10 @@ async function ft8LogStats(response) {
   }
 }
 
+ft8Tx.Message.addEventListener('input', () => showFt8Next(''));
 ft8Log.Clear.addEventListener('click', () => {
   ft8Qso = null;
+  showFt8Next('');
   showFt8Qso();
   ft8Log.Info.textContent = '';
 });
@@ -4431,6 +4500,12 @@ txConnect.addEventListener('click', () => {
     txAuthenticated = state.auth;
     if (txAuthenticated && txHeartbeat === null) ft8LastProbe = -5000;
     ft8Armed = state.ft8_owned === true;
+    const onAir = state.on_air === true;
+    if (ft8WasOnAir && !onAir && ft8Armed && / (RR)?73$/.test(ft8ArmedMessage)) {
+      haltFt8();
+      ft8Armed = false;
+    }
+    ft8WasOnAir = onAir && ft8Armed;
     if (ft8Armed || state.error) ft8Pending = false;
     ft8Clock = state.ft8_clock || 'none';
     ft8Tx.Info.textContent = state.error || ((ft8Pending || (ft8Armed && state.ft8_preparing))
@@ -4921,11 +4996,15 @@ function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
         return;
       }
       ft8Tx.Message.value = `${cq[1]} ${call} ${grid}`;
-      ft8Tx.Message.focus();
+      if (ft8Tx.Auto.checked) ft8Tx.Arm.focus(); else ft8Tx.Message.focus();
       const cqGrid = msg.split(' ').pop();
       ft8Qso = null;
-      ft8QsoWith(cq[1]).grid = FT8_GRID_RE.test(cqGrid) ? cqGrid : '';
+      const q = ft8QsoWith(cq[1]);
+      q.grid = FT8_GRID_RE.test(cqGrid) ? cqGrid : '';
+      q.dxOdd = ft8SlotIsOdd(utc);
+      ft8Tx.Slot.value = q.dxOdd ? 'even' : 'odd';
       showFt8Qso();
+      showFt8Next(ft8Tx.Message.value);
     });
     tr.lastElementChild.replaceChildren(answer);
   }
@@ -4937,7 +5016,7 @@ function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
   }
 
   ft8PublishSpot(f, msg, db, dial);
-  ft8LogDecoded(msg);
+  ft8AutoSequence(ft8LogDecoded(msg, db, utc), msg);
 }
 
 // Serve shared choices from the board. Send only edited fields so two clients
