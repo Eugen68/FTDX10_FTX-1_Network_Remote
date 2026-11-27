@@ -17,7 +17,7 @@ typedef enum {
     ACC_OK = 0,
     ACC_REJ_LENGTH,           /*!< not 4096 bytes (e.g. the first transfer, caught half way) */
     ACC_REJ_NOT_FTDX10,       /*!< data after byte 3049 */
-    ACC_REJ_VFO_COPIES,       /*!< the two VFO copies differ (bit errors) */
+    ACC_REJ_VFO_COPIES,       /*!< the two VFO fields differ and neither matches CAT's MAIN (split needs CAT) */
     ACC_REJ_VFO_RANGE,        /*!< VFO outside 30 kHz - 75 MHz */
     ACC_REJ_SPAN,             /*!< unknown span or placement code */
     ACC_REJ_CAT,              /*!< VFO differs from CAT for more than 2 s */

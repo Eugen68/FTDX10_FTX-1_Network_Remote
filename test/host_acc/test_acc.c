@@ -79,7 +79,36 @@ int main(int argc, char **argv)
     CHECK(acc_parse_frame(g, 4096, 14074000, 0, &last, &row) != ACC_OK, "data after 3049 accepted");
     memcpy(g, f, sizeof g); g[3041] ^= 1;
     last = -1;
-    CHECK(acc_parse_frame(g, 4096, 14074000, 0, &last, &row) != ACC_OK, "differing VFO copies accepted");
+    CHECK(acc_parse_frame(g, 4096, 0, 0, &last, &row) != ACC_OK, "differing VFO copies accepted without CAT");
+    // Split: the two VFO fields differ. Keep the one that matches CAT's MAIN, in either order.
+    const uint32_t split_hz = 14076000;
+    memcpy(g, f, sizeof g);
+    g[3042] = split_hz >> 24; g[3043] = split_hz >> 16; g[3044] = split_hz >> 8; g[3045] = split_hz & 0xff;
+    last = -1;
+    CHECK(acc_parse_frame(g, 4096, 14074000, 0, &last, &row) == ACC_OK && row.vfo_hz == 14074000,
+          "split frame (TX VFO second) rejected or wrong VFO %u", row.vfo_hz);
+    memcpy(g, f, sizeof g);
+    memcpy(g + 3042, f + 3038, 4);
+    g[3038] = split_hz >> 24; g[3039] = split_hz >> 16; g[3040] = split_hz >> 8; g[3041] = split_hz & 0xff;
+    last = -1;
+    CHECK(acc_parse_frame(g, 4096, 14074000, 0, &last, &row) == ACC_OK && row.vfo_hz == 14074000,
+          "split frame (TX VFO first) rejected or wrong VFO %u", row.vfo_hz);
+    // A close split (1 kHz up) still selects the field nearest CAT.
+    const uint32_t near_hz = 14075000;
+    memcpy(g, f, sizeof g);
+    g[3042] = near_hz >> 24; g[3043] = near_hz >> 16; g[3044] = near_hz >> 8; g[3045] = near_hz & 0xff;
+    last = -1;
+    CHECK(acc_parse_frame(g, 4096, 14074000, 0, &last, &row) == ACC_OK && row.vfo_hz == 14074000,
+          "close split rejected or wrong VFO %u", row.vfo_hz);
+    last = -1;
+    CHECK(acc_parse_frame(g, 4096, 0, 0, &last, &row) == ACC_REJ_VFO_COPIES, "split without CAT accepted");
+    last = -1;
+    CHECK(acc_parse_frame(g, 4096, 21074000, 0, &last, &row) == ACC_REJ_VFO_COPIES,
+          "split with neither field near CAT accepted");
+    memcpy(g, f, sizeof g); g[3042] = 0xff;   // second field far out of range
+    last = -1;
+    CHECK(acc_parse_frame(g, 4096, 14074000, 0, &last, &row) == ACC_REJ_VFO_COPIES,
+          "corrupt second VFO field accepted");
     // CAT disagreement: accepted during the grace period, rejected after 2 s
     last = -1;
     CHECK(acc_parse_frame(f, 4096, 7074000, 0, &last, &row) == ACC_OK, "grace period");
