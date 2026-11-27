@@ -507,13 +507,30 @@ static void handle_disconnected(uac_host_device_handle_t handle)
 static int64_t s_dev_seen_ms;        // when devices were first seen without audio, 0 = not now
 static int64_t s_last_recover_ms;
 static int s_recover_attempts;
-static volatile uint32_t s_bus_resets;
+static atomic_uint s_bus_resets;
 
 static void bus_power_cycle(uint32_t off_ms)
 {
     usb_host_lib_set_root_port_power(false);
     vTaskDelay(pdMS_TO_TICKS(off_ms));
     usb_host_lib_set_root_port_power(true);
+}
+
+static void recover_bus_claimed(void)
+{
+    atomic_fetch_add(&s_bus_resets, 1);
+    cat_usb_reset_begin();
+    bus_power_cycle(500);
+    cat_usb_reset_end();
+    tx_resume();
+}
+
+bool usb_audio_recover_cat(unsigned attempt, unsigned limit)
+{
+    if (!tx_begin_usb_recovery()) return false;
+    ESP_LOGW(TAG, "CP210x present without a valid CAT ID: resetting USB bus (attempt %u/%u)", attempt, limit);
+    recover_bus_claimed();
+    return true;
 }
 
 static void recover_tick(void)
@@ -546,15 +563,11 @@ static void recover_tick(void)
         return;
     }
     s_recover_attempts++;
-    s_bus_resets++;
     s_last_recover_ms = now;
     s_dev_seen_ms = 0;
     ESP_LOGW(TAG, "%d USB device(s) but no audio input for %d s: resetting the USB bus (attempt %d)", count,
              RECOVER_AFTER_MS / 1000, s_recover_attempts);
-    cat_usb_reset_begin();
-    bus_power_cycle(500);
-    cat_usb_reset_end();
-    tx_resume();
+    recover_bus_claimed();
 }
 
 void usb_audio_prepare_restart(void)
@@ -566,7 +579,7 @@ void usb_audio_prepare_restart(void)
 
 uint32_t usb_audio_bus_resets(void)
 {
-    return s_bus_resets;
+    return atomic_load(&s_bus_resets);
 }
 
 static void manager_task(void *arg)

@@ -23,7 +23,15 @@ static inline uint32_t ulTaskNotifyTake(int a, uint32_t t){
     return 0;
 }
 static inline TickType_t xTaskGetTickCount(void){return 0;}
-static inline void vTaskDelay(uint32_t t){(void)t;}
+static inline void vTaskDelay(uint32_t t)
+{
+#ifdef TEST_CAT_ADVANCE_TIME
+    extern int64_t g_now_us;
+    g_now_us += t * 1000LL;
+#else
+    (void)t;
+#endif
+}
 static inline void *xTaskGetCurrentTaskHandle(void){return 0;}
 static inline int xQueueReceive(void *q, void *i, uint32_t t){(void)q;(void)i;(void)t;return 0;}
 static inline int xQueueSend(void *q, const void *i, uint32_t t)

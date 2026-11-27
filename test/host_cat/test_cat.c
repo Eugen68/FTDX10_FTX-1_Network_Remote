@@ -30,6 +30,19 @@ int64_t g_write_duration_us;
 esp_err_t g_write_result;
 
 static bool tx_enabled, tx_password;
+static bool mock_allow_reset = true;
+static unsigned mock_resets;
+
+bool usb_audio_recover_cat(unsigned attempt, unsigned limit)
+{
+    assert(limit == CAT_RECOVER_MAX && attempt == mock_resets + 1);
+    if (!mock_allow_reset) return false;
+    ++mock_resets;
+    cat_usb_reset_begin();
+    g_now_us += 500000;
+    cat_usb_reset_end();
+    return true;
+}
 bool app_config_rigctl_enabled(void) { return false; }
 bool app_config_tx_enabled(void) { return tx_enabled && tx_password; }
 
@@ -245,7 +258,9 @@ static void test_rejected_tx_read_after_unkey(void)
 static unsigned open_attempts[16], open_attempt_count, closes;
 static uint8_t open_addr;
 static uint32_t mock_baud;
-static bool swap_to_ftx1, fail_first_open, suppress_id;
+static bool swap_to_ftx1, fail_first_open, suppress_id, delimited;
+static unsigned cached_attempts, other_attempts, boot_probes_left;
+static int64_t baud_set_us, delimiter_us;
 
 static esp_err_t swap_open(const cdc_acm_host_open_config_t *config, cdc_acm_dev_hdl_t *out)
 {
@@ -268,22 +283,43 @@ static esp_err_t swap_close(cdc_acm_dev_hdl_t dev)
 static esp_err_t swap_request(cdc_acm_dev_hdl_t dev, uint8_t request, uint16_t length, uint8_t *data)
 {
     assert(open_addr == (uintptr_t)dev);
-    if (request == CP210X_SET_BAUDRATE && length == sizeof(mock_baud)) memcpy(&mock_baud, data, length);
+    if (request == CP210X_SET_BAUDRATE && length == sizeof(mock_baud)) {
+        memcpy(&mock_baud, data, length);
+        baud_set_us = g_now_us;
+        delimited = false;
+    }
     return ESP_OK;
 }
 
 static void swap_reply(const char *cmd, size_t length)
 {
     assert(cat_usb_ready());
-    if (suppress_id || length != 3 || memcmp(cmd, "ID;", 3) != 0) return;
+    if (length == 1 && *cmd == ';') {
+        assert(!delimited && g_now_us - baud_set_us >= CAT_BAUD_SETTLE_MS * 1000);
+        delimiter_us = g_now_us;
+        delimited = true;
+        inject("?;junk");
+        return;
+    }
+    assert(length == 3 && memcmp(cmd, "ID;", 3) == 0);
+    assert(delimited && g_now_us - delimiter_us >= CAT_DELIMITER_MS * 1000);
+    delimited = false;
+    if (mock_baud == s_last_baud) ++cached_attempts;
+    else ++other_attempts;
+    if (suppress_id || boot_probes_left) {
+        if (boot_probes_left) --boot_probes_left;
+        inject("x9;");
+        return;
+    }
     const uint32_t baud = swap_to_ftx1 ? 38400 : 115200;
-    if (mock_baud == baud) inject(swap_to_ftx1 ? "ID0840;" : "ID0761;");
+    if (mock_baud == baud) inject(swap_to_ftx1 ? "?;ID0840;" : "?;ID0761;");
 }
 
 static void test_hot_swap(void)
 {
     s_disconnected = false;
     use(NULL);
+    atomic_store(&s_link_starting, true);
     s_last_baud = 115200;
     g_cdc_open_hook = swap_open;
     g_cdc_close_hook = swap_close;
@@ -323,11 +359,21 @@ static void test_hot_swap(void)
     usb_added(4);
     g_now_us += CAT_SETTLE_US;
     g_sent[0] = '\0';
+    const unsigned cached_before = cached_attempts, other_before = other_attempts;
+    for (int i = 0; i < 5; ++i) {
+        CHECK(!find_cat_port() && !open_addr, "keep trying cached speed before fallback");
+        g_now_us += 1000000;
+    }
+    CHECK(cached_attempts == cached_before + 5 && other_attempts == other_before,
+          "slow-start protection probes no alternate speed during the wait");
+    g_now_us = s_cat_missing_since + CAT_CACHED_ONLY_US - 1;
+    CHECK(cat_cached_only(g_now_us), "use cached speed for the full ten seconds");
+    ++g_now_us;
+    g_sent[0] = '\0';
     dev = find_cat_port();
     CHECK(dev && s_cat_addr == 4 && s_rig->rig == CAT_RIG_FTX1, "find the second FTX-1 CP210x after the first open fails");
-    CHECK(open_attempt_count == 3 && open_attempts[0] == 2 && open_attempts[1] == 2 && open_attempts[2] == 4,
-          "probe both FTX-1 addresses in order");
-    CHECK(s_last_baud == 38400 && strcmp(g_sent, "ID;ID;") == 0, "try old baud once and find the new baud");
+    CHECK(s_last_baud == 38400 && strcmp(g_sent, ";ID;;ID;") == 0,
+          "delimiter before each probe, then find the new baud");
     const cdc_acm_host_dev_event_data_t delayed = {.type = CDC_ACM_HOST_DEVICE_DISCONNECTED};
     event_cb(&delayed, (void *)(uintptr_t)old_session);
     CHECK(!s_disconnected && s_cat_addr == 4 && cat_usb_ready(), "ignore a disconnect from the old CDC session");
@@ -335,19 +381,95 @@ static void test_hot_swap(void)
     rx_cb((const uint8_t *)stale_rx, sizeof(stale_rx) - 1, (void *)(uintptr_t)old_session);
     CHECK(s_state.freq_main != 99999999, "ignore data callbacks from the old CDC session");
     close_cat_port(&dev);
-    CHECK(!dev && closes == 2 && !open_addr && !s_cat_addr, "close the replacement handle");
+    CHECK(!dev && !open_addr && !s_cat_addr, "close the replacement handle");
 
     fail_first_open = false;
     suppress_id = true;
     use(NULL);
-    CHECK(!find_cat_port() && !open_addr && closes == 4, "release both ports after no ID at any baud");
-    CHECK(open_attempt_count == 5 && open_attempts[3] == 2 && open_attempts[4] == 4,
+    open_attempt_count = 0;
+    const unsigned closes_before = closes;
+    CHECK(!find_cat_port() && !open_addr && closes == closes_before + 2, "release both ports after no ID");
+    CHECK(open_attempt_count == 2 && open_attempts[0] == 2 && open_attempts[1] == 4,
           "first failed scan probes CP210x 2 then 4");
-    CHECK(!find_cat_port() && !open_addr && closes == 6, "release both ports in rotated scan");
-    CHECK(open_attempt_count == 7 && open_attempts[5] == 4 && open_attempts[6] == 2,
+    CHECK(!find_cat_port() && !open_addr && closes == closes_before + 4, "release both ports in rotated scan");
+    CHECK(open_attempt_count == 4 && open_attempts[2] == 4 && open_attempts[3] == 2,
           "second scan starts with the other CP210x");
     CHECK(s_last_baud == 38400, "failed scans do not overwrite the cached baud");
+    g_now_us = s_cat_missing_since + CAT_RECOVER_US - 1;
+    recover_missing_cat(g_now_us);
+    CHECK(mock_resets == 0, "no power cycle before the CAT recovery threshold");
+    ++g_now_us;
+    mock_allow_reset = false;
+    recover_missing_cat(g_now_us);
+    CHECK(mock_resets == 0 && s_cat_recoveries == 0, "TX guard can defer a reset without using an attempt");
+    mock_allow_reset = true;
+    recover_missing_cat(g_now_us);
+    CHECK(mock_resets == 1 && !cat_usb_ready(), "missing ID triggers power cycle and a new settling period");
+    CHECK(!cat_usb_address_ready(2) && !cat_usb_address_ready(4), "forget prior USB enumeration");
+    for (unsigned i = 1; i < CAT_RECOVER_MAX; ++i) {
+        s_cat_missing_since = g_now_us;
+        g_now_us += CAT_RECOVER_US;
+        recover_missing_cat(g_now_us);
+    }
+    s_cat_missing_since = g_now_us;
+    g_now_us += CAT_RECOVER_US;
+    recover_missing_cat(g_now_us);
+    CHECK(mock_resets == CAT_RECOVER_MAX, "bound the number of automatic power cycles");
+    usb_added(2);
+    usb_added(4);
+    g_now_us += CAT_SETTLE_US;
+    suppress_id = false;
+    dev = find_cat_port();
+    CHECK(dev && s_rig->rig == CAT_RIG_FTX1 && !s_cat_recoveries, "valid ID restores the recovery budget");
+    close_cat_port(&dev);
+    CHECK(!ok(";") && !ok(";ID;"), "parser delimiter is not in the normal CAT allow-list");
     s_scan_after_addr = 0;
+    g_usb_count = 0;
+    g_cdc_open_hook = NULL;
+    g_cdc_close_hook = NULL;
+    g_cdc_request_hook = NULL;
+    g_cdc_send_hook = NULL;
+    atomic_store(&s_link_starting, false);
+}
+
+static void test_slow_radio_power_on(void)
+{
+    atomic_store(&s_link_starting, true);
+    g_cdc_open_hook = swap_open;
+    g_cdc_close_hook = swap_close;
+    g_cdc_request_hook = swap_request;
+    g_cdc_send_hook = swap_reply;
+    s_scan_after_addr = 0;
+    g_usb_addrs[0] = 2;
+    g_usb_count = 1;
+
+    for (unsigned rig = 0; rig < 2; ++rig) {
+        swap_to_ftx1 = rig == 1;
+        s_last_baud = swap_to_ftx1 ? 38400 : 115200;
+        for (unsigned cycle = 0; cycle < 5; ++cycle) {
+            use(NULL);
+            open_attempt_count = 0;
+            s_cat_missing_since = 0;
+            boot_probes_left = 4;
+            const unsigned alternate_before = other_attempts;
+            const unsigned recovery_before = mock_resets;
+            usb_added(2);
+            CHECK(!find_cat_port() && open_attempt_count == 0, "each hot start observes the 3 s guard");
+            g_now_us += CAT_SETTLE_US;
+            for (unsigned retry = 0; retry < 4; ++retry) {
+                CHECK(!find_cat_port(), "cached probe while radio is booting");
+                g_now_us += CAT_CACHED_SCAN_MS * 1000LL;
+            }
+            cdc_acm_dev_hdl_t dev = find_cat_port();
+            CHECK(dev && s_cat_addr == 2 && open_attempt_count == 5, "CAT connects on the fifth cached probe");
+            CHECK(s_rig->rig == (swap_to_ftx1 ? CAT_RIG_FTX1 : CAT_RIG_FTDX10),
+                  "identify the correct radio after slow boot");
+            CHECK(other_attempts == alternate_before && mock_resets == recovery_before,
+                  "delayed CAT needs neither alternate baud nor a power cycle");
+            close_cat_port(&dev);
+            usb_removed(2);
+        }
+    }
     g_usb_count = 0;
     g_cdc_open_hook = NULL;
     g_cdc_close_hook = NULL;
@@ -955,6 +1077,7 @@ int main(void) {
     test_startup();
     test_rejected_tx_read_after_unkey();
     test_hot_swap();
+    test_slow_radio_power_on();
     test_rigctl_cat_writes();
     printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     return fails != 0;

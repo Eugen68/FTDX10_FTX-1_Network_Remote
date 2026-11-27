@@ -13,7 +13,7 @@
  *
  * CAT commands used by this file, for comparing with a radio's CAT manual.
  * Every command is "<2 letters><parameters>;".  R = receiver: 0 = MAIN, 1 = SUB.  n = a digit.
- * Everything that is sent passes cat_cmd_allowed(); a command that is not accepted there is never sent.
+ * All writes use the CAT allow-list. Discovery also permits one standalone parser delimiter.
  * Unless marked otherwise, a line applies to both radios.
  *
  *   Command         Dir    Meaning (as used here)
@@ -76,11 +76,18 @@
 #include "rigctl_protocol.h"
 #include "app_config.h"
 #include "nvs.h"
+#include "usb_audio.h"
 
 // The FTX-1 exposes two CP210x UARTs (Silicon Labs VID 0x10C4). Both have the same VID/PID, so they are
 // opened by USB device address. Whichever returns a valid ID at a supported speed is used as the CAT port.
 #define SILABS_VID          0x10C4
 #define CAT_SETTLE_US       3000000LL
+#define CAT_BAUD_SETTLE_MS  50
+#define CAT_DELIMITER_MS    60
+#define CAT_CACHED_SCAN_MS  1000
+#define CAT_CACHED_ONLY_US  10000000LL
+#define CAT_RECOVER_US      30000000LL
+#define CAT_RECOVER_MAX     3
 #define NORMAL_ANSWER_MS    100
 #define CAT_CACHE_NVS       "cat_link"
 #define CAT_CACHE_BAUD      "last_baud"
@@ -126,6 +133,8 @@ static atomic_uchar s_cat_addr;
 static usb_host_client_handle_t s_usb_observer;
 static atomic_uint s_cat_session;
 static unsigned s_next_cat_session;    // assigned by the CAT task
+static int64_t s_cat_missing_since;
+static unsigned s_cat_recoveries;
 static uint8_t s_scan_after_addr;       // rotate after the first port that exhausted its baud probes
 static atomic_bool s_link_starting;
 static uint32_t s_last_baud;
@@ -362,7 +371,9 @@ static void record_query_answer(const char *pkt, size_t length)
         if (!transient) atomic_fetch_add(&s_effective_rejects, 1);
     }
     taskENTER_CRITICAL(&s_query_mux);
-    if (s_query.waiting && (rejected || matches_query(pkt, length, s_query.command))) {
+    // A trailing rejection of the standalone delimiter must not terminate an ID probe.
+    if (s_query.waiting && ((rejected && strcmp(s_query.command, "ID;") != 0) ||
+                            matches_query(pkt, length, s_query.command))) {
         memcpy(s_query.answer, pkt, length + 1);
         s_query.result = rejected ? QUERY_REJECTED : QUERY_ANSWER;
         s_query.transition_reject = transient;
@@ -759,7 +770,10 @@ static unsigned keyed_write_timeout_ms(void)
 /** The only place that writes to the radio */
 static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_kind_t kind, bool keyed_poll)
 {
-    if (!cat_cmds_allowed(cmds, CAT_TX_MAX_CMDS)) {
+    const bool discovery_delimiter = kind == CAT_LOG_POLL && !keyed_poll &&
+        cmds && strcmp(cmds, ";") == 0 && s_rig == &s_profile_none &&
+        atomic_load(&s_link_starting) && atomic_load(&s_cat_session);
+    if (!discovery_delimiter && !cat_cmds_allowed(cmds, CAT_TX_MAX_CMDS)) {
         ESP_LOGE(TAG, "Blocked a CAT command that is not on the allow-list");
         if (cmds != NULL) {
             log_cmds('T', CAT_LOG_BLOCKED, cmds);
@@ -1832,10 +1846,9 @@ static bool is_cp210x(uint8_t addr)
 }
 
 /** Open the CP210x at USB address addr and return true if it answers ID; as a CAT port */
-static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool *no_id)
+static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool *no_id, bool cached_only)
 {
     *no_id = false;
-    if (!is_cp210x(addr)) return false;
     observe_usb_events();
     if (!cat_usb_address_ready(addr)) {
         ESP_LOGW(TAG, "Skip USB address %u: 3 s CAT settling period or USB reset still in progress", addr);
@@ -1869,7 +1882,8 @@ static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool
     // The CP210x UARTs here are single-interface devices (the CDC driver opened interface 0)
     const uint8_t intf = cfg.interface_idx;
     uint32_t bauds[5];
-    const size_t count = baud_order(bauds);
+    const size_t supported = baud_order(bauds);
+    const size_t count = cached_only ? 1 : supported;
     size_t attempted = 0;
     for (size_t b = 0; b < count; b++) {
         observe_usb_events();
@@ -1885,6 +1899,13 @@ static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool
             diag("setup addr %u: %s", addr, esp_err_to_name(err));
             break;
         }
+        vTaskDelay(pdMS_TO_TICKS(CAT_BAUD_SETTLE_MS));
+        observe_usb_events();
+        if (cat_tx_kind(*dev, ";", CAT_LOG_POLL, false) != ESP_OK) break;
+        vTaskDelay(pdMS_TO_TICKS(CAT_DELIMITER_MS));
+        observe_usb_events();
+        if (s_disconnected || !cat_usb_ready()) break;
+
         char answer[RX_BUF_BYTES];
         atomic_store(&s_rx_restart, true);
         s_rx_bytes = 0;
@@ -1905,6 +1926,30 @@ static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool
     *no_id = attempted == count && !s_disconnected && cat_usb_ready();
     close_cat_port(dev);
     return false;
+}
+
+static bool cat_cached_only(int64_t now)
+{
+    for (size_t i = 0; i < sizeof(s_default_bauds) / sizeof(*s_default_bauds); ++i) {
+        if (s_default_bauds[i] == s_last_baud) {
+            return !s_cat_missing_since || now - s_cat_missing_since < CAT_CACHED_ONLY_US;
+        }
+    }
+    return false;
+}
+
+static void recover_missing_cat(int64_t now)
+{
+    if (!s_cat_missing_since || now - s_cat_missing_since < CAT_RECOVER_US ||
+        s_cat_recoveries >= CAT_RECOVER_MAX) return;
+
+    if (usb_audio_recover_cat(s_cat_recoveries + 1, CAT_RECOVER_MAX)) {
+        s_cat_missing_since = 0;
+        ++s_cat_recoveries;
+        if (s_cat_recoveries == CAT_RECOVER_MAX) {
+            ESP_LOGW(TAG, "CAT USB recovery limit reached; continuing to probe without cycling power");
+        }
+    }
 }
 
 static cdc_acm_dev_hdl_t find_cat_port(void)
@@ -1939,6 +1984,14 @@ static cdc_acm_dev_hdl_t find_cat_port(void)
             break;
         }
     }
+    // Audio recovery also resets the CAT settling timer.
+    taskENTER_CRITICAL(&s_usb_mux);
+    const int64_t reset_until = s_usb_reset_until;
+    taskEXIT_CRITICAL(&s_usb_mux);
+    if (s_cat_missing_since < reset_until) s_cat_missing_since = 0;
+    const bool cached_only = cat_cached_only(esp_timer_get_time());
+    bool cp210x_present = false;
+    bool cp210x_ready = false;
     uint8_t first_unanswered = 0;
     for (int i = 0; i < count; ++i) {
         const uint8_t addr = addrs[(start + i) % count];
@@ -1946,10 +1999,18 @@ static cdc_acm_dev_hdl_t find_cat_port(void)
             ESP_LOGW(TAG, "Skip invalid USB address %u", addr);
             continue;
         }
+        if (!is_cp210x(addr)) continue;
+        cp210x_present = true;
+        if (cat_usb_address_ready(addr)) {
+            cp210x_ready = true;
+            if (!s_cat_missing_since) s_cat_missing_since = esp_timer_get_time();
+        }
         cdc_acm_dev_hdl_t dev = NULL;
         bool no_id;
         s_disconnected = false;
-        if (try_port(addr, &dev, &opened, &no_id)) {
+        if (try_port(addr, &dev, &opened, &no_id, cached_only)) {
+            s_cat_missing_since = 0;
+            s_cat_recoveries = 0;
             s_scan_after_addr = 0;
             diag_counts((uint8_t)count, opened, 1);
             diag("%s", "");
@@ -1959,6 +2020,8 @@ static cdc_acm_dev_hdl_t find_cat_port(void)
         diag_counts((uint8_t)count, opened, 0);
     }
     s_scan_after_addr = first_unanswered;
+    if (cp210x_ready) recover_missing_cat(esp_timer_get_time());
+    if (!cp210x_present) s_cat_missing_since = 0;
     return NULL;
 }
 
@@ -1968,9 +2031,10 @@ static void cat_task(void *arg)
     read_cached_baud();
     for (;;) {
         s_disconnected = false;
-        s_rig = &s_profile_none;          // only ID; may be sent until a radio has answered
+        s_rig = &s_profile_none;          // only discovery probes may be sent before identification
         memset(s_rig_id, 0, sizeof(s_rig_id));
         atomic_store(&s_link_starting, true);
+        const int64_t scan_start = esp_timer_get_time();
         cdc_acm_dev_hdl_t dev = find_cat_port();
         if (dev) {
             // Keep CAT controls and PTT unavailable during the initial read-only sequence.
@@ -2002,7 +2066,10 @@ static void cat_task(void *arg)
             memset(s_rig_id, 0, sizeof(s_rig_id));
             publish_profile();
         }
-        vTaskDelay(pdMS_TO_TICKS(SCAN_PERIOD_MS));
+        const bool cached_only = cat_cached_only(esp_timer_get_time());
+        const int64_t wait_ms = cached_only
+            ? CAT_CACHED_SCAN_MS - (esp_timer_get_time() - scan_start) / 1000 : SCAN_PERIOD_MS;
+        vTaskDelay(pdMS_TO_TICKS(wait_ms > 1 ? wait_ms : 1));
     }
 }
 

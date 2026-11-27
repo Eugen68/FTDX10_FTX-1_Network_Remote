@@ -119,8 +119,8 @@ size_t cat_log_recent_tx_meters(uint32_t through_ms, cat_log_entry_t *out, size_
 /**
  * @brief Start the CAT client. Requires usb_audio_init() (it installs the USB Host Library) first.
  *
- * When a CP210x serial port is attached, it is opened at 8N1 and the CAT rates (115200, 38400, 4800, 9600,
- * 19200 bps) are tried until a port answers "ID;". The answer selects the radio profile.
+ * A new CP210x settles before receiving CAT bytes. Prefer the last working baud, then probe
+ * 115200, 38400, 19200, 9600 and 4800 bps as needed. A valid ID selects the radio profile.
  */
 esp_err_t cat_init(void);
 

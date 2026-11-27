@@ -120,6 +120,7 @@ void usb_audio_prepare_restart(void);
 
 /** @brief How often the USB bus was reset because the radio's audio did not come up */
 uint32_t usb_audio_bus_resets(void);
+bool usb_audio_recover_cat(unsigned attempt, unsigned limit);
 
 #ifdef __cplusplus
 }
