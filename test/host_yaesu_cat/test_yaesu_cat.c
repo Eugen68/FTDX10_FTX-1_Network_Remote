@@ -84,6 +84,7 @@ static void test_reads(void)
     read_is(&ftdx10, "MD0", "MD0C;");
     read_is(&ftdx10, "MD1", "MD13;");
     read_is(&ftdx10, "FT", "FT0;");
+    read_is(&ftdx10, "ST", "ST0;");
     read_is(&ftdx10, "VS", "VS0;");
     read_is(&ftdx10, "TX", "TX0;");
     read_is(&ftdx10, "PS", "PS1;");
@@ -104,6 +105,7 @@ static void test_reads(void)
     assert(strlen("IF00000145500000+000000H00000;") == 30);
     read_is(&ftx1, "OI", "OI00000021074000+000000200000;");
     read_is(&ftx1, "FT", "FT1;");
+    read_is(&ftx1, "ST", "ST0;");            // receives and transmits on SUB: no split
     read_is(&ftx1, "VS", "VS1;");
     read_is(&ftx1, "SM1", "SM1255;");
     read_is(&ftx1, "SH1", "SH1013;");
@@ -129,6 +131,17 @@ static void test_writes(void)
     write_is(&ftdx10, "FT3", true, YAESU_SET_TX_VFO, true, 0);
     write_is(&ftdx10, "FT1", false, 0, false, 0);            // FTDX10 sets with 2 / 3 only
     write_is(&ftx1, "FT0", true, YAESU_SET_TX_VFO, false, 0);
+    // OmniRig's split on / off: transmit on the other VFO, or on the receiving one.
+    write_is(&ftdx10, "ST1", true, YAESU_SET_TX_VFO, true, 0);
+    write_is(&ftdx10, "ST0", true, YAESU_SET_TX_VFO, false, 0);
+    write_is(&ftx1, "ST1", true, YAESU_SET_TX_VFO, false, 0);
+    write_is(&ftx1, "ST0", true, YAESU_SET_TX_VFO, true, 0);
+    write_is(&ftdx10, "ST2", false, 0, false, 0);            // split +5 kHz is not offered
+    {
+        cat_state_t split = ftdx10;
+        split.tx_vfo = CAT_TX_VFO_SUB;
+        read_is(&split, "ST", "ST1;");
+    }
     write_is(&ftdx10, "SV", true, YAESU_SWAP_VFO, false, 0);
     write_is(&ftdx10, "AB", true, YAESU_COPY_A_TO_B, false, 0);
     write_is(&ftdx10, "BA", true, YAESU_COPY_B_TO_A, false, 0);
