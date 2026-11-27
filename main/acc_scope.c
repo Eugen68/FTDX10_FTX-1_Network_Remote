@@ -127,8 +127,10 @@ static void acc_task(void *arg)
     s_stats.enabled = true;
     xSemaphoreGive(s_lock);
 
+    bool first_row = true;
     uint32_t window_accepted = 0;
-    int64_t window_start_ms = esp_timer_get_time() / 1000;
+    const int64_t ready_ms = esp_timer_get_time() / 1000;
+    int64_t window_start_ms = ready_ms;
     acc_scope_row_t row;
     for (;;) {
         spi_slave_transaction_t *done = NULL;
@@ -164,6 +166,10 @@ static void acc_task(void *arg)
                 strlcpy(s_stats.reason, acc_reject_text(why), sizeof(s_stats.reason));
             }
             xSemaphoreGive(s_lock);
+            if (why == ACC_OK && first_row) {
+                first_row = false;
+                ESP_LOGI(TAG, "First ACC frame accepted in %lld ms", (long long)(now_ms - ready_ms));
+            }
         }
         if (now_ms - window_start_ms >= 1000) {
             xSemaphoreTake(s_lock, portMAX_DELAY);

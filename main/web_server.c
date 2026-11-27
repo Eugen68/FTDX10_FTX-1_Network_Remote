@@ -1550,6 +1550,7 @@ static esp_err_t reboot_handler(httpd_req_t *req)
 typedef struct {
     httpd_req_t *req;
     uint32_t min_interval_ms;
+    int64_t requested_ms;
 } scope_ctx_t;
 
 static void put_scope_header(uint8_t *h, const acc_scope_row_t *r, uint16_t points)
@@ -1581,18 +1582,24 @@ static void scope_task(void *arg)
     }
     uint32_t last_seq = 0;
     int64_t last_sent_ms = 0;
-    int64_t last_any_ms = esp_timer_get_time() / 1000;
+    int64_t last_any_ms = sc->requested_ms - 1000; // send headers on the first iteration, even without a frame
     while (err == ESP_OK) {
         vTaskDelay(pdMS_TO_TICKS(10));
         const int64_t now = esp_timer_get_time() / 1000;
         const uint32_t seq = acc_scope_seq();
         if (seq != last_seq && seq != 0 && now - last_sent_ms >= sc->min_interval_ms && acc_scope_get_row(row)) {
+            const bool first = last_seq == 0;
             last_seq = row->seq;
             last_sent_ms = now;
             last_any_ms = now;
             put_scope_header(rec, row, ACC_SCOPE_POINTS);
             memcpy(rec + SCOPE_REC_HDR, row->level, ACC_SCOPE_POINTS);
             err = httpd_resp_send_chunk(req, (const char *)rec, SCOPE_REC_HDR + ACC_SCOPE_POINTS);
+            if (first && err == ESP_OK) {
+                ESP_LOGI(TAG, "Scope first frame sent in %lld ms, fd=%d",
+                         (long long)(esp_timer_get_time() / 1000 - sc->requested_ms),
+                         httpd_req_to_sockfd(req));
+            }
         } else if (now - last_any_ms >= 1000) {
             last_any_ms = now;
             put_scope_header(rec, NULL, 0);
@@ -1637,6 +1644,8 @@ static esp_err_t scope_handler(httpd_req_t *req)
         return httpd_resp_send_500(req);
     }
     sc->req = async_req;
+    sc->requested_ms = esp_timer_get_time() / 1000;
+    ESP_LOGI(TAG, "Scope requested, fd=%d", httpd_req_to_sockfd(req));
     sc->min_interval_ms = 1000 / fps - 5;      // a little slack, so 25 fps really gets every frame
     // Core 1 with the web server; TLS record encryption runs in this task, hence the stack
     if (xTaskCreatePinnedToCore(scope_task, "scope", 6144, sc, 5, NULL, WEB_CORE) != pdPASS) {

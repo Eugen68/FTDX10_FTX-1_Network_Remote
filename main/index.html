@@ -1897,6 +1897,7 @@ const notchMarks = [{ on: false, hz: 0 }, { on: false, hz: 0 }];
 
 // ---- ACC scope (FTDX10): the radio's own spectrum from its ACC socket, through GET /scope.bin ----
 const ACC_POINTS = 850, ACC_CANVAS_H = 220;
+const ACC_STREAM_IDLE_MS = 5000, ACC_STREAM_RETRY_MS = 1000;
 // Display scale: from about the noise floor (median of the refined row) to a little over the
 // strongest signals (99th percentile), both followed slowly. Measured on an FTDX10 at LEVEL +20 the noise
 // sits around 47-74 and FT8 signals reach about 92 (one step is about 0.42 dB), so a fixed scale would
@@ -1951,11 +1952,11 @@ function accOnRecord(dv, off, points) {
   if (!accState.row) { accState.floor = floor; accState.range = range; }
   accState.floor += (floor - accState.floor) * 0.05;
   accState.range += (range - accState.range) * 0.05;
-  if (accState.pending.length < 50) accState.pending.push(Uint8Array.from(accState.refined, (v) => v + 0.5));
   if (!accState.row || accState.row.center !== rec.center || accState.row.span !== rec.span) {
     accState.pending.length = 0;                  // a new place: start the waterfall over
     scopes[0] && scopes[0].clearWaterfall();
   }
+  if (accState.pending.length < 50) accState.pending.push(Uint8Array.from(accState.refined, (v) => v + 0.5));
   accState.row = rec;
   accState.lastMs = performance.now();
   accState.frames++;
@@ -1971,9 +1972,18 @@ async function accStreamLoop() {
       await new Promise(resolve => setTimeout(resolve, 250));
       continue;
     }
+    const stream = new AbortController();
+    const stopStream = () => stream.abort();
+    ctrl.signal.addEventListener('abort', stopStream, { once: true });
+    let watchdog;
+    const waitForData = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => stream.abort(new Error('no ACC stream data')), ACC_STREAM_IDLE_MS);
+    };
     try {
       const fps = BG_AUDIO ? 12 : 25;
-      const res = await fetch('/scope.bin?fps=' + fps, { signal: ctrl.signal, cache: 'no-store' });
+      waitForData();
+      const res = await fetch('/scope.bin?fps=' + fps, { signal: stream.signal, cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       accState.note = 'waiting for ACC data from the radio...';
       const reader = res.body.getReader();
@@ -1981,6 +1991,7 @@ async function accStreamLoop() {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
+        waitForData();
         const nb = new Uint8Array(buf.length + value.length);
         nb.set(buf); nb.set(value, buf.length);
         buf = nb;
@@ -1998,8 +2009,12 @@ async function accStreamLoop() {
     } catch (e) {
       if (ctrl.signal.aborted) return;
       accState.note = 'ACC stream: ' + (e.message || e) + ', retrying';
+    } finally {
+      clearTimeout(watchdog);
+      ctrl.signal.removeEventListener('abort', stopStream);
+      stopStream();
     }
-    await new Promise((r) => setTimeout(r, 2000));
+    await new Promise((r) => setTimeout(r, ACC_STREAM_RETRY_MS));
   }
 }
 
@@ -4353,6 +4368,7 @@ function applyRigProfile(d) {
   const single = d.dual_rx === false;
   document.body.classList.toggle('single-rx', single);
   document.body.classList.toggle('has-acc', d.rig === 'FTDX10');   // the radio's own scope on its ACC socket
+  accManage();
   document.getElementById('vfoLabelSub').textContent = single ? 'VFO-B' : 'SUB (VFO-B)';
   document.getElementById('cardTitleSub').textContent = single ? 'VFO-B' : 'SUB VFO-B';
   const subMeter = smHost.children[1];
