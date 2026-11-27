@@ -21,6 +21,7 @@
 #include "usb_audio.h"
 #include "web_server.h"
 #include "rigctld.h"
+#include "yaesu_catd.h"
 #include "wifi_sta.h"
 
 static const char *TAG = "main";
@@ -62,6 +63,7 @@ void app_main(void)
     ESP_ERROR_CHECK(web_server_start());
     // Reserve the web ports first, even if NET rigctl was configured to use one.
     rigctld_start();
+    yaesu_catd_start();
     ota_confirm_running();   // reached only when Wi-Fi and the web server came up
 
     // Advertise https://<hostname>.local/ on the LAN (default: trx-remote.local)

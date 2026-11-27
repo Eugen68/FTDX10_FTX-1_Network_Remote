@@ -33,6 +33,7 @@ extern "C" {
 #define APP_CONFIG_MIN_SECRET_LEN   12
 #define APP_CONFIG_MIN_TX_SECRET_LEN 6
 #define RIGCTL_DEFAULT_PORT 4532
+#define YAESU_CAT_DEFAULT_PORT 4533
 #define TX_DEFAULT_SECONDS 120
 #define TX_SWR_DEFAULT 30
 #define TX_SWR_MIN 15
@@ -57,7 +58,10 @@ typedef struct {
     bool rigctl_enabled;
     bool rigctl_debug;
     uint16_t rigctl_port;
-    char rigctl_ip[16];
+    char rigctl_ip[16];      /* allowed client for NET rigctl and the Yaesu CAT server, "" = any */
+    bool yaesu_enabled;      /* Yaesu CAT over TCP (OmniRig through a virtual COM port) */
+    bool yaesu_debug;
+    uint16_t yaesu_port;
     bool tx_enabled;
     unsigned tx_max_seconds;
     unsigned swr_max; // tenths of the SWR ratio
@@ -93,6 +97,7 @@ void app_config_get(app_config_t *cfg);
 /** Remote PTT requires the serial-menu setting and a configured TX secret. */
 bool app_config_tx_enabled(void);
 bool app_config_rigctl_enabled(void);
+bool app_config_yaesu_enabled(void);
 
 /**
  * @brief Check if the configuration has a valid Wi-Fi SSID configured.

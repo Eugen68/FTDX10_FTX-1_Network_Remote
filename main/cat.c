@@ -1613,7 +1613,8 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
 {
     const rig_profile_t *rig = s_rig;
     uint32_t poll_count = 0;
-    const bool net_rigctl = rig->can_control && app_config_rigctl_enabled();
+    // Network CAT clients (NET rigctl, Yaesu CAT) also need the active VFO, filters and TX VFO.
+    const bool net_rigctl = rig->can_control && (app_config_rigctl_enabled() || app_config_yaesu_enabled());
     keyed_poll_t keyed_poll = {0};
     bool usb_level_applied = false;   // DATA audio output level already set for the current DATA-USB session
 
