@@ -107,6 +107,9 @@
     text-decoration: none;
   }
   .step-group { color: var(--text-muted); margin-left: .3rem; }
+  .step-row { display: flex; align-items: center; gap: .3rem; }
+  .step-select { margin-left: .4rem; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px;
+                 font: inherit; font-size: .68rem; padding: .1rem .2rem; min-width: 5.5rem; }
   #uiPrefsFeedback { font-size: .75rem; }
   #catRecoveryStatus { color: var(--text-muted); font-size: .75rem; }
   .pwr-btn.running {
@@ -799,7 +802,7 @@
     margin-top: .15rem;
     margin-bottom: .05rem;
   }
-  .step-grid, .band-grid, .mode-grid {
+  .band-grid, .mode-grid {
     display: flex;
     flex-wrap: wrap;
     gap: .2rem;
@@ -1122,19 +1125,20 @@
       </div>
 
       <!-- Step Selection -->
-      <div class="button-group-label">STEP <span class="step-group" id="stepGroupMain"></span></div>
-      <div class="step-grid" id="stepBtnsMain">
-        <button type="button" class="rig-btn" data-step="10">10Hz</button>
-        <button type="button" class="rig-btn" data-step="100">100Hz</button>
-        <button type="button" class="rig-btn" data-step="500">500Hz</button>
-        <button type="button" class="rig-btn active" data-step="1000">1kHz</button>
-        <button type="button" class="rig-btn" data-step="5000">5kHz</button>
-        <button type="button" class="rig-btn" data-step="10000">10kHz</button>
-        <button type="button" class="rig-btn" data-step="12500">12.5k</button>
-        <button type="button" class="rig-btn" data-step="20000">20k</button>
-        <button type="button" class="rig-btn" data-step="25000">25k</button>
-        <button type="button" class="rig-btn" data-step="100000">100k</button>
-        <button type="button" class="rig-btn" data-step="1000000">1M</button>
+      <div class="button-group-label step-row">STEP <span class="step-group" id="stepGroupMain"></span>
+        <select class="step-select" id="stepSelMain" aria-label="MAIN tuning step (kept per mode)">
+          <option value="10">10 Hz</option>
+          <option value="100">100 Hz</option>
+          <option value="500">500 Hz</option>
+          <option value="1000">1 kHz</option>
+          <option value="5000">5 kHz</option>
+          <option value="10000">10 kHz</option>
+          <option value="12500">12.5 kHz</option>
+          <option value="20000">20 kHz</option>
+          <option value="25000">25 kHz</option>
+          <option value="100000">100 kHz</option>
+          <option value="1000000">1 MHz</option>
+        </select>
       </div>
 
       <!-- Direct Input -->
@@ -1450,19 +1454,20 @@
       </div>
 
       <!-- Step Selection -->
-      <div class="button-group-label">STEP <span class="step-group" id="stepGroupSub"></span></div>
-      <div class="step-grid" id="stepBtnsSub">
-        <button type="button" class="rig-btn" data-step="10">10Hz</button>
-        <button type="button" class="rig-btn" data-step="100">100Hz</button>
-        <button type="button" class="rig-btn" data-step="500">500Hz</button>
-        <button type="button" class="rig-btn active" data-step="1000">1kHz</button>
-        <button type="button" class="rig-btn" data-step="5000">5kHz</button>
-        <button type="button" class="rig-btn" data-step="10000">10kHz</button>
-        <button type="button" class="rig-btn" data-step="12500">12.5k</button>
-        <button type="button" class="rig-btn" data-step="20000">20k</button>
-        <button type="button" class="rig-btn" data-step="25000">25k</button>
-        <button type="button" class="rig-btn" data-step="100000">100k</button>
-        <button type="button" class="rig-btn" data-step="1000000">1M</button>
+      <div class="button-group-label step-row">STEP <span class="step-group" id="stepGroupSub"></span>
+        <select class="step-select" id="stepSelSub" aria-label="SUB tuning step (kept per mode)">
+          <option value="10">10 Hz</option>
+          <option value="100">100 Hz</option>
+          <option value="500">500 Hz</option>
+          <option value="1000">1 kHz</option>
+          <option value="5000">5 kHz</option>
+          <option value="10000">10 kHz</option>
+          <option value="12500">12.5 kHz</option>
+          <option value="20000">20 kHz</option>
+          <option value="25000">25 kHz</option>
+          <option value="100000">100 kHz</option>
+          <option value="1000000">1 MHz</option>
+        </select>
       </div>
 
       <!-- Direct Input -->
@@ -3170,24 +3175,21 @@ function refreshStep(sub, mode = (sub ? modeBadgeSub : modeBadgeMain).textConten
   const group = stepGroup(mode);
   document.getElementById('stepGroup' + side).textContent = group;
   const value = getStep(sub, mode);
-  document.querySelectorAll('#stepBtns' + side + ' [data-step]').forEach(btn => {
-    btn.classList.toggle('active', Number(btn.dataset.step) === value);
-  });
+  document.getElementById('stepSel' + side).value = String(value);
 }
 
-function initStepButtons(sub) {
+// One step per mode group (CW / SSB / DATA / AM / FM) and receiver, saved on the board.
+function initStepSelect(sub) {
   const side = sub ? 'Sub' : 'Main';
-  document.querySelectorAll('#stepBtns' + side + ' [data-step]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const mode = (sub ? modeBadgeSub : modeBadgeMain).textContent;
-      queueUiPref('step' + side + stepGroup(mode), Number(btn.dataset.step));
-      refreshStep(sub);
-    });
+  document.getElementById('stepSel' + side).addEventListener('change', (e) => {
+    const mode = (sub ? modeBadgeSub : modeBadgeMain).textContent;
+    queueUiPref('step' + side + stepGroup(mode), Number(e.target.value));
+    refreshStep(sub);
   });
   refreshStep(sub);
 }
-initStepButtons(false);
-initStepButtons(true);
+initStepSelect(false);
+initStepSelect(true);
 
 function formatFreq(hz) {
   if (!hz || hz <= 0) return '  --.---.---';
