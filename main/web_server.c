@@ -49,7 +49,7 @@
 #define WEB_CORE             0
 #define STREAM_CHUNK_BYTES   4096
 #define CAT_POST_MAX_BYTES   192     // largest accepted POST /cat body, including the NUL
-#define CAT_JSON_BYTES       1536    // GET /cat response
+#define CAT_JSON_BYTES       1792    // GET /cat response
 #define STREAM_READ_TIMEOUT  pdMS_TO_TICKS(200)
 #define KEEPALIVE_IDLE_READS 5       // idle waits (about 1 s) before a keep-alive silence block is sent
 #define KEEPALIVE_FRAMES     64      // length of that block in audio frames
@@ -924,18 +924,28 @@ static esp_err_t cat_handler(httpd_req_t *req)
     if (n > 0 && (size_t)n < sizeof(json)) {
         const char *rx_vfo = st.connected && st.rx_vfo_known
                            ? (st.rx_vfo_sub ? "\"sub\"" : "\"main\"") : "null";
+        char ifs[2][8];
+        for (int i = 0; i < 2; i++) {
+            if (st.if_shift_known[i]) snprintf(ifs[i], sizeof(ifs[i]), "%d", st.if_shift[i]);
+            else strcpy(ifs[i], "null");
+        }
         const char *tx_vfo = st.connected && st.tx_vfo == CAT_TX_VFO_MAIN ? "\"main\"" :
                              st.connected && st.tx_vfo == CAT_TX_VFO_SUB ? "\"sub\"" : "null";
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,"
                       "\"rx_vfo\":%s,\"tx_vfo\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\","
-                      "\"pa_bands\":%u,\"att_max\":%u,\"preamp\":[%d,%d,%d],\"att\":%d,\"rfg\":[%d,%d],\"agc\":[%d,%d]}",
+                      "\"pa_bands\":%u,\"att_max\":%u,\"preamp\":[%d,%d,%d],\"att\":%d,\"rfg\":[%d,%d],\"agc\":[%d,%d],"
+                      "\"nb_switch\":%s,\"dnr_max\":%u,\"nb\":[%d,%d],\"nb_level\":[%d,%d],\"dnr\":[%d,%d],"
+                      "\"dnr_level\":[%d,%d],\"dnf\":[%d,%d],\"ifs\":[%s,%s]}",
                       (unsigned)st.voice_source, app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
                       st.tx_radio_known ? "true" : "false", rx_vfo, tx_vfo, (unsigned long)st.write_error_seq, write_error,
                       st.connected ? st.pa_bands : 0u, st.att_max, st.preamp[0], st.preamp[1], st.preamp[2], st.att,
-                      st.rf_gain[0], st.rf_gain[1], st.agc[0], st.agc[1]);
+                      st.rf_gain[0], st.rf_gain[1], st.agc[0], st.agc[1],
+                      st.nb_switch ? "true" : "false", st.connected ? st.dnr_max : 0u,
+                      st.nb_on[0], st.nb_on[1], st.nb_level[0], st.nb_level[1], st.dnr_on[0], st.dnr_on[1],
+                      st.dnr_level[0], st.dnr_level[1], st.dnf[0], st.dnf[1], ifs[0], ifs[1]);
     }
     return send_json(req, json, n, sizeof(json));
 }
@@ -949,6 +959,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
 //   notch   0 | 1 | false | true           notch_hz integer 10-3200
 //   power   0 | 1 | false | true
 //   preamp  0-2 (with pa_band 0-2 on the FTX-1)   att 0-3   rfg 0-255   agc 0-4   (range checked again in cat.c)
+//   nb, dnr, dnf  0 | 1 | false | true   nb_level 0-10   dnr_level 0-15 (with nb / dnr)   ifs -1200..1200
 //   action  "swap" | "copy_main_to_sub" | "copy_sub_to_main"
 // Unknown or repeated keys, escapes, nesting and trailing data are rejected. There is no way to send a
 // raw CAT string.
@@ -971,6 +982,9 @@ typedef struct {
     bool power;
     bool has_preamp, has_pa_band, has_att, has_rfg, has_agc;
     uint8_t preamp, pa_band, att, rfg, agc;
+    bool has_nb, nb, has_nb_level, has_dnr, dnr, has_dnr_level, has_dnf, dnf, has_ifs;
+    uint8_t nb_level, dnr_level;
+    int16_t ifs;
     bool has_action;
     char action[24];
 } cat_req_t;
@@ -1316,6 +1330,17 @@ static bool token_to_uint(const char *t, uint32_t max, uint32_t *out)
     return true;
 }
 
+static bool token_to_int(const char *t, int32_t min, int32_t max, int32_t *out)
+{
+    const bool neg = t[0] == '-';
+    uint32_t v;
+    if (!token_to_uint(t + neg, (uint32_t)(neg ? -(int64_t)min : max), &v)) {
+        return false;
+    }
+    *out = neg ? -(int32_t)v : (int32_t)v;
+    return *out >= min && *out <= max;
+}
+
 static bool token_to_bool(const char *t, bool *out)
 {
     if (strcmp(t, "1") == 0 || strcmp(t, "true") == 0) {
@@ -1407,6 +1432,28 @@ static bool parse_cat_request(const char *s, cat_req_t *r)
             if (is_text || r->has_agc || !token_to_uint(token, 4, &num)) return false;
             r->agc = (uint8_t)num;
             r->has_agc = true;
+        } else if (strcmp(key, "nb") == 0) {
+            if (is_text || r->has_nb || !token_to_bool(token, &r->nb)) return false;
+            r->has_nb = true;
+        } else if (strcmp(key, "nb_level") == 0) {
+            if (is_text || r->has_nb_level || !token_to_uint(token, 10, &num)) return false;
+            r->nb_level = (uint8_t)num;
+            r->has_nb_level = true;
+        } else if (strcmp(key, "dnr") == 0) {
+            if (is_text || r->has_dnr || !token_to_bool(token, &r->dnr)) return false;
+            r->has_dnr = true;
+        } else if (strcmp(key, "dnr_level") == 0) {
+            if (is_text || r->has_dnr_level || !token_to_uint(token, 15, &num)) return false;
+            r->dnr_level = (uint8_t)num;
+            r->has_dnr_level = true;
+        } else if (strcmp(key, "dnf") == 0) {
+            if (is_text || r->has_dnf || !token_to_bool(token, &r->dnf)) return false;
+            r->has_dnf = true;
+        } else if (strcmp(key, "ifs") == 0) {
+            int32_t v;
+            if (is_text || r->has_ifs || !token_to_int(token, -1200, 1200, &v)) return false;
+            r->ifs = (int16_t)v;
+            r->has_ifs = true;
         } else if (strcmp(key, "action") == 0) {
             if (!is_text || r->has_action) return false;
             strlcpy(r->action, text, sizeof(r->action));
@@ -1583,6 +1630,11 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     if (r.has_att) APPLY(cat_set_att(r.att));
     if (r.has_rfg) APPLY(cat_set_rf_gain(r.sub, r.rfg));
     if (r.has_agc) APPLY(cat_set_agc(r.sub, r.agc));
+    if ((r.has_nb_level && !r.has_nb) || (r.has_dnr_level && !r.has_dnr)) err = ESP_ERR_INVALID_ARG, ops++;
+    if (r.has_nb) APPLY(cat_set_nb(r.sub, r.nb, r.has_nb_level ? r.nb_level : CAT_LEVEL_KEEP));
+    if (r.has_dnr) APPLY(cat_set_dnr(r.sub, r.dnr, r.has_dnr_level ? r.dnr_level : CAT_LEVEL_KEEP));
+    if (r.has_dnf) APPLY(cat_set_dnf(r.sub, r.dnf));
+    if (r.has_ifs) APPLY(cat_set_if_shift(r.sub, r.ifs));
 #undef APPLY
 
     httpd_resp_set_type(req, "application/json");

@@ -597,6 +597,12 @@
   /* One-receiver radios (FTDX10): the SUB receiver controls are hidden, "SUB" is only VFO-B */
   body.single-rx .dual-rx-only { display: none !important; }
   body:not(.has-fe) .fe-only { display: none !important; }
+  body:not(.has-nr) .nr-only { display: none !important; }
+  .nr-row { flex-wrap: wrap; gap: .2rem; }
+  .ifs-box { min-width: 9rem; }
+  .ifs-range { width: 8.5rem; }
+  .ifs-val { color: #e2e8f0; font-variant-numeric: tabular-nums; }
+  .ifs-zero { padding: 0 .5rem; min-height: 0; font-size: .6rem; }
   .fe-select { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit;
                font-size: .62rem; padding: .1rem .15rem; min-width: 4.2rem; }
   .fe-select:disabled { opacity: .45; }
@@ -1196,6 +1202,29 @@
         </div>
       </div>
 
+      <!-- NOISE / IF (CAT NB NL NR RL BC IS) -->
+      <div class="button-group-label nr-only">NOISE / IF (CAT):</div>
+      <div class="analog-knobs-row nr-row nr-only">
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">NB</div>
+          <select class="fe-select" id="nrNbMain" aria-label="MAIN noise blanker"></select>
+        </div>
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">DNR</div>
+          <select class="fe-select" id="nrDnrMain" aria-label="MAIN DNR"></select>
+        </div>
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">DNF</div>
+          <button type="button" class="rig-btn notch-btn" id="nrDnfMain" aria-pressed="false">OFF</button>
+        </div>
+        <div class="mini-knob-box ifs-box">
+          <div class="mini-knob-label">IF SHIFT <span class="ifs-val" id="nrIfsValMain">--</span></div>
+          <input type="range" class="ifs-range" id="nrIfsMain" min="-1200" max="1200" step="20" value="0"
+                 aria-label="MAIN IF shift" title="IF shift, 20 Hz steps. Double-click to centre">
+          <button type="button" class="rig-btn ifs-zero" id="nrIfsZeroMain" title="IF shift to 0 Hz">0</button>
+        </div>
+      </div>
+
     </div>
 
     <!-- CENTER: Central TFT Screen -->
@@ -1535,6 +1564,29 @@
         <div class="mini-knob-box">
           <div class="mini-knob-label">AGC</div>
           <select class="fe-select" id="feAgcSub" aria-label="SUB AGC"></select>
+        </div>
+      </div>
+
+      <!-- NOISE / IF (CAT NB NL NR RL BC IS) -->
+      <div class="button-group-label dual-rx-only nr-only">NOISE / IF (CAT):</div>
+      <div class="analog-knobs-row nr-row dual-rx-only nr-only">
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">NB</div>
+          <select class="fe-select" id="nrNbSub" aria-label="SUB noise blanker"></select>
+        </div>
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">DNR</div>
+          <select class="fe-select" id="nrDnrSub" aria-label="SUB DNR"></select>
+        </div>
+        <div class="mini-knob-box">
+          <div class="mini-knob-label">DNF</div>
+          <button type="button" class="rig-btn notch-btn" id="nrDnfSub" aria-pressed="false">OFF</button>
+        </div>
+        <div class="mini-knob-box ifs-box">
+          <div class="mini-knob-label">IF SHIFT <span class="ifs-val" id="nrIfsValSub">--</span></div>
+          <input type="range" class="ifs-range" id="nrIfsSub" min="-1200" max="1200" step="20" value="0"
+                 aria-label="SUB IF shift" title="IF shift, 20 Hz steps. Double-click to centre">
+          <button type="button" class="rig-btn ifs-zero" id="nrIfsZeroSub" title="IF shift to 0 Hz">0</button>
         </div>
       </div>
 
@@ -3759,6 +3811,99 @@ function feSend(key, sub) {
   }
 }
 
+// ---- Noise / IF (CAT NB NL NR RL BC IS): noise blanker, DNR, auto notch (DNF), IF shift per receiver ----
+// FTDX10: NB and DNR have an ON/OFF switch plus a level (NB 0-10, DNR 1-15). FTX-1: the level is the switch
+// (NB 1-10, DNR 1-10, 0 = OFF) and every control is separate for MAIN and SUB.
+const nr = {max: 0, sw: false, last: {}, ifsTimer: [null, null]};
+const nrEls = ['Main', 'Sub'].map(S => ({
+  nb: document.getElementById('nrNb' + S), dnr: document.getElementById('nrDnr' + S),
+  dnf: document.getElementById('nrDnf' + S), ifs: document.getElementById('nrIfs' + S),
+  ifsVal: document.getElementById('nrIfsVal' + S), ifsZero: document.getElementById('nrIfsZero' + S),
+}));
+
+function nrLevels(first, last) {
+  const out = [['-1', 'OFF']];
+  for (let i = first; i <= last; i++) out.push([String(i), String(i)]);
+  return out;
+}
+
+function nrFill(sel, items) {
+  const key = items.map(i => i[0]).join('|');
+  if (sel.dataset.items === key) return;
+  sel.dataset.items = key;
+  sel.replaceChildren(...items.map(([v, l]) => new Option(l, v)));
+}
+
+const nrHeld = key => Date.now() - (nr.last[key] || 0) < USER_CHANGE_HOLD_MS;
+const ifsLabel = hz => (hz > 0 ? '+' : '') + hz + ' Hz';
+
+function nrApply(d) {
+  nr.max = d.connected && Number.isInteger(d.dnr_max) ? d.dnr_max : 0;
+  nr.sw = d.nb_switch === true;
+  document.body.classList.toggle('has-nr', nr.max > 0);
+  if (!nr.max) return;
+  nrEls.forEach((el, i) => {
+    nrFill(el.nb, nrLevels(nr.sw ? 0 : 1, 10));
+    nrFill(el.dnr, nrLevels(1, nr.max));
+    const at = (k, arr) => Array.isArray(d[k]) ? d[k][i] : -1;
+    const show = (sel, key, on, level) => {
+      sel.disabled = on < 0;
+      if (on < 0 || document.activeElement === sel || nrHeld(key + i)) return;
+      const v = on > 0 && level >= 0 ? String(level) : '-1';
+      if ([...sel.options].some(o => o.value === v)) sel.value = v;
+    };
+    show(el.nb, 'nb', at('nb'), at('nb_level'));
+    show(el.dnr, 'dnr', at('dnr'), at('dnr_level'));
+    const dnf = at('dnf');
+    el.dnf.disabled = dnf < 0;
+    if (dnf >= 0 && !nrHeld('dnf' + i)) {
+      el.dnf.classList.toggle('active', dnf === 1);
+      el.dnf.setAttribute('aria-pressed', dnf === 1 ? 'true' : 'false');
+      el.dnf.textContent = dnf === 1 ? 'ON' : 'OFF';
+    }
+    const ifs = Array.isArray(d.ifs) ? d.ifs[i] : null;
+    el.ifs.disabled = el.ifsZero.disabled = !Number.isInteger(ifs);
+    if (Number.isInteger(ifs) && document.activeElement !== el.ifs && !nrHeld('ifs' + i)) {
+      el.ifs.value = ifs;
+      el.ifsVal.textContent = ifsLabel(ifs);
+    }
+  });
+}
+
+nrEls.forEach((el, i) => {
+  const target = i ? 'sub' : 'main';
+  const level = (sel, key) => {
+    const v = Number(sel.value);
+    nr.last[key + i] = Date.now();
+    const cmd = { target };
+    cmd[key] = v >= 0 ? 1 : 0;
+    if (v >= 0) cmd[key + '_level'] = v;
+    sendCatCommand(cmd);
+  };
+  el.nb.addEventListener('change', () => level(el.nb, 'nb'));
+  el.dnr.addEventListener('change', () => level(el.dnr, 'dnr'));
+  el.dnf.addEventListener('click', () => {
+    if (el.dnf.disabled) return;
+    const on = el.dnf.getAttribute('aria-pressed') !== 'true';
+    nr.last['dnf' + i] = Date.now();
+    el.dnf.classList.toggle('active', on);
+    el.dnf.setAttribute('aria-pressed', on ? 'true' : 'false');
+    el.dnf.textContent = on ? 'ON' : 'OFF';
+    sendCatCommand({ target, dnf: on ? 1 : 0 });
+  });
+  const sendIfs = (hz) => {
+    nr.last['ifs' + i] = Date.now();
+    el.ifsVal.textContent = ifsLabel(hz);
+    clearTimeout(nr.ifsTimer[i]);
+    // One CAT write per pause while dragging, not one per 20 Hz step.
+    nr.ifsTimer[i] = setTimeout(() => sendCatCommand({ target, ifs: hz }), 150);
+  };
+  el.ifs.addEventListener('input', () => sendIfs(Number(el.ifs.value)));
+  const zero = () => { if (!el.ifs.disabled) { el.ifs.value = 0; sendIfs(0); } };
+  el.ifs.addEventListener('dblclick', zero);
+  el.ifsZero.addEventListener('click', zero);
+});
+
 // ---- Manual notch (CAT BP): ON/OFF button + frequency knob (10-3200 Hz, 10 Hz steps) ----
 const NOTCH_MIN_HZ = 10, NOTCH_MAX_HZ = 3200;
 let lastUserChangeNotchMain = 0;
@@ -4650,12 +4795,13 @@ async function smPoll() {
       notchMain.apply(d.notch_main, d.notch_hz_main);
       notchSub.apply(d.notch_sub, d.notch_hz_sub);
       feApply(d);
+      nrApply(d);
     } else {
       radioBusy = false;
       ledCat.classList.remove('on-green');
       ledBusy.classList.remove('on-amber');
       smMeters.forEach((m) => m.set(null));
-      document.body.classList.remove('has-fe');
+      document.body.classList.remove('has-fe', 'has-nr');
       updateFreqDisplay(false, 0);
       updateFreqDisplay(true, 0);
     }
