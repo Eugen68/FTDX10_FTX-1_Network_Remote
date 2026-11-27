@@ -812,10 +812,10 @@ static esp_err_t status_handler(httpd_req_t *req)
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"ft8_tx\":{\"armed\":%s,\"remaining\":%u,\"clock\":\"%s\","
                       "\"age_ms\":%" PRId64 ",\"offset_ms\":%" PRId64 ",\"rtt_ms\":%u,\"usb_lead_ms\":%u,"
-                      "\"preparing\":%s,\"prepare_ms\":%u,\"reason\":\"%s\",\"audio\":{\"max_task_gap_us\":%u",
+                      "\"preparing\":%s,\"prepare_ms\":%u,\"reason\":\"%s\",\"audio\":{\"max_task_gap_us\":%u,\"late_threshold_us\":%u",
                       ft8.armed ? "true" : "false", ft8.remaining, ft8.clock, ft8.age_ms,
                       ft8.offset_ms, ft8.rtt_ms, ft8.lead_ms,
-                      ft8.preparing ? "true" : "false", ft8.prepare_ms, ft8.reason, audio.max_task_gap_us);
+                      ft8.preparing ? "true" : "false", ft8.prepare_ms, ft8.reason, audio.max_task_gap_us, USB_FT8_LATE_GAP_US);
         const struct { const char *name; ft8_audio_event_t event; } events[] = {
             {"task_late", audio.task_late}, {"write_timeout", audio.write_timeout},
             {"write_failed", audio.write_failed}, {"iso_failed", audio.iso_failed},

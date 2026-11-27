@@ -153,11 +153,14 @@ static void log_ft8_event(const char *name, ft8_audio_event_t event)
 
 static void log_ft8_stats(ft8_audio_stats_t stats)
 {
-    ESP_LOGI(TAG, "FT8 audio frame max_task_gap_us=%u late_cycles=%u write_timeouts=%u write_failed=%u "
+    ESP_LOGI(TAG, "FT8 audio frame max_task_gap_us=%u late_threshold_us=%u late_cycles=%u write_timeouts=%u write_failed=%u "
              "iso_failed=%u iso_short=%u queue_empty=%u",
-             stats.max_task_gap_us, stats.task_late.count, stats.write_timeout.count,
+             stats.max_task_gap_us, USB_FT8_LATE_GAP_US, stats.task_late.count, stats.write_timeout.count,
              stats.write_failed.count, stats.iso_failed.count, stats.iso_short.count, stats.queue_empty.count);
-    log_ft8_event("late task", stats.task_late);
+    if (stats.task_late.count) {
+        ESP_LOGI(TAG, "FT8 late task count=%u first_ms=%d last_ms=%d",
+                 stats.task_late.count, stats.task_late.first_ms, stats.task_late.last_ms);
+    }
     log_ft8_event("write timeout", stats.write_timeout);
     log_ft8_event("write failed", stats.write_failed);
     log_ft8_event("ISO failed", stats.iso_failed);
@@ -878,7 +881,7 @@ static void tx_audio_task(void *arg)
                 const unsigned gap_us = (unsigned)(now - last_write_us);
                 portENTER_CRITICAL(&s_ft8_stats_mux);
                 if (gap_us > s_ft8_stats.max_task_gap_us) s_ft8_stats.max_task_gap_us = gap_us;
-                if (gap_us > TX_BLOCK_MS * 1000) {
+                if (gap_us > USB_FT8_LATE_GAP_US) {
                     ft8_record(&s_ft8_stats.task_late, 1, (int)((now - s_ft8_start_us) / 1000));
                 }
                 const bool lost_audio = s_ft8_stats.queue_empty.count || s_ft8_stats.iso_failed.count ||

@@ -16,6 +16,7 @@
 #include "tx_tone.h"
 
 #define USB_AUDIO_TX_RING_BYTES (16 * 1024)
+#define USB_FT8_LATE_GAP_US 20000U
 
 #ifdef __cplusplus
 extern "C" {
