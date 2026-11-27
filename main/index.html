@@ -106,6 +106,8 @@
     justify-content: center;
     text-decoration: none;
   }
+  .step-group { color: var(--text-muted); margin-left: .3rem; }
+  #uiPrefsFeedback { font-size: .75rem; }
   #catRecoveryStatus { color: var(--text-muted); font-size: .75rem; }
   .pwr-btn.running {
     background: linear-gradient(180deg, #059669 0%, #047857 100%);
@@ -1036,6 +1038,7 @@
     </div>
     <span id="catCommandError" role="status" hidden></span>
     <span id="catRecoveryStatus" role="status" hidden></span>
+    <span id="uiPrefsFeedback" role="status" hidden></span>
     <div class="header-controls">
       <div class="led-group">
         <div class="led-item"><div class="led" id="ledCat"></div>CAT</div>
@@ -1046,6 +1049,7 @@
       <button class="rig-off-btn" id="btnRigOff" title="Turn the radio power OFF (CAT: PS0;)">RIG OFF</button>
       <button class="pwr-btn" id="btnPlay">POWER / PLAY</button>
       <a class="pwr-btn" href="/status" target="_blank" rel="noopener">STATUS</a>
+      <button type="button" class="pwr-btn" id="resetUiPrefs">Reset UI settings</button>
     </div>
   </div>
 
@@ -1118,7 +1122,7 @@
       </div>
 
       <!-- Step Selection -->
-      <div class="button-group-label">STEP:</div>
+      <div class="button-group-label">STEP <span class="step-group" id="stepGroupMain"></span></div>
       <div class="step-grid" id="stepBtnsMain">
         <button type="button" class="rig-btn" data-step="10">10Hz</button>
         <button type="button" class="rig-btn" data-step="100">100Hz</button>
@@ -1444,7 +1448,7 @@
       </div>
 
       <!-- Step Selection -->
-      <div class="button-group-label">STEP:</div>
+      <div class="button-group-label">STEP <span class="step-group" id="stepGroupSub"></span></div>
       <div class="step-grid" id="stepBtnsSub">
         <button type="button" class="rig-btn" data-step="10">10Hz</button>
         <button type="button" class="rig-btn" data-step="100">100Hz</button>
@@ -1610,6 +1614,11 @@
 let rebooting = false;
 let devicePoll = Promise.resolve();
 let txNetworkQuiet = false;
+const uiPrefValues = Object.create(null);
+const uiPrefPending = Object.create(null);
+let uiPrefsReady = false, uiPrefsResetting = false, uiPrefsApplying = false;
+let uiPrefsTimer = null, uiPrefsWrite = null;
+
 
 function pollDeviceJson(uri) {
   const request = devicePoll.then(async () => {
@@ -1907,9 +1916,8 @@ const ACC_REFINE = 0.25;               // share of each new frame in the average
 const accState = { row: null, lastMs: 0, refined: new Float32Array(ACC_POINTS), floor: 0, range: 60, pending: [],
                     note: '', hoverX: null, ctrl: null, frames: 0 };
 const wfSourceSel = document.getElementById('wfSource');
-try { const v = localStorage.getItem('ftx1.wfSource'); if (v) wfSourceSel.value = v; } catch (e) {}
 wfSourceSel.addEventListener('change', () => {
-  try { localStorage.setItem('ftx1.wfSource', wfSourceSel.value); } catch (e) {}
+  queueUiPref('wfSource', wfSourceSel.value);
   accManage();
 });
 
@@ -2042,20 +2050,18 @@ function makeScope(name, idx) {
 
   // Waterfall baseline: analyser levels (0-255) at or below this are drawn black; the rest is
   // stretched over the full colour range. Only the waterfall uses it, the spectrum trace does not.
-  const WF_BASE_KEY = 'wf_base_v1_' + name;
   const baseSlider = document.getElementById('wfBase' + name);
   const baseVal = document.getElementById('wfBaseVal' + name);
   let wfBase = 0;
-  try {
-    const saved = parseInt(localStorage.getItem(WF_BASE_KEY), 10);
-    if (saved >= 0 && saved <= 200) wfBase = saved;
-  } catch (e) {}
-  baseSlider.value = wfBase;
-  baseVal.textContent = wfBase;
+  sc.setBase = function (value) {
+    wfBase = value;
+    baseSlider.value = value;
+    baseVal.textContent = value;
+  };
   baseSlider.addEventListener('input', () => {
-    wfBase = Math.min(200, Math.max(0, parseInt(baseSlider.value, 10) || 0));
-    baseVal.textContent = wfBase;
-    try { localStorage.setItem(WF_BASE_KEY, String(wfBase)); } catch (e) {}
+    const value = baseSlider.valueAsNumber;
+    sc.setBase(value);
+    queueUiPref('wfBase' + name, value);
   });
 
   const btns = document.querySelectorAll('.scope-spans[data-scope="' + name + '"] .scope-span-btn[data-span]');
@@ -2064,7 +2070,11 @@ function makeScope(name, idx) {
     btns.forEach(b => b.classList.toggle('active', parseInt(b.dataset.span, 10) === hz));
   };
   btns.forEach(btn => {
-    btn.addEventListener('click', () => sc.setSpan(parseInt(btn.dataset.span, 10)));
+    btn.addEventListener('click', () => {
+      const span = Number(btn.dataset.span);
+      sc.setSpan(span);
+      queueUiPref('span' + name, span);
+    });
   });
 
   sc.clearWaterfall = function () {
@@ -3025,8 +3035,7 @@ let lastUserChangeSub = 0;
 let isUserEditingMain = false;
 let isUserEditingSub = false;
 
-let stepMain = 1000;
-let stepSub = 1000;
+
 // REC: keeps the last REC_SECONDS of each receiver's audio (after the L/R correction)
 // and saves it as a mono 16-bit WAV on demand.
 const REC_SECONDS = 30;
@@ -3113,29 +3122,50 @@ function followModeSpan() {
     const mode = badge.textContent;
     if (mode === scopes[i].lastMode) return;
     scopes[i].lastMode = mode;
-    scopes[i].setSpan(defaultSpanForMode(mode));
+    const key = i ? 'spanSub' : 'spanMain';
+    scopes[i].setSpan(uiPrefValues[key] ?? defaultSpanForMode(mode));
   });
 }
 
-function getStep(sub) {
-  return sub ? stepSub : stepMain;
+const PREF_STEP_VALUES = [10, 100, 500, 1000, 5000, 10000, 12500, 20000, 25000, 100000, 1000000];
+const STEP_DEFAULT = { CW: 10, SSB: 100, DATA: 100, AM: 1000, FM: 12500 };
+
+function stepGroup(mode) {
+  if (/^CW(?:-|$)/.test(mode)) return 'CW';
+  if (/^(?:FM(?:-|$)|DATA-FM(?:-|$)|C4FM(?:-|$))/.test(mode)) return 'FM';
+  if (/^(?:DATA(?:-|$)|RTTY(?:-|$)|PSK(?:-|$))/.test(mode)) return 'DATA';
+  if (/^AM(?:-|$)/.test(mode)) return 'AM';
+  return 'SSB';
 }
 
-function initStepButtons(sub, containerId) {
-  const container = document.getElementById(containerId);
-  const btns = container.querySelectorAll('.rig-btn');
-  btns.forEach((btn) => {
+function getStep(sub, mode = (sub ? modeBadgeSub : modeBadgeMain).textContent) {
+  const group = stepGroup(mode);
+  return uiPrefValues['step' + (sub ? 'Sub' : 'Main') + group] ?? STEP_DEFAULT[group];
+}
+
+function refreshStep(sub, mode = (sub ? modeBadgeSub : modeBadgeMain).textContent) {
+  const side = sub ? 'Sub' : 'Main';
+  const group = stepGroup(mode);
+  document.getElementById('stepGroup' + side).textContent = group;
+  const value = getStep(sub, mode);
+  document.querySelectorAll('#stepBtns' + side + ' [data-step]').forEach(btn => {
+    btn.classList.toggle('active', Number(btn.dataset.step) === value);
+  });
+}
+
+function initStepButtons(sub) {
+  const side = sub ? 'Sub' : 'Main';
+  document.querySelectorAll('#stepBtns' + side + ' [data-step]').forEach(btn => {
     btn.addEventListener('click', () => {
-      btns.forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      const val = parseInt(btn.dataset.step, 10);
-      if (sub) stepSub = val;
-      else stepMain = val;
+      const mode = (sub ? modeBadgeSub : modeBadgeMain).textContent;
+      queueUiPref('step' + side + stepGroup(mode), Number(btn.dataset.step));
+      refreshStep(sub);
     });
   });
+  refreshStep(sub);
 }
-initStepButtons(false, 'stepBtnsMain');
-initStepButtons(true, 'stepBtnsSub');
+initStepButtons(false);
+initStepButtons(true);
 
 function formatFreq(hz) {
   if (!hz || hz <= 0) return '  --.---.---';
@@ -3323,6 +3353,7 @@ async function stepFreq(sub, delta) {
 }
 
 function updateModeButtons(sub, mode) {
+  refreshStep(sub, mode);
   const containerId = sub ? 'modeBtnsSub' : 'modeBtnsMain';
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -3792,7 +3823,6 @@ document.getElementById('btnCopyBtoA').addEventListener('click', () => {
 });
 
 // VFO Display Font Persistence & Selector
-const VFO_FONT_KEY = 'vfo_font_style_v1';
 const vfoFontSelect = document.getElementById('vfoFontSelect');
 const vfdBezelMain = document.getElementById('vfdBezelMain');
 const vfdBezelSub = document.getElementById('vfdBezelSub');
@@ -3808,20 +3838,12 @@ function applyVfoFont(fontClass) {
   if (vfoFontSelect) vfoFontSelect.value = targetClass;
 }
 
-try {
-  const sf = localStorage.getItem(VFO_FONT_KEY);
-  applyVfoFont(sf || 'font-chakra');
-} catch (e) {
-  applyVfoFont('font-chakra');
-}
-
-if (vfoFontSelect) {
-  vfoFontSelect.addEventListener('change', () => {
-    const selected = vfoFontSelect.value;
-    applyVfoFont(selected);
-    try { localStorage.setItem(VFO_FONT_KEY, selected); } catch (e) {}
-  });
-}
+applyVfoFont('font-chakra');
+vfoFontSelect.addEventListener('change', () => {
+  const selected = vfoFontSelect.value;
+  applyVfoFont(selected);
+  queueUiPref('font', selected);
+});
 
 modeSelectMain.addEventListener('change', () => setMode(false, modeSelectMain.value));
 modeSelectSub.addEventListener('change', () => setMode(true, modeSelectSub.value));
@@ -4373,11 +4395,7 @@ function applyRigProfile(d) {
   document.getElementById('cardTitleSub').textContent = single ? 'VFO-B' : 'SUB VFO-B';
   const subMeter = smHost.children[1];
   if (subMeter) subMeter.style.display = single ? 'none' : '';
-  if (single) {
-    // No SUB receiver: its decoder would only decode the MAIN audio again under the VFO-B frequency
-    const f = ft8Chans[1];
-    if (f.enabled) f.enableBtn.click();
-  }
+  setFt8Decoder(ft8Chans[1], !single && uiPrefValues.decoderSub === true);
 
   // Modes and bands the radio does not have
   document.querySelectorAll('[data-mode^="C4FM"], option[value^="C4FM"]').forEach((el) => {
@@ -4547,12 +4565,7 @@ const FT8_PERIOD_SEC = 15;
 const FT8_SLOT_SAMPLES = FT8_SAMPLE_RATE * FT8_PERIOD_SEC; // 96,000 samples @ 6.4kHz
 
 // DT correction: the audio's delay on its way here, subtracted from the DT shown (not from decoding)
-const FT8_DTCORR_KEY = 'ftx1.ft8DtCorr';
 const ft8DtCorrInput = document.getElementById('ft8DtCorr');
-try { const v = localStorage.getItem(FT8_DTCORR_KEY); if (v !== null && v !== '' && isFinite(+v)) ft8DtCorrInput.value = v; } catch (e) {}
-ft8DtCorrInput.addEventListener('change', () => {
-  try { localStorage.setItem(FT8_DTCORR_KEY, ft8DtCorrInput.value); } catch (e) {}
-});
 function ft8DtCorrection() {
   const v = parseFloat(ft8DtCorrInput.value);
   return isFinite(v) ? Math.max(-1, Math.min(2, v)) : 0;
@@ -4577,9 +4590,8 @@ const ft8Chans = ['Main', 'Sub'].map((name, idx) => {
     emptyRow: document.getElementById('ft8EmptyRow' + name)
   };
   f.enableBtn.addEventListener('click', () => {
-    f.enabled = !f.enabled;
-    f.enableBtn.classList.toggle('active', f.enabled);
-    f.enableBtn.textContent = f.enabled ? 'DECODER ON' : 'DECODER OFF';
+    setFt8Decoder(f, !f.enabled);
+    queueUiPref('decoder' + name, f.enabled);
     if (f.enabled) openFt8Map(); // must run inside the click handler or popup blockers reject it
   });
   f.clearBtn.addEventListener('click', () => {
@@ -4588,6 +4600,12 @@ const ft8Chans = ['Main', 'Sub'].map((name, idx) => {
   });
   return f;
 });
+
+function setFt8Decoder(f, enabled) {
+  f.enabled = enabled;
+  f.enableBtn.classList.toggle('active', enabled);
+  f.enableBtn.textContent = enabled ? 'DECODER ON' : 'DECODER OFF';
+}
 
 // Low-pass filtered decimation audio feeder (any input rate -> 6400Hz)
 function ft8FeedAudio(f, samples, inRate) {
@@ -4721,6 +4739,188 @@ function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
 
   ft8PublishSpot(f, msg, db, dial);
 }
+
+// Serve shared choices from the board. Send only edited fields so two clients
+// cannot overwrite each other's unrelated choices with old page state.
+const uiPrefsFields = Object.create(null);
+const uiPrefsFeedback = document.getElementById('uiPrefsFeedback');
+const resetUiPrefs = document.getElementById('resetUiPrefs');
+const wfSourceLegacy = 'ftx1.wfSource';
+const intRange = (min, max) => value => Number.isInteger(value) && value >= min && value <= max;
+const oneOf = choices => value => choices.includes(value);
+
+function bindUiPref(name, element, valid, {event = 'change', read = () => element.value,
+                     apply = value => { element.value = value; }} = {}) {
+  uiPrefsFields[name] = {valid, apply};
+  element.addEventListener(event, () => queueUiPref(name, read()));
+}
+
+for (const [side, idx] of [['Main', 0], ['Sub', 1]]) {
+  for (const group of Object.keys(STEP_DEFAULT)) {
+    uiPrefsFields['step' + side + group] = {
+      valid: oneOf(PREF_STEP_VALUES),
+      apply: () => refreshStep(idx === 1)
+    };
+  }
+  uiPrefsFields['span' + side] = {
+    valid: oneOf([1000, 3500, 6000]), apply: value => scopes[idx].setSpan(value)
+  };
+  uiPrefsFields['wfBase' + side] = {
+    valid: intRange(0, 200), apply: value => scopes[idx].setBase(value)
+  };
+  uiPrefsFields['decoder' + side] = {
+    valid: value => typeof value === 'boolean',
+    apply: value => setFt8Decoder(ft8Chans[idx], value && (!idx ||
+      (!!rigProfileKey && !document.body.classList.contains('single-rx'))))
+  };
+}
+
+function numericPref(name, input, min, max, event = 'change', update = false) {
+  bindUiPref(name, input, intRange(min, max), {
+    event,
+    read: () => input.valueAsNumber,
+    apply: value => {
+      input.value = value;
+      if (update) input.dispatchEvent(new Event('input'));
+    }
+  });
+}
+
+bindUiPref('txTone', txTone, oneOf(['off', 'single', 'dual', 'voice']), {
+  apply: value => { txTone.value = value; updateTxControls(); }
+});
+numericPref('txLevel', txLevel, -60, -6, 'input');
+numericPref('micGain', micGain, -36, 0, 'input', true);
+numericPref('ft8Hz', ft8Tx.Hz, 200, 3000, 'input');
+numericPref('ft8Level', ft8Tx.Level, -60, -6, 'input', true);
+bindUiPref('ft8Slot', ft8Tx.Slot, oneOf(['even', 'odd']));
+bindUiPref('ft8Call', ft8Tx.Call, value => typeof value === 'string' && /^[A-Z0-9/]{0,11}$/.test(value), {
+  event: 'input', read: () => ft8Tx.Call.value.trim().toUpperCase()
+});
+bindUiPref('ft8Grid', ft8Tx.Grid, value => typeof value === 'string' && /^(?:[A-R]{2}[0-9]{2})?$/.test(value), {
+  event: 'input', read: () => ft8Tx.Grid.value.trim().toUpperCase()
+});
+bindUiPref('dtCorrTenths', ft8DtCorrInput, intRange(-10, 20), {
+  event: 'input', read: () => ft8DtCorrInput.validity.valid ? Math.round(ft8DtCorrInput.valueAsNumber * 10) : NaN,
+  apply: value => { ft8DtCorrInput.value = (value / 10).toFixed(1); }
+});
+uiPrefsFields.wfSource = {
+  valid: oneOf(['auto', 'audio', 'acc']),
+  apply: value => { wfSourceSel.value = value; accManage(); }
+};
+uiPrefsFields.font = {valid: oneOf(FONT_CLASSES), apply: applyVfoFont};
+
+function uiPrefsMessage(message) {
+  uiPrefsFeedback.textContent = message;
+  uiPrefsFeedback.hidden = !message;
+}
+
+function queueUiPref(name, value) {
+  if (uiPrefsApplying || uiPrefsResetting || !uiPrefsFields[name]?.valid(value)) return;
+  if (uiPrefValues[name] === value) return;
+  uiPrefValues[name] = value;
+  uiPrefPending[name] = value;
+  scheduleUiPrefs();
+}
+
+function scheduleUiPrefs(delay = 1000) {
+  clearTimeout(uiPrefsTimer);
+  uiPrefsTimer = setTimeout(flushUiPrefs, delay);
+}
+
+async function postUiPrefs(body) {
+  const res = await fetch('/prefs', { method: 'POST', headers: CAT_POST_HEADERS,
+    body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+}
+
+function flushUiPrefs() {
+  if (uiPrefsResetting || uiPrefsWrite || !Object.keys(uiPrefPending).length) return;
+  if (!uiPrefsReady || txNetworkQuiet || rebooting) {
+    scheduleUiPrefs();
+    return;
+  }
+  const patch = { ...uiPrefPending };
+  Object.keys(patch).forEach(key => delete uiPrefPending[key]);
+  let delay = 1000;
+  uiPrefsWrite = postUiPrefs(patch).then(() => {
+    if (Object.hasOwn(patch, 'wfSource')) {
+      try { localStorage.removeItem(wfSourceLegacy); } catch (e) {}
+    }
+    if (!uiPrefsResetting) uiPrefsMessage('');
+  }).catch(() => {
+    for (const [key, value] of Object.entries(patch)) {
+      if (!Object.hasOwn(uiPrefPending, key)) uiPrefPending[key] = value;
+    }
+    delay = 5000;
+    if (!uiPrefsResetting) uiPrefsMessage('UI settings not saved · retrying');
+  }).finally(() => {
+    uiPrefsWrite = null;
+    if (!uiPrefsResetting && Object.keys(uiPrefPending).length) scheduleUiPrefs(delay);
+  });
+}
+
+async function loadUiPrefs() {
+  if (uiPrefsResetting) return;
+  try {
+    const saved = await pollDeviceJson('/prefs');
+    if (!saved || uiPrefsResetting) {
+      if (!uiPrefsResetting) setTimeout(loadUiPrefs, 1000);
+      return;
+    }
+    uiPrefsApplying = true;
+    try {
+      for (const [key, value] of Object.entries(saved)) {
+        const field = uiPrefsFields[key];
+        if (!field?.valid(value) || Object.hasOwn(uiPrefPending, key)) continue;
+        uiPrefValues[key] = value;
+        field.apply(value);
+      }
+    } finally { uiPrefsApplying = false; }
+    uiPrefsReady = true;
+    if (uiPrefsFields.wfSource.valid(saved.wfSource)) {
+      try { localStorage.removeItem(wfSourceLegacy); } catch (e) {}
+    } else if (!Object.hasOwn(uiPrefPending, 'wfSource')) {
+      let legacy;
+      try { legacy = localStorage.getItem(wfSourceLegacy); } catch (e) {}
+      if (uiPrefsFields.wfSource.valid(legacy)) {
+        uiPrefsFields.wfSource.apply(legacy);
+        queueUiPref('wfSource', legacy);
+      }
+    }
+    if (Object.keys(uiPrefPending).length) scheduleUiPrefs();
+    uiPrefsMessage('');
+  } catch (e) {
+    uiPrefsMessage('UI settings unavailable · retrying');
+    setTimeout(loadUiPrefs, 5000);
+  }
+}
+
+resetUiPrefs.addEventListener('click', async () => {
+  if (uiPrefsResetting || rebooting) return;
+  if (txNetworkQuiet) {
+    uiPrefsMessage('Stop TX before resetting UI settings');
+    return;
+  }
+  uiPrefsResetting = resetUiPrefs.disabled = true;
+  clearTimeout(uiPrefsTimer);
+  try {
+    await uiPrefsWrite;
+    if (txNetworkQuiet || rebooting) throw new Error('TX active');
+    await postUiPrefs({reset: true});
+    const keys = [...SPEAKER_VOL_KEYS, STREAM_RATE_KEY, 'ftx1.latency', 'ftx1.catLogPolls',
+      wfSourceLegacy, 'wf_base_v1_Main', 'wf_base_v1_Sub', 'vfo_font_style_v1', 'ftx1.ft8DtCorr'];
+    try { keys.forEach(key => localStorage.removeItem(key)); } catch (e) {}
+    location.reload();
+  } catch (e) {
+    uiPrefsResetting = resetUiPrefs.disabled = false;
+    uiPrefsMessage('Could not reset UI settings');
+    if (!uiPrefsReady) loadUiPrefs();
+    if (Object.keys(uiPrefPending).length) scheduleUiPrefs();
+  }
+});
+
+loadUiPrefs();
 
 // ---- Firmware build time (shown in the rig header) ----
 pollDeviceJson('/status')
