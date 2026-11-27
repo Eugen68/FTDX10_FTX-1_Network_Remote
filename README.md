@@ -473,7 +473,10 @@ Program → OmniRig (FTDX10 or FTX-1 profile) → COM10 (virtual) → Wi-Fi → 
    IPv4 address and port `4533`. com0com with hub4com works as well.
 3. In **OmniRig**, set Rig 1 to the radio's profile (FTDX10 or FTX-1) on **COM10**. The baud rate
    setting is not used on a virtual port, but choose one (for example 38400). Set **DTR** and
-   **RTS** to **Low** and the polling interval to 500 ms or more.
+   **RTS** to **Low**, **Poll interval 1000 ms** and **Timeout 4000 ms**. With the default 500 ms,
+   a cycle of eight commands through the virtual COM port and Wi-Fi does not always fit, and
+   OmniRig (and CW Skimmer) flip between on-line and off-line. Set this on every rig in OmniRig
+   that uses the board.
 4. Point the programs at OmniRig Rig 1. Several programs can share it, for example **SDRuno**
    following the radio's frequency and **CW Skimmer** reading it and sending click-to-QSY.
 
