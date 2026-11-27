@@ -620,6 +620,7 @@ Due to Wi-Fi transmission and browser audio buffering, an unavoidable transmissi
 
 - **Absorption by DT (Time Offset) search**: The FT8 protocol is inherently designed to tolerate propagation delays and clock skews between stations. The decoder searches for timing offsets (DT) during sync detection (Costas array search). The network latency is naturally absorbed as a positive shift in DT (typically +0.1s to +0.4s) and does not affect decoding success.
 - **Adjusted decode trigger timing (14.0s)**: In a standard 15-second FT8 slot, transmission takes place between 0.5s and 13.14s (for DT=0). To accommodate transmission delay and buffering of late-arriving symbols, the decoder snapshots 15.0 seconds of audio and triggers the Web Worker at **14.0s** into the cycle rather than the 15.0s slot boundary. This ensures trailing symbols are not cut off.
+- **DT corr and its median**: the **DT corr** field next to the decoder buttons is subtracted from every DT shown, so DTs read as in WSJT-X. Beside it, **med** shows the median raw DT of the stations decoded on MAIN and SUB in the last four slots, and how many (at least five are needed). **APPLY** copies it, rounded to 0.1 s, into DT corr; nothing is applied on its own. It only changes the DTs shown, not decoding or transmit timing.
 - **Waveform continuity**: Network jitter in packet arrival does not alter the sample rate timing; audio is placed into the continuous ring buffer at fixed sample rates (48 kHz / 6.4 kHz), preserving the exact relative phase and timing across symbols.
 
 ### FT8 world map
