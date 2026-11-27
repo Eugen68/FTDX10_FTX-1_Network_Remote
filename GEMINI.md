@@ -44,3 +44,21 @@ the FTDX10 ACC scope (`main/acc_frame.c`). Read `README.md` before changing beha
 
 Open it with `gh pr create --base main`. In the description: what changed, why, which files,
 which checks you ran and their result, and how to test it on the radio.
+
+## Test firmware for the owner
+
+After a PR builds, make a test firmware: `tools/make_test_zip.sh <next version>` (current version:
+see `FTX1_VERSION` in `main/build_info.h`; use the next patch number). It produces
+`dist/fw-<version>.zip` with `network_remote_ota.bin`, `ota_data_initial.bin` and
+`tools/scrie_firmware.bat`. The owner flashes it on Windows with option 1 (settings kept) and
+tests on the radio. Merge only after the owner confirms.
+
+## Where the work stands
+
+- Transmit plan and its phases: `docs/tx-plan.md`. Phases 0–4 are done (PTT, tones, voice, FT8
+  transmit). Also done: Hamlib rigctld (Log4OM), Yaesu CAT over TCP for OmniRig (SDRuno,
+  CW Skimmer), ACC scope in split with the TX marker, FT8 median DT beside DT corr.
+- Phase 5, next, one small PR each: (a) ADIF log of completed FT8 QSOs, stored on the board and
+  downloadable from the page; (b) logged QSO sent to Log4OM over UDP, as WSJT-X does;
+  (c) assisted FT8 QSO sequence, every transmission still armed by the operator.
+- The owner (YO9VA) writes in Romanian: answer in Romanian.
