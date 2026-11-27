@@ -4294,7 +4294,9 @@ ft8Log.Save.addEventListener('click', async () => {
     ft8Log.Save.disabled = false;
   }
 });
-ft8LogStats();
+// Not at page load: the page already opens several HTTPS connections then, and each TLS handshake
+// takes internal RAM on the board. The count can wait a few seconds.
+setTimeout(ft8LogStats, 8000);
 
 function updateTxControls() {
   const voice = txTone.value === 'voice';
