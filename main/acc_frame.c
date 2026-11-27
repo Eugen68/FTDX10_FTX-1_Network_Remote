@@ -36,9 +36,23 @@ acc_reject_t acc_parse_frame(const uint8_t *f, size_t len, uint32_t cat_hz, int6
             return ACC_REJ_NOT_FTDX10;
         }
     }
-    const uint32_t vfo = be32(f + 3038);
-    if (vfo != be32(f + 3042)) {
-        return ACC_REJ_VFO_COPIES;
+    uint32_t vfo = be32(f + 3038);
+    const uint32_t copy = be32(f + 3042);
+    if (vfo != copy) {
+        // In split the two fields hold different VFOs. Without CAT the bytes cannot be trusted.
+        // With CAT, keep the field closest to MAIN (VFO-A) if it agrees, and the other must be valid.
+        if (cat_hz == 0) {
+            return ACC_REJ_VFO_COPIES;
+        }
+        const uint32_t d_vfo = (vfo > cat_hz) ? vfo - cat_hz : cat_hz - vfo;
+        const uint32_t d_copy = (copy > cat_hz) ? copy - cat_hz : cat_hz - copy;
+        const uint32_t other = d_copy < d_vfo ? vfo : copy;
+        if (d_copy < d_vfo) {
+            vfo = copy;
+        }
+        if ((d_copy < d_vfo ? d_copy : d_vfo) > CAT_MATCH_HZ || other < 30000 || other > 75000000) {
+            return ACC_REJ_VFO_COPIES;
+        }
     }
     if (vfo < 30000 || vfo > 75000000) {
         return ACC_REJ_VFO_RANGE;
