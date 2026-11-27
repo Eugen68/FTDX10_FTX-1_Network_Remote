@@ -395,7 +395,7 @@ Enter Host name without ".local" [Current: trx-remote] (a-z, 0-9, '-'; DEFAULT t
 
 Below the notch, each receiver has a **FRONT END** row read from the radio every 5 s and after each change:
 
-- **AMP**: IPO / AMP1 / AMP2. On the FTX-1 the pre-amp is set per band, so the choices follow that receiver's frequency: IPO / AMP1 / AMP2 on HF and 50 MHz, OFF / ON on VHF and on UHF.
+- **AMP** (MAIN only): IPO / AMP1 / AMP2. On the FTX-1 the CAT pre-amp command is per band and follows MAIN's frequency: IPO / AMP1 / AMP2 on HF and 50 MHz, OFF / ON on VHF and on UHF. The FTX-1 keeps a separate IPO for SUB, but CAT reaches only MAIN's, so set SUB's on the radio.
 - **ATT** (MAIN only): OFF / 6 / 12 / 18 dB on the FTDX10, OFF / ON on the FTX-1.
 - **RF GAIN**: 0–255.
 - **AGC**: OFF / FAST / MID / SLOW / AUTO. In AUTO the radio reports which speed it chose (AUTO-FAST / -MID / -SLOW).

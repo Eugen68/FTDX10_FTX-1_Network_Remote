@@ -1528,10 +1528,6 @@
       <div class="button-group-label dual-rx-only fe-only">FRONT END (CAT):</div>
       <div class="analog-knobs-row dual-rx-only fe-only">
         <div class="mini-knob-box">
-          <div class="mini-knob-label">AMP</div>
-          <select class="fe-select" id="feAmpSub" aria-label="SUB pre-amp / IPO"></select>
-        </div>
-        <div class="mini-knob-box">
           <div class="mini-knob-label">RF GAIN</div>
           <svg class="mini-knob-svg" id="knobRfgSub" viewBox="0 0 60 60" role="slider" aria-label="SUB RF GAIN"></svg>
           <div class="mini-knob-val" id="valRfgSub">--</div>
@@ -3685,11 +3681,12 @@ const knobVolSub = makeMiniKnob('knobVolSub', 'valVolSub', true, 'vol', (v) => q
 const knobSqSub = makeMiniKnob('knobSqSub', 'valSqSub', true, 'sq', (v) => queueKnobSend(true, 'sq', v));
 
 // ---- Front end (CAT PA / RA / RG / GT): pre-amp, attenuator, RF gain, AGC ----
-// FTDX10: one receiver, IPO/AMP1/AMP2 and ATT 6/12/18 dB. FTX-1: RF gain and AGC per receiver, the pre-amp
-// per band (HF/50: IPO/AMP1/AMP2, VHF and UHF: OFF/ON, chosen from that receiver's frequency), ATT ON/OFF.
+// FTDX10: one receiver, IPO/AMP1/AMP2 and ATT 6/12/18 dB. FTX-1: RF gain and AGC per receiver, ATT ON/OFF, and
+// the pre-amp per band (HF/50: IPO/AMP1/AMP2, VHF and UHF: OFF/ON, chosen from MAIN's frequency). The FTX-1
+// keeps a separate IPO for SUB, but CAT "PA" reaches MAIN only (tested on the radio), so SUB has no AMP here.
 const fe = {bands: 0, attMax: 0, last: {}};
 const feEls = {
-  ampMain: document.getElementById('feAmpMain'), ampSub: document.getElementById('feAmpSub'),
+  ampMain: document.getElementById('feAmpMain'),
   att: document.getElementById('feAttMain'),
   agcMain: document.getElementById('feAgcMain'), agcSub: document.getElementById('feAgcSub'),
 };
@@ -3723,12 +3720,10 @@ function feApply(d) {
   fe.attMax = Number.isInteger(d.att_max) ? d.att_max : 0;
   document.body.classList.toggle('has-fe', fe.bands > 0);
   if (!fe.bands) return;
-  [['ampMain', d.freq_main], ['ampSub', d.freq_sub]].forEach(([k, hz]) => {
-    const band = feBandOf(hz);
-    feEls[k].dataset.band = band;
-    feFill(feEls[k], band === 0 ? ['IPO', 'AMP1', 'AMP2'] : ['OFF', 'ON']);
-    feShow(feEls[k], k, Array.isArray(d.preamp) ? d.preamp[band] : -1);
-  });
+  const band = feBandOf(d.freq_main);
+  feEls.ampMain.dataset.band = band;
+  feFill(feEls.ampMain, band === 0 ? ['IPO', 'AMP1', 'AMP2'] : ['OFF', 'ON']);
+  feShow(feEls.ampMain, 'ampMain', Array.isArray(d.preamp) ? d.preamp[band] : -1);
   feFill(feEls.att, fe.attMax >= 3 ? ['OFF', '6 dB', '12 dB', '18 dB'] : ['OFF', 'ON']);
   feShow(feEls.att, 'att', d.att);
   [['agcMain', 0], ['agcSub', 1]].forEach(([k, i]) => {
@@ -3745,7 +3740,6 @@ function feApply(d) {
 }
 
 feEls.ampMain.addEventListener('change', () => feSend('ampMain', false));
-feEls.ampSub.addEventListener('change', () => feSend('ampSub', true));
 feEls.att.addEventListener('change', () => feSend('att', false));
 feEls.agcMain.addEventListener('change', () => feSend('agcMain', false));
 feEls.agcSub.addEventListener('change', () => feSend('agcSub', true));
@@ -3755,10 +3749,9 @@ function feSend(key, sub) {
   const v = Number(sel.value);
   fe.last[key] = Date.now();
   if (key.startsWith('amp')) {
-    // The pre-amp is set per band on the FTX-1; pa_band is left out on the FTDX10.
+    // The pre-amp is set per band on the FTX-1 (MAIN's band); pa_band is left out on the FTDX10.
     const band = Number(sel.dataset.band) || 0;
-    sendCatCommand(fe.bands > 1 ? { target: sub ? 'sub' : 'main', preamp: v, pa_band: band }
-                                : { target: 'main', preamp: v });
+    sendCatCommand(fe.bands > 1 ? { target: 'main', preamp: v, pa_band: band } : { target: 'main', preamp: v });
   } else if (key === 'att') {
     sendCatCommand({ target: 'main', att: v });
   } else {
