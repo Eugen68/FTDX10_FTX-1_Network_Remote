@@ -30,6 +30,20 @@ int64_t g_write_duration_us;
 esp_err_t g_write_result;
 
 static bool tx_enabled, tx_password;
+static bool mock_allow_reset = true;
+static unsigned mock_resets;
+void cat_cdc_probe_begin(void) {}
+cat_cdc_probe_t cat_cdc_probe_end(void) { return (cat_cdc_probe_t){0}; }
+bool usb_audio_recover_cat(unsigned attempt)
+{
+    assert(attempt == atomic_load(&s_cat_recoveries) + 1);
+    if (!mock_allow_reset) return false;
+    ++mock_resets;
+    cat_usb_reset_begin();
+    g_now_us += 500000;
+    cat_usb_reset_end();
+    return true;
+}
 bool app_config_rigctl_enabled(void) { return false; }
 bool app_config_tx_enabled(void) { return tx_enabled && tx_password; }
 
@@ -44,6 +58,8 @@ static void use(const char *id) {
 
 static const char *startup_ai = "AI0;";
 static bool reject_notch;
+static bool fail_ai_write;
+static bool reject_tx_read;
 
 static void inject(const char *reply)
 {
@@ -63,10 +79,15 @@ static void startup_reply(const char *cmd, size_t len)
         {"BP10;", "BP10000;"}, {"BP11;", "BP11150;"}, {"FT;", "FT0;"},
     };
     assert(memchr(cmd, ';', len) == cmd + len - 1);
+    g_write_result = ESP_OK;
     if (len == 3 && memcmp(cmd, "ID;", len) == 0) {
         inject("IDABCD;ID123;FA007130000;ID0840;");
     } else if (len == 3 && memcmp(cmd, "AI;", len) == 0) {
-        inject(startup_ai);
+        if (fail_ai_write) g_write_result = ESP_ERR_TIMEOUT;
+        else if (startup_ai) inject(startup_ai);
+    } else if (reject_tx_read && len == 3 && memcmp(cmd, "TX;", len) == 0) {
+        reject_tx_read = false;
+        inject("?;");
     } else if (reject_notch && len == 5 && memcmp(cmd, "BP00;", len) == 0) {
         inject("?;");
     } else {
@@ -96,6 +117,8 @@ static void test_startup(void)
     s_disconnected = false;
     g_write_result = ESP_OK;
     s_state.tx_cat = false;
+    s_state.tx = false;
+    atomic_store(&s_transition_ms, 0);
     s_unkey_requested = false;
     use(NULL);
     uint32_t rates[5];
@@ -134,10 +157,28 @@ static void test_startup(void)
     initialize_reads((void *)1, s_rig);
     CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;AG1;SQ0;SQ1;RI0;TX;RM0;BP00;BP01;BP10;BP11;FT;AI1;") == 0,
           "FTX-1 reads before first write");
-    CHECK(cat_rejected_commands() == rejected + 1 && poll_rejected("BP00;"), "count and attribute explicit rejection");
+    CHECK(cat_rejected_commands() == rejected + 1 && !poll_rejected("BP00;"),
+          "one explicit rejection does not suppress a read");
     g_sent[0] = '\0';
     send_poll((void *)1, "BP00;BP01;");
-    CHECK(strcmp(g_sent, "BP01;") == 0, "skip only rejected periodic command");
+    CHECK(strcmp(g_sent, "BP00;BP01;") == 0 && !poll_rejected("BP00;"), "retry after two rejections");
+    send_poll((void *)1, "BP00;");
+    CHECK(poll_rejected("BP00;"), "suppress optional read after three rejections");
+    g_sent[0] = '\0';
+    send_poll((void *)1, "BP00;BP01;");
+    CHECK(strcmp(g_sent, "BP01;") == 0, "only skip the suppressed optional command");
+    g_now_us += CAT_REJECT_RETRY_US - 1;
+    CHECK(poll_rejected("BP00;"), "do not retry before cooldown expires");
+    ++g_now_us;
+    CHECK(!poll_rejected("BP00;"), "retry after 60 seconds");
+    send_poll((void *)1, "BP00;");
+    CHECK(poll_rejected("BP00;"), "a rejected retry starts a new cooldown");
+    g_now_us += CAT_REJECT_RETRY_US;
+    reject_notch = false;
+    send_poll((void *)1, "BP00;");
+    reject_notch = true;
+    send_poll((void *)1, "BP00;");
+    CHECK(!poll_rejected("BP00;"), "a successful retry clears the streak");
 
     use("0761");
     s_rejected_count = 0;
@@ -146,6 +187,21 @@ static void test_startup(void)
     g_sent[0] = '\0';
     initialize_reads((void *)1, s_rig);
     CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;") == 0, "FTDX10 leaves AI1 alone");
+    startup_ai = NULL;
+    g_sent[0] = '\0';
+    const int64_t before = g_now_us;
+    initialize_reads((void *)1, s_rig);
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;AI1;") == 0 &&
+          g_now_us - before >= ANSWER_TIMEOUT_MS * 1000, "silent AI enables it after timeout and all reads");
+    startup_ai = "AI2;";
+    g_sent[0] = '\0';
+    initialize_reads((void *)1, s_rig);
+    CHECK(strstr(g_sent, "AI;") && !strstr(g_sent, "AI1;"), "unexpected AI reply is not silence");
+    fail_ai_write = true;
+    g_sent[0] = '\0';
+    initialize_reads((void *)1, s_rig);
+    CHECK(strstr(g_sent, "AI;") && !strstr(g_sent, "AI1;"), "USB write failure is not a radio response timeout");
+    fail_ai_write = false;
     startup_ai = "?;";
     g_sent[0] = '\0';
     initialize_reads((void *)1, s_rig);
@@ -153,10 +209,59 @@ static void test_startup(void)
     g_cdc_send_hook = NULL;
 }
 
+static void test_rejected_tx_read_after_unkey(void)
+{
+    use("0761");
+    tx_enabled = tx_password = true;
+    s_ptt_lock = s_ptt_port = (void *)1;
+    s_ptt_ready = true;
+    atomic_store(&s_link_starting, false);
+    s_disconnected = false;
+    g_cdc_send_hook = startup_reply;
+    s_state.tx_cat = true;
+    inject("TX1;");
+    g_sent[0] = '\0';
+    CHECK(cat_ptt(false) == ESP_OK, "send TX0 normally");
+    const int64_t unkey_at = g_now_us;
+    ++g_now_us;
+    const unsigned rejects = atomic_load(&s_effective_rejects);
+    reject_tx_read = true;
+    send_poll((void *)1, "TX;");
+    CHECK(!poll_rejected("TX;") && atomic_load(&s_effective_rejects) == rejects,
+          "ignore an isolated RX transition rejection");
+    g_now_us += 100000;
+    send_poll((void *)1, "TX;");
+    CHECK(strcmp(g_sent, "TX0;TX;TX;") == 0 && cat_radio_rx_after(unkey_at),
+          "next TX read confirms RX");
+    CHECK(cat_ptt(true) == ESP_OK, "PTT remains available after the rejected read");
+    CHECK(cat_ptt(false) == ESP_OK, "return to RX");
+    tx_enabled = tx_password = false;
+    g_cdc_send_hook = NULL;
+    atomic_store(&s_transition_ms, 0);
+
+    const char *essential[] = {"TX;", "RI0;", "BY;", "RM5;", "RM6;", "FT;",
+                               "MD0;", "MD1;", "FA;", "FB;", "EX010113;"};
+    for (size_t i = 0; i < sizeof essential / sizeof *essential; ++i) {
+        for (int j = 0; j < CAT_REJECT_LIMIT; ++j) update_poll_rejections(essential[i], QUERY_REJECTED, false);
+        CHECK(!poll_rejected(essential[i]), "%s remains eligible after repeated rejection", essential[i]);
+    }
+    s_rejected_count = 0;
+    for (int i = 0; i < CAT_REJECT_LIMIT + 1; ++i) update_poll_rejections("RM4;", QUERY_REJECTED, true);
+    CHECK(!poll_rejected("RM4;"), "transition rejections do not suppress optional reads");
+    CHECK(ok("RM4;") && !ok("RM40;"), "ALC is read only");
+    inject("RM4042000;");
+    const cat_tx_meters_t meters = cat_get_tx_meters();
+    CHECK(meters.alc == 42 && meters.alc_us == g_now_us, "ALC has an independent timestamp");
+    inject("RM4256000;RM4042001;");
+    CHECK(cat_get_tx_meters().alc == 42, "ignore invalid ALC replies");
+}
+
 static unsigned open_attempts[16], open_attempt_count, closes;
 static uint8_t open_addr;
 static uint32_t mock_baud;
+static int64_t baud_changed_us;
 static bool swap_to_ftx1, fail_first_open, suppress_id;
+static unsigned cached_attempts, other_attempts, boot_probes_left;
 
 static esp_err_t swap_open(const cdc_acm_host_open_config_t *config, cdc_acm_dev_hdl_t *out)
 {
@@ -179,22 +284,37 @@ static esp_err_t swap_close(cdc_acm_dev_hdl_t dev)
 static esp_err_t swap_request(cdc_acm_dev_hdl_t dev, uint8_t request, uint16_t length, uint8_t *data)
 {
     assert(open_addr == (uintptr_t)dev);
-    if (request == CP210X_SET_BAUDRATE && length == sizeof(mock_baud)) memcpy(&mock_baud, data, length);
+    if (request == CP210X_SET_BAUDRATE && length == sizeof(mock_baud)) {
+        memcpy(&mock_baud, data, length);
+        baud_changed_us = g_now_us;
+        const uint32_t before = s_rx_bytes;
+        inject("\x7e\x8e");
+        CHECK(s_rx_bytes == before, "early CP210x bytes are ignored after baud change");
+    }
     return ESP_OK;
 }
 
 static void swap_reply(const char *cmd, size_t length)
 {
     assert(cat_usb_ready());
-    if (suppress_id || length != 3 || memcmp(cmd, "ID;", 3) != 0) return;
+    assert(g_now_us - baud_changed_us >= CAT_BAUD_SETTLE_MS * 1000LL);
+    assert(length == 3 && memcmp(cmd, "ID;", 3) == 0);
+    if (mock_baud == s_last_baud) ++cached_attempts;
+    else ++other_attempts;
+    if (suppress_id || boot_probes_left) {
+        if (boot_probes_left) --boot_probes_left;
+        inject("x9;");
+        return;
+    }
     const uint32_t baud = swap_to_ftx1 ? 38400 : 115200;
-    if (mock_baud == baud) inject(swap_to_ftx1 ? "ID0840;" : "ID0761;");
+    if (mock_baud == baud) inject(swap_to_ftx1 ? "?;ID0840;" : "?;ID0761;");
 }
 
 static void test_hot_swap(void)
 {
     s_disconnected = false;
     use(NULL);
+    atomic_store(&s_link_starting, true);
     s_last_baud = 115200;
     g_cdc_open_hook = swap_open;
     g_cdc_close_hook = swap_close;
@@ -212,15 +332,15 @@ static void test_hot_swap(void)
     cdc_acm_dev_hdl_t dev = find_cat_port();
     CHECK(dev && s_rig->rig == CAT_RIG_FTDX10 && s_cat_addr == 2, "FTDX10 at first USB address");
     const unsigned old_session = atomic_load(&s_cat_session);
-    strcpy(s_rejected_polls[0], "FT;");
-    s_rejected_count = 1;
+    for (int i = 0; i < CAT_REJECT_LIMIT; ++i) update_poll_rejections("BP00;", QUERY_REJECTED, false);
+    CHECK(poll_rejected("BP00;"), "optional read is suppressed before hot swap");
     s_split_keyed_polls = true;
 
     usb_removed(2);
     CHECK(s_disconnected && !cat_usb_ready(), "hot removal invalidates the active address immediately");
     close_cat_port(&dev);
     CHECK(!dev && closes == 1 && !open_addr && !s_cat_addr && !s_cat_session, "release the old CDC handle and session");
-    CHECK(!poll_rejected("FT;") && !s_split_keyed_polls, "clear previous radio poll suppression");
+    CHECK(!poll_rejected("BP00;") && !s_split_keyed_polls, "clear previous radio poll suppression");
     CHECK(s_last_baud == 115200, "keep remembered baud as a hint");
 
     swap_to_ftx1 = true;
@@ -234,11 +354,21 @@ static void test_hot_swap(void)
     usb_added(4);
     g_now_us += CAT_SETTLE_US;
     g_sent[0] = '\0';
+    const unsigned cached_before = cached_attempts, other_before = other_attempts;
+    for (int i = 0; i < 5; ++i) {
+        CHECK(!find_cat_port() && !open_addr, "keep trying cached speed before fallback");
+        g_now_us += 1000000;
+    }
+    CHECK(cached_attempts == cached_before + 5 && other_attempts == other_before,
+          "slow-start protection probes no alternate speed during the wait");
+    g_now_us = s_cat_missing_since + CAT_CACHED_ONLY_US - 1;
+    CHECK(cat_cached_only(g_now_us), "use cached speed for the full ten seconds");
+    ++g_now_us;
+    g_sent[0] = '\0';
     dev = find_cat_port();
     CHECK(dev && s_cat_addr == 4 && s_rig->rig == CAT_RIG_FTX1, "find the second FTX-1 CP210x after the first open fails");
-    CHECK(open_attempt_count == 3 && open_attempts[0] == 2 && open_attempts[1] == 2 && open_attempts[2] == 4,
-          "probe both FTX-1 addresses in order");
-    CHECK(s_last_baud == 38400 && strcmp(g_sent, "ID;ID;") == 0, "try old baud once and find the new baud");
+    CHECK(s_last_baud == 38400 && strcmp(g_sent, "ID;ID;") == 0,
+          "probe directly with ID at each speed, then find the new baud");
     const cdc_acm_host_dev_event_data_t delayed = {.type = CDC_ACM_HOST_DEVICE_DISCONNECTED};
     event_cb(&delayed, (void *)(uintptr_t)old_session);
     CHECK(!s_disconnected && s_cat_addr == 4 && cat_usb_ready(), "ignore a disconnect from the old CDC session");
@@ -246,19 +376,94 @@ static void test_hot_swap(void)
     rx_cb((const uint8_t *)stale_rx, sizeof(stale_rx) - 1, (void *)(uintptr_t)old_session);
     CHECK(s_state.freq_main != 99999999, "ignore data callbacks from the old CDC session");
     close_cat_port(&dev);
-    CHECK(!dev && closes == 2 && !open_addr && !s_cat_addr, "close the replacement handle");
+    CHECK(!dev && !open_addr && !s_cat_addr, "close the replacement handle");
 
     fail_first_open = false;
     suppress_id = true;
     use(NULL);
-    CHECK(!find_cat_port() && !open_addr && closes == 4, "release both ports after no ID at any baud");
-    CHECK(open_attempt_count == 5 && open_attempts[3] == 2 && open_attempts[4] == 4,
+    open_attempt_count = 0;
+    const unsigned closes_before = closes;
+    CHECK(!find_cat_port() && !open_addr && closes == closes_before + 2, "release both ports after no ID");
+    CHECK(open_attempt_count == 2 && open_attempts[0] == 2 && open_attempts[1] == 4,
           "first failed scan probes CP210x 2 then 4");
-    CHECK(!find_cat_port() && !open_addr && closes == 6, "release both ports in rotated scan");
-    CHECK(open_attempt_count == 7 && open_attempts[5] == 4 && open_attempts[6] == 2,
+    CHECK(!find_cat_port() && !open_addr && closes == closes_before + 4, "release both ports in rotated scan");
+    CHECK(open_attempt_count == 4 && open_attempts[2] == 4 && open_attempts[3] == 2,
           "second scan starts with the other CP210x");
     CHECK(s_last_baud == 38400, "failed scans do not overwrite the cached baud");
+    static const int64_t expected_delays[] = {15000000, 30000000, 60000000, 120000000, 300000000, 300000000};
+    for (unsigned i = 0; i < sizeof(expected_delays) / sizeof(*expected_delays); ++i) {
+        s_cat_missing_since = g_now_us;
+        g_now_us += expected_delays[i] - 1;
+        recover_missing_cat(g_now_us);
+        CHECK(mock_resets == i, "wait for the scheduled recovery interval");
+        ++g_now_us;
+        mock_allow_reset = false;
+        recover_missing_cat(g_now_us);
+        CHECK(mock_resets == i && s_cat_recoveries == i, "TX guard defers recovery without using an attempt");
+        mock_allow_reset = true;
+        recover_missing_cat(g_now_us);
+        CHECK(mock_resets == i + 1 && !cat_usb_ready(), "missing ID triggers power cycle and a new settling period");
+        CHECK(!cat_usb_address_ready(2) && !cat_usb_address_ready(4), "forget prior USB enumeration");
+        cat_state_t state;
+        cat_get_state(&state);
+        CHECK(state.waiting_for_cat && state.cat_usb_resets == i + 1, "expose the recovery count while CAT is missing");
+    }
+    usb_added(2);
+    usb_added(4);
+    g_now_us += CAT_SETTLE_US;
+    suppress_id = false;
+    dev = find_cat_port();
+    CHECK(dev && s_rig->rig == CAT_RIG_FTX1 && !s_cat_recoveries && !s_cat_waiting,
+          "valid ID clears the recovery counter and waiting marker");
+    close_cat_port(&dev);
+    CHECK(!ok(";") && !ok(";ID;"), "parser delimiter is not in the normal CAT allow-list");
     s_scan_after_addr = 0;
+    g_usb_count = 0;
+    g_cdc_open_hook = NULL;
+    g_cdc_close_hook = NULL;
+    g_cdc_request_hook = NULL;
+    g_cdc_send_hook = NULL;
+    atomic_store(&s_link_starting, false);
+}
+
+static void test_slow_radio_power_on(void)
+{
+    atomic_store(&s_link_starting, true);
+    g_cdc_open_hook = swap_open;
+    g_cdc_close_hook = swap_close;
+    g_cdc_request_hook = swap_request;
+    g_cdc_send_hook = swap_reply;
+    s_scan_after_addr = 0;
+    g_usb_addrs[0] = 2;
+    g_usb_count = 1;
+
+    for (unsigned rig = 0; rig < 2; ++rig) {
+        swap_to_ftx1 = rig == 1;
+        s_last_baud = swap_to_ftx1 ? 38400 : 115200;
+        for (unsigned cycle = 0; cycle < 5; ++cycle) {
+            use(NULL);
+            open_attempt_count = 0;
+            s_cat_missing_since = 0;
+            boot_probes_left = 4;
+            const unsigned alternate_before = other_attempts;
+            const unsigned recovery_before = mock_resets;
+            usb_added(2);
+            CHECK(!find_cat_port() && open_attempt_count == 0, "each hot start observes the 3 s guard");
+            g_now_us += CAT_SETTLE_US;
+            for (unsigned retry = 0; retry < 4; ++retry) {
+                CHECK(!find_cat_port(), "cached probe while radio is booting");
+                g_now_us += CAT_CACHED_SCAN_MS * 1000LL;
+            }
+            cdc_acm_dev_hdl_t dev = find_cat_port();
+            CHECK(dev && s_cat_addr == 2 && open_attempt_count == 5, "CAT connects on the fifth cached probe");
+            CHECK(s_rig->rig == (swap_to_ftx1 ? CAT_RIG_FTX1 : CAT_RIG_FTDX10),
+                  "identify the correct radio after slow boot");
+            CHECK(other_attempts == alternate_before && mock_resets == recovery_before,
+                  "delayed CAT needs neither alternate baud nor a power cycle");
+            close_cat_port(&dev);
+            usb_removed(2);
+        }
+    }
     g_usb_count = 0;
     g_cdc_open_hook = NULL;
     g_cdc_close_hook = NULL;
@@ -829,7 +1034,7 @@ int main(void) {
     CHECK(cat_voice_mode_error(true) != NULL, "FTX-1 Bluetooth refuses browser voice");
     handle_cat_packet("EX0101133;");
     CHECK(cat_voice_mode_error(true) == NULL, "FTX-1 AUTO selects USB for CAT voice");
-    g_now_us += VOICE_MENU_MAX_AGE_US + 1;
+    g_now_us += MOD_MENU_MAX_AGE_US + 1;
     CHECK(cat_voice_mode_error(true) != NULL, "stale FTX-1 AUTO cannot authorize voice");
     CHECK(ok("EX010113;") && !ok("EX0101131;") && !ok("EX0101133;"), "FTX-1 SSB source is read only");
     use("0761");
@@ -843,8 +1048,30 @@ int main(void) {
     CHECK(ok("EX010114;") && !ok("EX0101141;"), "FTDX10 REAR SELECT is read only");
     handle_cat_packet("MD0C;");
     CHECK(cat_voice_mode_error(false) != NULL, "voice stops if radio leaves SSB");
+    use("0840");
+    handle_cat_packet("EX0104130;");
+    CHECK(cat_data_mode_error() != NULL, "FTX-1 DATA MIC cannot authorize FT8");
+    handle_cat_packet("EX0104133;");
+    CHECK(cat_data_mode_error() != NULL, "FTX-1 DATA AUTO is not confirmed USB");
+    handle_cat_packet("EX0104131;");
+    CHECK(cat_data_mode_error() == NULL, "FTX-1 DATA USB authorizes FT8");
+    CHECK(ok("EX010413;") && !ok("EX0104131;"), "FTX-1 DATA MOD SOURCE read only");
+    g_now_us += MOD_MENU_MAX_AGE_US + 1;
+    CHECK(cat_data_mode_error() != NULL, "stale DATA USB readback cannot authorize FT8");
+    use("0761");
+    handle_cat_packet("EX0104151;");
+    CHECK(cat_data_mode_error() != NULL, "FTDX10 requires fresh DATA REAR SELECT");
+    handle_cat_packet("EX0104160;");
+    CHECK(cat_data_mode_error() != NULL, "FTDX10 DATA REAR jack cannot authorize FT8");
+    handle_cat_packet("EX0104161;");
+    CHECK(cat_data_mode_error() == NULL, "FTDX10 DATA REAR USB authorizes FT8");
+    handle_cat_packet("EX0104150;");
+    CHECK(cat_data_mode_error() != NULL, "FTDX10 DATA MIC cannot authorize FT8");
+    CHECK(cat_cmds_allowed("EX010113;EX010114;EX010415;EX010416;", CAT_TX_MAX_CMDS) && !ok("EX0104161;"), "FTDX10 DATA settings read only");
     test_startup();
+    test_rejected_tx_read_after_unkey();
     test_hot_swap();
+    test_slow_radio_power_on();
     test_rigctl_cat_writes();
     printf(fails ? "%d FAILED\n" : "all tests passed\n", fails);
     return fails != 0;

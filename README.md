@@ -522,7 +522,9 @@ CAT waits at least three seconds after USB enumeration or USB bus recovery. It p
 supported baud rate once per scan, starting with the last rate saved in NVS. Only an
 `ID` reply with four digits and a semicolon selects a CAT port. Initial reads go out one at a time.
 Startup writes, including TX0 and the DATA USB output level, wait until those reads finish.
-Automatic information is enabled only when `AI;` reports it off.
+Automatic information is enabled when `AI;` reports it off or the radio gives no reply after
+a successful write. The serial log reports the duration of the initial reads and the first
+`sync_all` refresh on each CAT connection.
 
 The authenticated `/status` counter `cat_rejected_commands` counts radio `?;` replies. An explicitly
 rejected periodic read is skipped for that USB connection. The CAT log records the command and
@@ -763,6 +765,40 @@ the USB reads in that stream and remains available after playback ends. The seri
 rate and USB bus reset count when the stream ends.
 
 Automatic USB recovery monitors the input stream. Discovery leaves the output stream stopped.
+
+### FT8 transmit (phase 4)
+
+Use the authenticated TX panel to enable FT8. Select USB with the station’s USB modulation source
+or DATA-USB with USB modulation confirmed by CAT. On FTDX10 set **DATA MOD SOURCE = REAR** and
+**REAR SELECT = USB** in MODE PSK/DATA. On FTX-1 set **MODE DATA → MOD SOURCE = USB**.
+Set a TX time limit of at least 15 seconds.
+Enter a message, audio frequency, level and the even/odd UTC slot. **Enable TX** queues up to
+three frames. Adjust **Level** while FT8 is armed or transmitting and use the **ALC** meter
+to monitor the radio. **Halt**, leaving the page or losing its heartbeat disarms TX. A decoded CQ can fill
+a reply with your callsign and locator. It does not key the radio until you arm it.
+
+The board prioritizes SNTP. The authenticated browser supplies a short-lived UTC estimate when
+SNTP is unavailable. Keep the phone or PC clock synchronized, and check `ft8_tx` in `/status` for
+the clock source, sample age and RTT. Browser RTT above 160 ms is discarded. When the current
+estimate expires (15 s without a usable browser sample), or the selected clock offset changes by
+more than 80 ms during a scheduled slot, FT8 disarms. Prefer SNTP on a high-latency VPN.
+Keep the page foreground and focused while armed.
+
+Use a dummy load at low power for initial tests. Decode the frame in WSJT-X using a second
+receiver connected directly to the PC. Verify the decoded DT is within ±0.2 s and RX returns
+after release. The serial log records the UTC slot, the RF audio target at slot +0.500 s,
+the target for queuing PCM and when the first block was queued. This last timestamp is a
+firmware reference for the measurement. Measure RF onset with a second receiver recording IQ
+or audio against a synchronized UTC clock.
+
+With the controlling PC clock synchronized, `schedule_minus_browser_ms` and
+`browser_rtt_ms` help identify clock error before calibrating RF timing. Use low-RTT LAN
+samples and confirm the result across several frames. Measure the demodulated FT8 signal,
+and account for delay introduced by the receiver or recording path. Increase the radio's
+playback lead by the repeatable RF lateness relative to `rf_target_utc`, in milliseconds.
+`CONFIG_FT8_FTX1_AUDIO_LEAD_MS` and `CONFIG_FT8_FTDX10_AUDIO_LEAD_MS` are independent and
+default to 20 ms. `CONFIG_FT8_NTP_SERVER` configures the SNTP server.
+
 
 ## Input validation and build settings
 

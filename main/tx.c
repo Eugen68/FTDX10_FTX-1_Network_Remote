@@ -24,6 +24,14 @@ static bool s_stopping, s_inhibited, s_waiting_for_audio_cleanup;
 static tx_swr_guard_t s_swr_guard;
 static unsigned s_swr_max;
 static tx_tone_t s_tone;
+// The audio task reads this without taking the TX lock while holding its USB lock.
+static int64_t s_ft8_feed_at, s_ft8_utc_offset; // published by the release/acquire USB request
+
+int64_t tx_ft8_feed_time(int64_t *utc_offset)
+{
+    *utc_offset = s_ft8_utc_offset;
+    return s_ft8_feed_at;
+}
 
 static void finish_stop(void)
 {
@@ -100,9 +108,25 @@ bool tx_key(uint32_t owner)
     return tx_key_tone(owner, TX_TONE_OFF, TX_TONE_DEFAULT_DBFS);
 }
 
-bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
+static const char *ft8_mode_error(const cat_state_t *radio, bool starting)
 {
-    if (tone < TX_TONE_OFF || tone > TX_TONE_VOICE || dbfs < TX_TONE_MIN_DBFS || dbfs > TX_TONE_MAX_DBFS) {
+    if (radio->rig != CAT_RIG_FTX1 && radio->rig != CAT_RIG_FTDX10) return "Radio not supported for FT8";
+    const char mode = radio->tx_vfo == CAT_TX_VFO_SUB ? radio->mode_sub_raw : radio->mode_main_raw;
+    if (mode == '2') return cat_voice_mode_error(starting);
+    if (mode == 'C') return starting ? cat_data_mode_error() : NULL;
+    return "Select USB or DATA-USB for FT8 TX";
+}
+
+static const char *current_ft8_mode_error(bool starting)
+{
+    cat_state_t radio;
+    cat_get_state(&radio);
+    return ft8_mode_error(&radio, starting);
+}
+
+static bool key_audio(uint32_t owner, tx_tone_t tone, int dbfs, int64_t feed_at, int64_t utc_offset)
+{
+    if (tone < TX_TONE_OFF || tone > TX_TONE_FT8 || dbfs < TX_TONE_MIN_DBFS || dbfs > TX_TONE_MAX_DBFS) {
         tx_release(owner, "Invalid TX audio settings");
         return false;
     }
@@ -110,6 +134,7 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
     app_config_get(&cfg);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool keyed = false;
+    const int64_t setup_start = tone == TX_TONE_FT8 ? esp_timer_get_time() : 0;
     const char *refusal = "PTT unavailable";
     if (s_state.phase == TX_ARMED && s_state.owner == owner && !s_inhibited &&
         usb_audio_get_format(NULL) && cat_radio_rx_after(0)) {
@@ -117,6 +142,10 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
         cat_get_state(&radio);
         const char *mode_error = cat_ptt_mode_error(0);
         if (!mode_error && tone == TX_TONE_VOICE) mode_error = cat_voice_mode_error(true);
+        if (!mode_error && tone == TX_TONE_FT8) {
+            mode_error = cfg.tx_max_seconds < 15 ? "FT8 needs a TX limit of at least 15 seconds"
+                                                : ft8_mode_error(&radio, true);
+        }
         if (tone != TX_TONE_OFF && !usb_audio_tx_available()) {
             refusal = "USB TX audio unavailable";
         } else if (!usb_audio_tx_idle()) {
@@ -128,11 +157,18 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
             refusal = "USB voice buffer unavailable";
         } else if (tone != TX_TONE_OFF && usb_audio_tx_prepare(radio.rig == CAT_RIG_FTX1) != ESP_OK) {
             refusal = "USB TX audio start failed";
+        } else if (tone == TX_TONE_FT8 && esp_timer_get_time() >= feed_at) {
+            const int64_t now = esp_timer_get_time();
+            ESP_LOGW("tx", "FT8 USB setup took %" PRId64 " us, missed submit by %" PRId64 " us",
+                     now - setup_start, now - feed_at);
+            usb_audio_tx_finished();
+            refusal = TX_FT8_SLOT_MISSED;
         } else if (tone != TX_TONE_OFF &&
                    (esp_timer_get_time() - s_heartbeat >= HEARTBEAT_US ||
                     !usb_audio_tx_available() || !usb_audio_get_format(NULL) ||
                     !cat_radio_rx_after(0) || cat_ptt_mode_error(0) ||
-                    (tone == TX_TONE_VOICE && cat_voice_mode_error(true)))) {
+                    (tone == TX_TONE_VOICE && cat_voice_mode_error(true)) ||
+                    (tone == TX_TONE_FT8 && current_ft8_mode_error(true)))) {
             usb_audio_tx_finished();
             refusal = "PTT conditions changed during USB audio setup";
         } else {
@@ -144,6 +180,14 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
             s_swr_guard = (tx_swr_guard_t){.rig = radio.rig};
             keyed = cat_ptt(true) == ESP_OK;
             if (keyed && tone != TX_TONE_OFF) {
+                if (tone == TX_TONE_FT8) {
+                    s_ft8_feed_at = feed_at;
+                    s_ft8_utc_offset = utc_offset;
+                    const int64_t now = esp_timer_get_time();
+                    ESP_LOGI("tx", "FT8 USB setup and key took %" PRId64 " us, lead before submit %" PRId64 " us",
+                             now - setup_start, feed_at - now);
+                    cat_enable_ft8_alc();
+                }
                 usb_audio_tx_request(tone, dbfs);
             }
         }
@@ -153,6 +197,17 @@ bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
     }
     xSemaphoreGive(s_lock);
     return keyed;
+}
+
+bool tx_key_tone(uint32_t owner, tx_tone_t tone, int dbfs)
+{
+    if (tone == TX_TONE_FT8) return false;
+    return key_audio(owner, tone, dbfs, 0, 0);
+}
+
+bool tx_key_ft8(uint32_t owner, int64_t feed_at, int64_t utc_offset)
+{
+    return key_audio(owner, TX_TONE_FT8, TX_TONE_DEFAULT_DBFS, feed_at, utc_offset);
 }
 
 bool tx_submit_voice(uint32_t owner, const uint8_t *frame, size_t length)
@@ -255,6 +310,7 @@ static void watchdog_tick(void)
                     reason = cat_ptt_mode_error(s_keyed_at);
                 }
                 if (!reason && s_tone == TX_TONE_VOICE) reason = cat_voice_mode_error(false);
+                if (!reason && s_tone == TX_TONE_FT8) reason = current_ft8_mode_error(false);
                 if (!reason) {
                     const cat_tx_meters_t meters = cat_get_tx_meters();
                     const int64_t meter_now = esp_timer_get_time();
@@ -301,6 +357,9 @@ tx_state_t tx_get_state(void)
         result.swr = result.swr_valid ? tx_swr_value(meters.rig, meters.swr) : 0;
         result.swr_raw = meters.swr_us >= s_keyed_at ? meters.swr : 0;
         result.po_raw = meters.po_us >= s_keyed_at ? meters.po : 0;
+        result.alc_valid = result.on_air && !s_stopping && s_tone == TX_TONE_FT8 &&
+                           meters.alc_us >= s_keyed_at && now - meters.alc_us <= max_age_us;
+        result.alc_raw = result.alc_valid ? meters.alc : 0;
     }
     xSemaphoreGive(s_lock);
     return result;

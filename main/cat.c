@@ -13,7 +13,7 @@
  *
  * CAT commands used by this file, for comparing with a radio's CAT manual.
  * Every command is "<2 letters><parameters>;".  R = receiver: 0 = MAIN, 1 = SUB.  n = a digit.
- * Everything that is sent passes cat_cmd_allowed(); a command that is not accepted there is never sent.
+ * All writes use the CAT allow-list.
  * Unless marked otherwise, a line applies to both radios.
  *
  *   Command         Dir    Meaning (as used here)
@@ -73,21 +73,27 @@
 #include "usb/usb_host.h"
 #include "usb/cdc_acm_host.h"
 #include "cat.h"
+#include "cat_cdc_trace.h"
 #include "rigctl_protocol.h"
 #include "app_config.h"
 #include "nvs.h"
+#include "usb_audio.h"
 
 // The FTX-1 exposes two CP210x UARTs (Silicon Labs VID 0x10C4). Both have the same VID/PID, so they are
 // opened by USB device address. Whichever returns a valid ID at a supported speed is used as the CAT port.
 #define SILABS_VID          0x10C4
 #define CAT_SETTLE_US       3000000LL
+#define CAT_CACHED_SCAN_MS  1000
+#define CAT_CACHED_ONLY_US  10000000LL
+#define CAT_BAUD_SETTLE_MS  50
+#define CAT_RECOVER_SCAN_MS 10000
 #define NORMAL_ANSWER_MS    100
 #define CAT_CACHE_NVS       "cat_link"
 #define CAT_CACHE_BAUD      "last_baud"
 #define CAT_TASK_PRIORITY   6         // above HTTPS (5): voice frames must not delay CAT safety polling
 #define POLL_PERIOD_MS      100
 #define RADIO_STATUS_MAX_AGE_US 1500000LL  // BUSY/TX is polled every five iterations
-#define VOICE_MENU_MAX_AGE_US 15000000LL
+#define MOD_MENU_MAX_AGE_US 15000000LL
 #define ANSWER_TIMEOUT_MS   300
 #define TX_TIMEOUT_MS       200
 #define FTX1_KEYED_WRITE_TIMEOUT_MS 1200
@@ -126,6 +132,9 @@ static atomic_uchar s_cat_addr;
 static usb_host_client_handle_t s_usb_observer;
 static atomic_uint s_cat_session;
 static unsigned s_next_cat_session;    // assigned by the CAT task
+static int64_t s_cat_missing_since;
+static atomic_uint s_cat_recoveries;
+static atomic_bool s_cat_waiting;
 static uint8_t s_scan_after_addr;       // rotate after the first port that exhausted its baud probes
 static atomic_bool s_link_starting;
 static uint32_t s_last_baud;
@@ -136,11 +145,17 @@ static int64_t s_normal_swr_us;
 static int64_t s_rm6_reply_us;
 static bool s_unkey_requested;
 static cat_tx_meters_t s_tx_meters;
+static atomic_bool s_ft8_alc;
+
+#define ALC_QUERY_MS 40
+#define ALC_PERIOD_US 500000
 static cat_write_stats_t s_write_stats;
 static int64_t s_tx_vfo_status_us;
 static int64_t s_mode_status_us[2];
 static int64_t s_ssb_menu_us[2];
 static char s_ssb_menu[2];
+static int64_t s_data_menu_us[2];
+static char s_data_menu[2];
 static char s_reported_mode[2];
 static int64_t s_last_ptt_status_us;
 static char s_ptt_mode;
@@ -274,20 +289,31 @@ static TaskHandle_t s_task;
 static char s_rx[RX_BUF_BYTES];        // RX assembler, written only from the CDC driver task
 static size_t s_rx_len;
 static portMUX_TYPE s_query_mux = portMUX_INITIALIZER_UNLOCKED;
-typedef enum { QUERY_TIMEOUT, QUERY_ANSWER, QUERY_REJECTED } query_result_t;
+typedef enum { QUERY_TIMEOUT, QUERY_ANSWER, QUERY_REJECTED, QUERY_FAILED } query_result_t;
 static struct {
     char command[13];
     char answer[RX_BUF_BYTES];
     query_result_t result;
     bool waiting;
+    bool transition_reject;
 } s_query;
 #define CAT_REJECTED_POLLS 48
-static char s_rejected_polls[CAT_REJECTED_POLLS][13];
+#define CAT_REJECT_LIMIT 3
+#define CAT_REJECT_RETRY_US 60000000LL
+#define CAT_TRANSITION_GRACE_MS 1000u
+static struct {
+    char cmd[13];
+    unsigned streak;
+    int64_t retry_us;
+} s_rejected_polls[CAT_REJECTED_POLLS];
+static atomic_uint s_transition_ms;
+static atomic_uint s_effective_rejects;
 static size_t s_rejected_count;
 static bool s_split_keyed_polls;
 static unsigned s_keyed_reject_baseline;
 static atomic_uint s_rejects;
 static atomic_bool s_rx_restart;
+static atomic_bool s_baud_settling;
 static volatile uint32_t s_rx_bytes;     // all bytes received from the open port (diagnostics)
 static char s_rx_tail[17];               // last received bytes, printable only
 static atomic_bool s_disconnected;
@@ -318,21 +344,40 @@ static bool all_digits(const char *s, size_t n);
 
 static bool matches_query(const char *pkt, size_t length, const char *command)
 {
-    size_t prefix = strlen(command) - 1;
-    if (length <= prefix + 1 || memcmp(pkt, command, prefix) != 0) return false;
+    const size_t prefix = strlen(command) - 1;
+    if (length <= prefix || memcmp(pkt, command, prefix) != 0) return false;
     if (strcmp(command, "ID;") == 0) return length == 7 && all_digits(pkt + 2, 4);
-    if (strcmp(command, "AI;") == 0) return length == 4 && (pkt[2] == '0' || pkt[2] == '1');
-    return true;
+    // Even an unexpected AI value is a reply, distinct from silence.
+    if (strcmp(command, "AI;") == 0) return true;
+    return length > prefix + 1;
+}
+
+static void record_tx_transition(void)
+{
+    atomic_store(&s_transition_ms, (unsigned)(esp_timer_get_time() / 1000));
+}
+
+static bool in_tx_transition(void)
+{
+    const unsigned since = atomic_load(&s_transition_ms);
+    return since && (unsigned)(esp_timer_get_time() / 1000) - since < CAT_TRANSITION_GRACE_MS;
 }
 
 static void record_query_answer(const char *pkt, size_t length)
 {
     const bool rejected = length == 2 && memcmp(pkt, "?;", 2) == 0;
-    if (rejected) atomic_fetch_add(&s_rejects, 1);
+    const bool transient = rejected && in_tx_transition();
+    if (rejected) {
+        atomic_fetch_add(&s_rejects, 1);
+        if (!transient) atomic_fetch_add(&s_effective_rejects, 1);
+    }
     taskENTER_CRITICAL(&s_query_mux);
-    if (s_query.waiting && (rejected || matches_query(pkt, length, s_query.command))) {
+    // Keep listening for a valid ID even if the port first returns a rejection.
+    if (s_query.waiting && ((rejected && strcmp(s_query.command, "ID;") != 0) ||
+                            matches_query(pkt, length, s_query.command))) {
         memcpy(s_query.answer, pkt, length + 1);
         s_query.result = rejected ? QUERY_REJECTED : QUERY_ANSWER;
+        s_query.transition_reject = transient;
         s_query.waiting = false;
     }
     taskEXIT_CRITICAL(&s_query_mux);
@@ -345,7 +390,7 @@ unsigned cat_rejected_commands(void)
 
 static bool rx_cb(const uint8_t *data, size_t len, void *arg)
 {
-    if ((uintptr_t)arg != atomic_load(&s_cat_session)) return true;
+    if ((uintptr_t)arg != atomic_load(&s_cat_session) || atomic_load(&s_baud_settling)) return true;
     if (atomic_exchange(&s_rx_restart, false)) s_rx_len = 0;
     s_rx_bytes += len;
     for (size_t i = 0; i < len; i++) {
@@ -541,7 +586,7 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         return rig->can_tx && (pl == 0 || (pl == 1 && p[0] == '1' && app_config_tx_enabled()));
     case CAT_TWO('R', 'M'):         // meter (read): the S meter item of this radio only
         return pl == 1 && ((rig->meter_side && p[0] == rig->meter_side) ||
-                           (rig->can_tx && (p[0] == '5' || p[0] == '6')));
+                           (rig->can_tx && p[0] >= '4' && p[0] <= '6'));
     case CAT_TWO('P', 'S'):         // power
         return ctl && pl == 1 && is_side(p[0]);
     case CAT_TWO('F', 'A'):         // frequency, read or set within the radio's range
@@ -743,7 +788,8 @@ static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_ki
         if (s_wire_lock) xSemaphoreGive(s_wire_lock);
         return ESP_ERR_INVALID_STATE;
     }
-    const unsigned budget_ms = keyed_poll ? keyed_write_timeout_ms() : TX_TIMEOUT_MS;
+    const unsigned budget_ms = !keyed_poll ? TX_TIMEOUT_MS :
+        strcmp(cmds, "RM4;") == 0 ? ALC_QUERY_MS : keyed_write_timeout_ms();
     const int64_t start = esp_timer_get_time();
     const esp_err_t err = cdc_acm_host_data_tx_blocking(dev, (const uint8_t *)cmds, strlen(cmds), budget_ms);
     const unsigned elapsed = (unsigned)(esp_timer_get_time() - start);
@@ -766,12 +812,52 @@ static esp_err_t cat_tx(cdc_acm_dev_hdl_t dev, const char *cmds)
     return cat_tx_kind(dev, cmds, CAT_LOG_CMD, false);
 }
 
-static bool poll_rejected(const char *cmd)
+static bool essential_poll(const char *cmd)
 {
-    for (size_t i = 0; i < s_rejected_count; ++i) {
-        if (strcmp(s_rejected_polls[i], cmd) == 0) return true;
+    if (strncmp(cmd, "EX", 2) == 0) return true;
+    static const char *const essential[] = {
+        "ID;", "TX;", "RI0;", "BY;", "RM5;", "RM6;", "FT;", "MD0;", "MD1;", "FA;", "FB;"
+    };
+    for (size_t i = 0; i < sizeof(essential) / sizeof(essential[0]); ++i) {
+        if (strcmp(cmd, essential[i]) == 0) return true;
     }
     return false;
+}
+
+static size_t rejected_poll_index(const char *cmd)
+{
+    for (size_t i = 0; i < s_rejected_count; ++i) {
+        if (strcmp(s_rejected_polls[i].cmd, cmd) == 0) return i;
+    }
+    return s_rejected_count;
+}
+
+static bool poll_rejected(const char *cmd)
+{
+    const size_t i = rejected_poll_index(cmd);
+    return i < s_rejected_count && s_rejected_polls[i].retry_us > esp_timer_get_time();
+}
+
+static void update_poll_rejections(const char *cmd, query_result_t result, bool transient)
+{
+    if (essential_poll(cmd) || transient) return;
+    const size_t i = rejected_poll_index(cmd);
+    if (result != QUERY_REJECTED) {
+        if (i < s_rejected_count) s_rejected_polls[i] = s_rejected_polls[--s_rejected_count];
+        return;
+    }
+    if (i == s_rejected_count) {
+        if (i == CAT_REJECTED_POLLS) return;
+        ++s_rejected_count;
+        s_rejected_polls[i].streak = 0;
+        s_rejected_polls[i].retry_us = 0;
+        strlcpy(s_rejected_polls[i].cmd, cmd, sizeof(s_rejected_polls[i].cmd));
+    }
+    if (s_rejected_polls[i].streak < CAT_REJECT_LIMIT) ++s_rejected_polls[i].streak;
+    if (s_rejected_polls[i].streak == CAT_REJECT_LIMIT) {
+        s_rejected_polls[i].retry_us = esp_timer_get_time() + CAT_REJECT_RETRY_US;
+        ESP_LOGW(TAG, "Repeated CAT rejection of %s, retrying in 60 s", cmd);
+    }
 }
 
 /** One outstanding read at a time; consume only its matching response or a rejection. */
@@ -781,29 +867,29 @@ static query_result_t query(cdc_acm_dev_hdl_t dev, const char *cmd, char *out, s
     taskENTER_CRITICAL(&s_query_mux);
     strlcpy(s_query.command, cmd, sizeof(s_query.command));
     s_query.result = QUERY_TIMEOUT;
+    s_query.transition_reject = false;
     s_query.waiting = true;
     taskEXIT_CRITICAL(&s_query_mux);
     ulTaskNotifyTake(pdTRUE, 0);
-    query_result_t result = QUERY_TIMEOUT;
-    if (cat_tx_kind(dev, cmd, CAT_LOG_POLL, keyed) == ESP_OK) {
+    const bool sent = cat_tx_kind(dev, cmd, CAT_LOG_POLL, keyed) == ESP_OK;
+    if (sent) {
         const int64_t deadline = esp_timer_get_time() + wait_ms * 1000LL;
-        do {
+        for (;;) {
             taskENTER_CRITICAL(&s_query_mux);
-            result = s_query.result;
-            if (result == QUERY_ANSWER && out) strlcpy(out, s_query.answer, out_size);
+            const bool pending = s_query.waiting;
             taskEXIT_CRITICAL(&s_query_mux);
-            if (result != QUERY_TIMEOUT || s_disconnected || !cat_usb_ready()) break;
+            if (!pending || s_disconnected || !cat_usb_ready() || esp_timer_get_time() >= deadline) break;
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
-        } while (esp_timer_get_time() < deadline);
+        }
     }
+    const bool link_ok = sent && !s_disconnected && cat_usb_ready();
     taskENTER_CRITICAL(&s_query_mux);
+    const query_result_t result = link_ok ? s_query.result : QUERY_FAILED;
+    if (result == QUERY_ANSWER && out) strlcpy(out, s_query.answer, out_size);
+    const bool transient = s_query.transition_reject;
     s_query.waiting = false;
     taskEXIT_CRITICAL(&s_query_mux);
-    if (result == QUERY_REJECTED && strcmp(cmd, "ID;") != 0 &&
-        s_rejected_count < CAT_REJECTED_POLLS && !poll_rejected(cmd)) {
-        strlcpy(s_rejected_polls[s_rejected_count++], cmd, sizeof(s_rejected_polls[0]));
-        ESP_LOGW(TAG, "Radio rejected %s; suppressing its periodic poll", cmd);
-    }
+    update_poll_rejections(cmd, result, transient);
     return result;
 }
 
@@ -847,6 +933,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_state.connected = false;
         s_state.busy = false;
         s_state.tx = false;
+        atomic_store(&s_transition_ms, 0);
         s_last_tx_status_us = 0;
         s_swr_status_us = 0;
         s_hi_swr_us = 0;
@@ -854,9 +941,11 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_rm6_reply_us = 0;
         s_unkey_requested = false;
         s_tx_meters = (cat_tx_meters_t){0};
+        atomic_store(&s_ft8_alc, false);
         s_tx_vfo_status_us = 0;
         memset(s_mode_status_us, 0, sizeof(s_mode_status_us));
         memset(s_ssb_menu_us, 0, sizeof(s_ssb_menu_us));
+        memset(s_data_menu_us, 0, sizeof(s_data_menu_us));
         s_state.tx_vfo = CAT_TX_VFO_UNKNOWN;
         s_state.rx_vfo_known = false;
         s_state.rx_vfo_sub = false;
@@ -1072,20 +1161,24 @@ static void handle_cat_packet(const char *pkt)
     int gain_val = 0;
     int64_t now_pkt_us = esp_timer_get_time();
 
-    // Both radios use one digit for SSB MOD SOURCE; only the FTDX10
-    // uses the second item for REAR SELECT (the FTX-1 uses it for gain).
-    if (strlen(pkt) == 10 && strncmp(pkt, "EX01011", 7) == 0 && pkt[9] == ';') {
-        const bool ftdx10 = s_rig->rig == CAT_RIG_FTDX10;
-        const int item = pkt[7] == '3' && (ftdx10 || s_rig->rig == CAT_RIG_FTX1) ? 0
-                         : pkt[7] == '4' && ftdx10 ? 1 : -1;
-        if (item >= 0 && pkt[8] >= '0' && pkt[8] <= (ftdx10 ? '1' : '3') &&
-            xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
-            s_ssb_menu[item] = pkt[8];
-            s_ssb_menu_us[item] = now_pkt_us;
-            s_last_answer_us = now_pkt_us;
-            xSemaphoreGive(s_lock);
+    // Only consume the single-digit modulation menu readbacks.
+    if (strlen(pkt) == 10 && strncmp(pkt, "EX010", 5) == 0 && pkt[9] == ';') {
+        const bool rear_select = s_rig->rig == CAT_RIG_FTDX10;
+        const bool supported = rear_select || s_rig->rig == CAT_RIG_FTX1;
+        const bool data = pkt[5] == '4';
+        const char source = data && rear_select ? '5' : '3';
+        const int item = pkt[6] != '1' || !supported || (pkt[5] != '1' && !data) ? -1
+                       : pkt[7] == source ? 0 : rear_select && pkt[7] == source + 1 ? 1 : -1;
+        if (item >= 0) {
+            if (pkt[8] >= '0' && pkt[8] <= (rear_select ? '1' : '3') &&
+                xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+                (data ? s_data_menu : s_ssb_menu)[item] = pkt[8];
+                (data ? s_data_menu_us : s_ssb_menu_us)[item] = now_pkt_us;
+                s_last_answer_us = now_pkt_us;
+                xSemaphoreGive(s_lock);
+            }
+            return;
         }
-        return;
     }
 
     if (parse_gain(pkt, "AG0", &gain_val)) {
@@ -1173,6 +1266,7 @@ static void handle_cat_packet(const char *pkt)
     if (s_rig->has_ri && parse_ri(pkt, &ri_busy, &ri_tx)) {
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
             s_state.busy = ri_busy;
+            if (s_state.tx != ri_tx) record_tx_transition();
             s_state.tx = ri_tx;
             s_state.connected = true;
             s_last_answer_us = esp_timer_get_time();
@@ -1229,6 +1323,7 @@ static void handle_cat_packet(const char *pkt)
     bool tx_on = false;
     if (s_rig->can_tx && parse_tx(pkt, &tx_on)) {
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+            if (s_state.tx != tx_on) record_tx_transition();
             s_state.tx = tx_on;
             s_state.connected = true;
             s_last_answer_us = esp_timer_get_time();
@@ -1242,13 +1337,16 @@ static void handle_cat_packet(const char *pkt)
 
     // Both manuals use RM + item + three digits + reserved 000 + semicolon.
     if (s_rig->can_tx && strlen(pkt) == 10 && strncmp(pkt, "RM", 2) == 0 &&
-        (pkt[2] == '5' || pkt[2] == '6') && all_digits(pkt + 3, 3) &&
+        pkt[2] >= '4' && pkt[2] <= '6' && all_digits(pkt + 3, 3) &&
         memcmp(pkt + 6, "000;", 4) == 0) {
         const unsigned raw = digits_value(pkt + 3, 3);
         if (raw <= 255 && xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
             s_tx_meters.rig = s_rig->rig;
             s_last_answer_us = now_pkt_us;
-            if (pkt[2] == '5') {
+            if (pkt[2] == '4') {
+                s_tx_meters.alc = raw;
+                s_tx_meters.alc_us = now_pkt_us;
+            } else if (pkt[2] == '5') {
                 s_tx_meters.po = raw;
                 s_tx_meters.po_us = now_pkt_us;
             } else {
@@ -1358,7 +1456,7 @@ static void report_queued_write_failure(const char *cmd, esp_err_t err)
 }
 
 typedef struct {
-    int64_t sent_at;
+    int64_t sent_at, alc_at;
     bool status;
     unsigned meters_until_status;
 } keyed_poll_t;
@@ -1376,12 +1474,23 @@ static bool keyed_poll_answered(const rig_profile_t *rig, const keyed_poll_t *po
     return answered;
 }
 
+static void poll_ft8_alc(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_poll_t *poll)
+{
+    if (!atomic_load(&s_ft8_alc) || poll->status ||
+        esp_timer_get_time() - poll->alc_at < ALC_PERIOD_US ||
+        poll_rejected("RM4;") || !keyed_poll_answered(rig, poll)) return;
+
+    // An optional ALC read gets a short budget, only after fresh PO/SWR replies.
+    poll->alc_at = esp_timer_get_time();
+    query(dev, "RM4;", NULL, 0, ALC_QUERY_MS, true);
+}
+
 static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_poll_t *poll)
 {
     const int64_t now = esp_timer_get_time();
     bool recheck_swr = false;
     if (poll->sent_at) {
-        if (cat_rejected_commands() != s_keyed_reject_baseline) s_split_keyed_polls = true;
+        if (atomic_load(&s_effective_rejects) != s_keyed_reject_baseline) s_split_keyed_polls = true;
         const int64_t elapsed = now - poll->sent_at;
         // On the FTDX10 a missing reply must leave time for another meter poll
         // before the SWR watchdog reaches its 1.1 s freshness limit.
@@ -1397,10 +1506,11 @@ static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_po
             recheck_swr = s_hi_swr_us >= poll->sent_at && s_normal_swr_us < s_hi_swr_us;
             xSemaphoreGive(s_lock);
         }
+        poll_ft8_alc(dev, rig, poll);
     }
 
     // Record before writing: a reply can arrive before the CDC write returns.
-    poll->sent_at = now;
+    poll->sent_at = esp_timer_get_time();
     poll->status = recheck_swr || poll->meters_until_status == 0;
     const char *cmds = "RM5;RM6;";
     if (poll->status) {
@@ -1409,18 +1519,10 @@ static void poll_keyed(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig, keyed_po
     } else {
         --poll->meters_until_status;
     }
-    s_keyed_reject_baseline = cat_rejected_commands();
-    if (!s_split_keyed_polls && s_rejected_count) {
-        // A read can have been rejected during initial or ordinary polling.
-        for (size_t i = 0; i < s_rejected_count; ++i) {
-            if (strstr(cmds, s_rejected_polls[i])) {
-                s_split_keyed_polls = true;
-                break;
-            }
-        }
-    }
+    s_keyed_reject_baseline = atomic_load(&s_effective_rejects);
     if (s_split_keyed_polls) {
         read_poll(dev, cmds, NORMAL_ANSWER_MS, true);
+        poll_ft8_alc(dev, rig, poll);
         // Individual reads already awaited their replies.
         poll->sent_at = 0;
     } else {
@@ -1597,10 +1699,19 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
 
         // 4. Periodic slow refresh / sync every 5 seconds (50 iterations)
         if ((poll_count % 50) == 0) {
+            const int64_t sync_start = esp_timer_get_time();
             send_poll(dev, rig->sync_all);
+            if (poll_count == 0) {
+                ESP_LOGI(TAG, "%s sync_all: %lld ms", rig->name,
+                         (long long)((esp_timer_get_time() - sync_start) / 1000));
+            }
             if (net_rigctl) send_poll(dev, rig->dual_rx ? "VS;SH0;SH1;" : "VS;SH0;");
             if (rig->can_tx && app_config_tx_enabled()) {
-                send_poll(dev, rig->rig == CAT_RIG_FTDX10 ? "EX010113;EX010114;" : "EX010113;");
+                if (rig->rig == CAT_RIG_FTDX10) {
+                    send_poll(dev, "EX010113;EX010114;EX010415;EX010416;");
+                } else if (rig->rig == CAT_RIG_FTX1) {
+                    send_poll(dev, "EX010113;EX010413;");
+                }
             }
         }
         poll_count++;
@@ -1618,11 +1729,14 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
 
 static void initialize_reads(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig)
 {
+    const int64_t started = esp_timer_get_time();
     read_poll(dev, "FA;FB;MD0;MD1;", ANSWER_TIMEOUT_MS, false);
-    char answer[RX_BUF_BYTES];
-    const bool enable_ai = rig->can_control && !s_disconnected && !poll_rejected("AI;") &&
-                           query(dev, "AI;", answer, sizeof(answer), ANSWER_TIMEOUT_MS, false) == QUERY_ANSWER &&
-                           strcmp(answer, "AI0;") == 0;
+    bool enable_ai = false;
+    if (rig->can_control && !s_disconnected && !poll_rejected("AI;")) {
+        char answer[RX_BUF_BYTES];
+        const query_result_t result = query(dev, "AI;", answer, sizeof(answer), ANSWER_TIMEOUT_MS, false);
+        enable_ai = result == QUERY_TIMEOUT || (result == QUERY_ANSWER && strcmp(answer, "AI0;") == 0);
+    }
     if (rig->can_control) {
         read_poll(dev, rig->dual_rx ? "AG0;AG1;SQ0;SQ1;" : "AG0;SQ0;", ANSWER_TIMEOUT_MS, false);
         read_poll(dev, rig->poll_status, ANSWER_TIMEOUT_MS, false);
@@ -1630,6 +1744,8 @@ static void initialize_reads(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig)
         read_poll(dev, rig->dual_rx ? "BP00;BP01;BP10;BP11;" : "BP00;BP01;", ANSWER_TIMEOUT_MS, false);
         read_poll(dev, "FT;", ANSWER_TIMEOUT_MS, false);
     }
+    ESP_LOGI(TAG, "%s initial CAT reads: %lld ms", rig->name,
+             (long long)((esp_timer_get_time() - started) / 1000));
     if (enable_ai && !s_disconnected && cat_tx(dev, "AI1;") == ESP_OK) {
         // AI may immediately emit readbacks; let them arrive before the next command.
         vTaskDelay(pdMS_TO_TICKS(NORMAL_ANSWER_MS));
@@ -1685,6 +1801,7 @@ static void close_cat_port(cdc_acm_dev_hdl_t *dev)
     // Invalidate delayed callbacks before the handle can be freed or reused.
     atomic_store(&s_link_starting, true);
     atomic_store(&s_cat_session, 0);
+    atomic_store(&s_baud_settling, false);
     const unsigned addr = atomic_exchange(&s_cat_addr, 0);
     if (*dev) {
         const esp_err_t err = cdc_acm_host_close(*dev);
@@ -1728,10 +1845,9 @@ static bool is_cp210x(uint8_t addr)
 }
 
 /** Open the CP210x at USB address addr and return true if it answers ID; as a CAT port */
-static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool *no_id)
+static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool *no_id, bool cached_only)
 {
     *no_id = false;
-    if (!is_cp210x(addr)) return false;
     observe_usb_events();
     if (!cat_usb_address_ready(addr)) {
         ESP_LOGW(TAG, "Skip USB address %u: 3 s CAT settling period or USB reset still in progress", addr);
@@ -1765,7 +1881,8 @@ static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool
     // The CP210x UARTs here are single-interface devices (the CDC driver opened interface 0)
     const uint8_t intf = cfg.interface_idx;
     uint32_t bauds[5];
-    const size_t count = baud_order(bauds);
+    const size_t supported = baud_order(bauds);
+    const size_t count = cached_only ? 1 : supported;
     size_t attempted = 0;
     for (size_t b = 0; b < count; b++) {
         observe_usb_events();
@@ -1774,6 +1891,7 @@ static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool
                      "3 s CAT settling period or USB reset still in progress");
             break;
         }
+        atomic_store(&s_baud_settling, true);
         err = cp210x_setup(*dev, intf, bauds[b]);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "CDC setup at USB address %u, %lu bps: %s",
@@ -1781,11 +1899,27 @@ static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool
             diag("setup addr %u: %s", addr, esp_err_to_name(err));
             break;
         }
+        vTaskDelay(pdMS_TO_TICKS(CAT_BAUD_SETTLE_MS));
+        observe_usb_events();
+        if (s_disconnected || !cat_usb_ready()) break;
         char answer[RX_BUF_BYTES];
         atomic_store(&s_rx_restart, true);
         s_rx_bytes = 0;
+        cat_cdc_probe_begin();
+        atomic_store(&s_baud_settling, false);
         ++attempted;
-        if (query(*dev, "ID;", answer, sizeof(answer), ANSWER_TIMEOUT_MS, false) == QUERY_ANSWER) {
+        const query_result_t result = query(*dev, "ID;", answer, sizeof(answer), ANSWER_TIMEOUT_MS, false);
+        const cat_cdc_probe_t trace = cat_cdc_probe_end();
+        char hex[3 * sizeof(trace.sample) + 1] = {0};
+        for (size_t i = 0; i < trace.sample_len; ++i) {
+            snprintf(hex + 3 * i, sizeof(hex) - 3 * i, "%02X ", trace.sample[i]);
+        }
+        ESP_LOGI(TAG, "ID probe addr=%u baud=%lu result=%s bulk_in_completed=%u short=%u failed=%u "
+                 "submit_failed=%u bytes=%u raw=%s", addr, (unsigned long)bauds[b],
+                 result == QUERY_ANSWER ? "valid" : result == QUERY_FAILED ? "write/link error" : "no ID",
+                 trace.completed, trace.short_packets, trace.failed, trace.submit_failed, trace.bytes,
+                 trace.sample_len ? hex : "(none)");
+        if (result == QUERY_ANSWER) {
             memcpy(s_rig_id, answer + 2, 4);
             s_rig_id[4] = '\0';
             s_rig = profile_for_id(s_rig_id);
@@ -1801,6 +1935,34 @@ static bool try_port(uint8_t addr, cdc_acm_dev_hdl_t *dev, uint8_t *opened, bool
     *no_id = attempted == count && !s_disconnected && cat_usb_ready();
     close_cat_port(dev);
     return false;
+}
+
+static bool cat_cached_only(int64_t now)
+{
+    for (size_t i = 0; i < sizeof(s_default_bauds) / sizeof(*s_default_bauds); ++i) {
+        if (s_default_bauds[i] == s_last_baud) {
+            return !s_cat_missing_since || now - s_cat_missing_since < CAT_CACHED_ONLY_US;
+        }
+    }
+    return false;
+}
+
+static int64_t cat_recovery_delay_us(unsigned attempts)
+{
+    static const int64_t delays[] = {15000000, 30000000, 60000000, 120000000, 300000000};
+    const unsigned last = sizeof(delays) / sizeof(*delays) - 1;
+    return delays[attempts < last ? attempts : last];
+}
+
+static void recover_missing_cat(int64_t now)
+{
+    const unsigned attempts = atomic_load(&s_cat_recoveries);
+    if (!s_cat_missing_since || now - s_cat_missing_since < cat_recovery_delay_us(attempts)) return;
+
+    if (usb_audio_recover_cat(attempts + 1)) {
+        atomic_store(&s_cat_recoveries, attempts + 1);
+        s_cat_missing_since = 0;
+    }
 }
 
 static cdc_acm_dev_hdl_t find_cat_port(void)
@@ -1835,6 +1997,14 @@ static cdc_acm_dev_hdl_t find_cat_port(void)
             break;
         }
     }
+    // Audio recovery also resets the CAT settling timer.
+    taskENTER_CRITICAL(&s_usb_mux);
+    const int64_t reset_until = s_usb_reset_until;
+    taskEXIT_CRITICAL(&s_usb_mux);
+    if (s_cat_missing_since < reset_until) s_cat_missing_since = 0;
+    const bool cached_only = cat_cached_only(esp_timer_get_time());
+    bool cp210x_present = false;
+    bool cp210x_ready = false;
     uint8_t first_unanswered = 0;
     for (int i = 0; i < count; ++i) {
         const uint8_t addr = addrs[(start + i) % count];
@@ -1842,10 +2012,20 @@ static cdc_acm_dev_hdl_t find_cat_port(void)
             ESP_LOGW(TAG, "Skip invalid USB address %u", addr);
             continue;
         }
+        if (!is_cp210x(addr)) continue;
+        cp210x_present = true;
+        atomic_store(&s_cat_waiting, true);
+        if (cat_usb_address_ready(addr)) {
+            cp210x_ready = true;
+            if (!s_cat_missing_since) s_cat_missing_since = esp_timer_get_time();
+        }
         cdc_acm_dev_hdl_t dev = NULL;
         bool no_id;
         s_disconnected = false;
-        if (try_port(addr, &dev, &opened, &no_id)) {
+        if (try_port(addr, &dev, &opened, &no_id, cached_only)) {
+            s_cat_missing_since = 0;
+            atomic_store(&s_cat_recoveries, 0);
+            atomic_store(&s_cat_waiting, false);
             s_scan_after_addr = 0;
             diag_counts((uint8_t)count, opened, 1);
             diag("%s", "");
@@ -1855,6 +2035,11 @@ static cdc_acm_dev_hdl_t find_cat_port(void)
         diag_counts((uint8_t)count, opened, 0);
     }
     s_scan_after_addr = first_unanswered;
+    if (cp210x_ready) recover_missing_cat(esp_timer_get_time());
+    if (!cp210x_present) {
+        s_cat_missing_since = 0;
+        if (cat_usb_address_ready(0)) atomic_store(&s_cat_waiting, false);
+    }
     return NULL;
 }
 
@@ -1864,9 +2049,10 @@ static void cat_task(void *arg)
     read_cached_baud();
     for (;;) {
         s_disconnected = false;
-        s_rig = &s_profile_none;          // only ID; may be sent until a radio has answered
+        s_rig = &s_profile_none;          // only discovery probes may be sent before identification
         memset(s_rig_id, 0, sizeof(s_rig_id));
         atomic_store(&s_link_starting, true);
+        const int64_t scan_start = esp_timer_get_time();
         cdc_acm_dev_hdl_t dev = find_cat_port();
         if (dev) {
             // Keep CAT controls and PTT unavailable during the initial read-only sequence.
@@ -1898,7 +2084,11 @@ static void cat_task(void *arg)
             memset(s_rig_id, 0, sizeof(s_rig_id));
             publish_profile();
         }
-        vTaskDelay(pdMS_TO_TICKS(SCAN_PERIOD_MS));
+        const bool cached_only = cat_cached_only(esp_timer_get_time());
+        const int64_t wait_ms = cached_only
+            ? CAT_CACHED_SCAN_MS - (esp_timer_get_time() - scan_start) / 1000
+            : atomic_load(&s_cat_recoveries) >= 4 && s_cat_missing_since ? CAT_RECOVER_SCAN_MS : SCAN_PERIOD_MS;
+        vTaskDelay(pdMS_TO_TICKS(wait_ms > 1 ? wait_ms : 1));
     }
 }
 
@@ -1932,8 +2122,8 @@ static cat_voice_source_t voice_source(void)
 {
     const bool rear_select = s_rig->rig == CAT_RIG_FTDX10;
     const int64_t now = esp_timer_get_time();
-    if (!s_ssb_menu_us[0] || now - s_ssb_menu_us[0] > VOICE_MENU_MAX_AGE_US ||
-        (rear_select && (!s_ssb_menu_us[1] || now - s_ssb_menu_us[1] > VOICE_MENU_MAX_AGE_US))) {
+    if (!s_ssb_menu_us[0] || now - s_ssb_menu_us[0] > MOD_MENU_MAX_AGE_US ||
+        (rear_select && (!s_ssb_menu_us[1] || now - s_ssb_menu_us[1] > MOD_MENU_MAX_AGE_US))) {
         return CAT_VOICE_SOURCE_UNKNOWN;
     }
     // FTX-1 AUTO selects USB modulation when the transmitter is keyed by CAT.
@@ -1959,10 +2149,29 @@ const char *cat_voice_mode_error(bool starting)
     return NULL;
 }
 
+const char *cat_data_mode_error(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const bool rear_select = s_rig->rig == CAT_RIG_FTDX10;
+    const int64_t now = esp_timer_get_time();
+    const char *reason = NULL;
+    if (!s_data_menu_us[0] || now - s_data_menu_us[0] > MOD_MENU_MAX_AGE_US ||
+        (rear_select && (!s_data_menu_us[1] || now - s_data_menu_us[1] > MOD_MENU_MAX_AGE_US))) {
+        reason = "Waiting for DATA-USB modulation source";
+    } else if (s_data_menu[0] != '1' || (rear_select && s_data_menu[1] != '1')) {
+        reason = rear_select ? "Set DATA MOD SOURCE to REAR and REAR SELECT to USB"
+                             : "Set MODE DATA MOD SOURCE to USB";
+    }
+    xSemaphoreGive(s_lock);
+    return reason;
+}
+
 void cat_get_state(cat_state_t *state)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     *state = s_state;
+    state->waiting_for_cat = atomic_load(&s_cat_waiting);
+    state->cat_usb_resets = atomic_load(&s_cat_recoveries);
     if (atomic_load(&s_link_starting) || s_disconnected) {
         state->connected = false;
         state->can_control = false;
@@ -2044,12 +2253,18 @@ static bool cat_tx_requested(void)
     return requested;
 }
 
+void cat_enable_ft8_alc(void)
+{
+    atomic_store(&s_ft8_alc, true);
+}
+
 esp_err_t cat_ptt(bool on)
 {
     if (!s_ptt_lock) {
         return ESP_ERR_INVALID_STATE;
     }
     if (!on) {
+        atomic_store(&s_ft8_alc, false);
         // Stop submitting telemetry while TX0 is waiting for the CDC OUT endpoint.
         xSemaphoreTake(s_lock, portMAX_DELAY);
         s_unkey_requested = true;
@@ -2062,6 +2277,7 @@ esp_err_t cat_ptt(bool on)
                           ? cat_tx(s_ptt_port, on ? "TX1;" : "TX0;") : ESP_ERR_INVALID_STATE;
     if (err == ESP_OK) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
+        if (s_state.tx_cat != on) record_tx_transition();
         s_state.tx_cat = on;
         s_unkey_requested = false;
         xSemaphoreGive(s_lock);

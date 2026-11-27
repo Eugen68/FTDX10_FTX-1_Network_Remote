@@ -81,6 +81,8 @@ typedef struct {
     uint32_t age_ms;        /*!< Time since the last answer */
     uint8_t devices;        /*!< USB devices seen on the last scan (hubs included) */
     uint8_t cp210x;         /*!< Of those, CP210x (VID 0x10C4) devices opened */
+    bool waiting_for_cat;   /*!< Enumerated CP210x without a valid ID */
+    unsigned cat_usb_resets; /*!< Recovery attempts since the last valid ID */
     uint8_t answered;       /*!< Of those, devices that answered ID; */
     uint32_t write_error_seq;
     char write_error[80];   /*!< Last failed queued CAT write */
@@ -119,8 +121,8 @@ size_t cat_log_recent_tx_meters(uint32_t through_ms, cat_log_entry_t *out, size_
 /**
  * @brief Start the CAT client. Requires usb_audio_init() (it installs the USB Host Library) first.
  *
- * When a CP210x serial port is attached, it is opened at 8N1 and the CAT rates (115200, 38400, 4800, 9600,
- * 19200 bps) are tried until a port answers "ID;". The answer selects the radio profile.
+ * A new CP210x settles before receiving CAT bytes. Prefer the last working baud, then probe
+ * 115200, 38400, 19200, 9600 and 4800 bps as needed. A valid ID selects the radio profile.
  */
 esp_err_t cat_init(void);
 
@@ -142,8 +144,8 @@ int cat_rigctl_result(unsigned ticket);
 
 typedef struct {
     cat_rig_t rig;
-    unsigned po, swr, swr_po;
-    int64_t po_us, swr_us, swr_po_us;
+    unsigned po, swr, swr_po, alc;
+    int64_t po_us, swr_us, swr_po_us, alc_us;
 } cat_tx_meters_t;
 
 cat_tx_meters_t cat_get_tx_meters(void);
@@ -161,9 +163,11 @@ cat_write_stats_t cat_get_write_stats(void);
 bool cat_radio_rx_after(int64_t after_us);
 bool cat_radio_tx(void);
 esp_err_t cat_ptt(bool on);
+void cat_enable_ft8_alc(void);
 const char *cat_ptt_fault(int64_t started, int64_t grace_us);
 const char *cat_ptt_mode_error(int64_t keyed_at);
 const char *cat_voice_mode_error(bool starting);
+const char *cat_data_mode_error(void);
 
 /*
  * There is deliberately no function that sends a free-form CAT string. Every command is built here from

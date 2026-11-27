@@ -21,6 +21,7 @@
 #include "esp_check.h"
 #include "esp_https_server.h"
 #include "https_identity.h"
+#include "ft8_tx.h"
 #include "esp_system.h"
 #include "esp_random.h"
 #include "build_info.h"
@@ -45,7 +46,7 @@
 #define WEB_CORE             0
 #define STREAM_CHUNK_BYTES   4096
 #define CAT_POST_MAX_BYTES   192     // largest accepted POST /cat body, including the NUL
-#define CAT_JSON_BYTES       1344    // GET /cat response
+#define CAT_JSON_BYTES       1408    // GET /cat response
 #define STREAM_READ_TIMEOUT  pdMS_TO_TICKS(200)
 #define KEEPALIVE_IDLE_READS 5       // idle waits (about 1 s) before a keep-alive silence block is sent
 #define KEEPALIVE_FRAMES     64      // length of that block in audio frames
@@ -689,7 +690,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_OK;
     }
     usb_audio_format_t fmt;
-    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 400 + 2 * RIGCTL_LINE_SIZE];
+    char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 400 + 2 * RIGCTL_LINE_SIZE + 736];
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -805,6 +806,33 @@ static esp_err_t status_handler(httpd_req_t *req)
                       cat.meters.calls, cat.meters.timeouts, cat.meters.over_budget, cat.meters.max_us);
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
+        const ft8_tx_status_t ft8 = ft8_tx_status(0);
+        const ft8_audio_stats_t audio = usb_audio_ft8_stats();
+        n--;
+        n += snprintf(json + n, sizeof(json) - n,
+                      ",\"ft8_tx\":{\"armed\":%s,\"remaining\":%u,\"clock\":\"%s\","
+                      "\"age_ms\":%" PRId64 ",\"offset_ms\":%" PRId64 ",\"rtt_ms\":%u,\"usb_lead_ms\":%u,"
+                      "\"preparing\":%s,\"prepare_ms\":%u,\"reason\":\"%s\",\"audio\":{\"max_task_gap_us\":%u,\"late_threshold_us\":%u",
+                      ft8.armed ? "true" : "false", ft8.remaining, ft8.clock, ft8.age_ms,
+                      ft8.offset_ms, ft8.rtt_ms, ft8.lead_ms,
+                      ft8.preparing ? "true" : "false", ft8.prepare_ms, ft8.reason, audio.max_task_gap_us, USB_FT8_LATE_GAP_US);
+        const struct { const char *name; ft8_audio_event_t event; } events[] = {
+            {"task_late", audio.task_late}, {"write_timeout", audio.write_timeout},
+            {"write_failed", audio.write_failed}, {"iso_failed", audio.iso_failed},
+            {"iso_short", audio.iso_short}, {"queue_empty", audio.queue_empty},
+        };
+        for (size_t i = 0; i < sizeof(events) / sizeof(*events) && n > 0 && (size_t)n < sizeof(json); ++i) {
+            const ft8_audio_event_t event = events[i].event;
+            n += snprintf(json + n, sizeof(json) - n,
+                          ",\"%s\":{\"count\":%u,\"first_ms\":%d,\"last_ms\":%d}",
+                          events[i].name, event.count, event.count ? event.first_ms : -1,
+                          event.count ? event.last_ms : -1);
+        }
+        if (n > 0 && (size_t)n < sizeof(json)) {
+            n += snprintf(json + n, sizeof(json) - n, "}}}");
+        }
+    }
+    if (n > 0 && (size_t)n < sizeof(json)) {
         const tx_voice_stats_t voice = tx_voice_stats();
         n--;
         n += snprintf(json + n, sizeof(json) - n,
@@ -858,7 +886,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
              "\"vol_main\":%u,\"vol_sub\":%u,"
              "\"sq_main\":%u,\"sq_sub\":%u,"
              "\"notch_main\":%s,\"notch_sub\":%s,\"notch_hz_main\":%u,\"notch_hz_sub\":%u,"
-             "\"age_ms\":%lu,\"devices\":%u,\"cp210x\":%u,\"answered\":%u,\"note\":\"%s\"}",
+             "\"age_ms\":%lu,\"devices\":%u,\"cp210x\":%u,\"answered\":%u,\"waiting_for_cat\":%s,\"cat_usb_resets\":%u,\"note\":\"%s\"}",
              st.connected ? "true" : "false", rig_name, rig_id,
              st.dual_rx ? "true" : "false", st.can_control ? "true" : "false", st.c4fm ? "true" : "false",
              st.sq_max, (unsigned long)st.freq_min, (unsigned long)st.freq_max,
@@ -873,7 +901,8 @@ static esp_err_t cat_handler(httpd_req_t *req)
              st.sq_main, st.sq_sub,
              st.notch_main ? "true" : "false", st.notch_sub ? "true" : "false",
              st.notch_hz_main, st.notch_hz_sub,
-             (unsigned long)st.age_ms, st.devices, st.cp210x, st.answered, note);
+             (unsigned long)st.age_ms, st.devices, st.cp210x, st.answered,
+             st.waiting_for_cat ? "true" : "false", st.cat_usb_resets, note);
     if (n > 0 && (size_t)n < sizeof(json)) {
         const char *rx_vfo = st.connected && st.rx_vfo_known
                            ? (st.rx_vfo_sub ? "\"sub\"" : "\"main\"") : "null";
@@ -972,7 +1001,10 @@ typedef struct {
 typedef struct {
     char type[12];
     char pass[APP_CONFIG_PASS_MAX_LEN + 1];
-    bool on;
+    char message[FT8_TX_TEXT_SIZE];
+    int64_t offset;
+    unsigned hz, rtt;
+    bool on, odd;
     tx_tone_t tone;
     int dbfs;
 } tx_ws_message_t;
@@ -1009,7 +1041,8 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
     if (*p++ != '{') {
         return false;
     }
-    enum { TYPE = 1, PASS = 2, ON = 4, TONE = 8, DBFS = 16 };
+    enum { TYPE = 1, PASS = 2, ON = 4, TONE = 8, DBFS = 16,
+           MESSAGE = 32, HZ = 64, ODD = 128, OFFSET = 256, RTT = 512 };
     msg->dbfs = TX_TONE_DEFAULT_DBFS;
     unsigned fields = 0;
     for (;;) {
@@ -1057,6 +1090,24 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
             } else if (strcmp(tone, "off") != 0) {
                 return false;
             }
+        } else if (strcmp(key, "msg") == 0) {
+            field = MESSAGE;
+            if (!parse_string(&p, msg->message, sizeof(msg->message))) return false;
+        } else if (strcmp(key, "hz") == 0 || strcmp(key, "rtt") == 0 || strcmp(key, "offset") == 0) {
+            char token[16], *end;
+            field = strcmp(key, "hz") == 0 ? HZ : strcmp(key, "rtt") == 0 ? RTT : OFFSET;
+            if (!parse_token(&p, token, sizeof(token)) || token[0] < '0' || token[0] > '9') return false;
+            long long value = strtoll(token, &end, 10);
+            if (*end || (field != OFFSET && value > 3000)) return false;
+            if (field == HZ) msg->hz = (unsigned)value;
+            else if (field == RTT) msg->rtt = (unsigned)value;
+            else msg->offset = value;
+        } else if (strcmp(key, "odd") == 0) {
+            field = ODD;
+            char token[8];
+            if (!parse_token(&p, token, sizeof(token)) ||
+                (strcmp(token, "true") != 0 && strcmp(token, "false") != 0)) return false;
+            msg->odd = strcmp(token, "true") == 0;
         } else if (strcmp(key, "dbfs") == 0) {
             field = DBFS;
             char token[5], *end;
@@ -1089,12 +1140,17 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
     return *p == '\0' && ((fields == (TYPE | PASS) && strcmp(msg->type, "tx_auth") == 0) ||
                           ((fields & ~(TONE | DBFS)) == (TYPE | ON) &&
                            (!(fields & (TONE | DBFS)) || (msg->on && (fields & TONE))) && strcmp(msg->type, "ptt") == 0) ||
-                          (fields == TYPE && (strcmp(msg->type, "hb") == 0 || strcmp(msg->type, "status") == 0)));
+                          ((fields & ~DBFS) == (TYPE | MESSAGE | HZ | ODD) && strcmp(msg->type, "ft8_arm") == 0) ||
+                          (fields == (TYPE | DBFS) && strcmp(msg->type, "ft8_level") == 0) ||
+                          (fields == (TYPE | OFFSET | RTT) && strcmp(msg->type, "ft8_clock") == 0) ||
+                          (fields == TYPE && (strcmp(msg->type, "hb") == 0 || strcmp(msg->type, "status") == 0 ||
+                                              strcmp(msg->type, "ft8_ping") == 0 || strcmp(msg->type, "ft8_halt") == 0)));
 }
 
 static void free_tx_session(void *ctx)
 {
     tx_ws_session_t *session = ctx;
+    ft8_tx_halt(session->owner, "Client disconnected");
     tx_release(session->owner, "Client disconnected");
     free(session);
 }
@@ -1159,10 +1215,26 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     } else if (!session) {
         return ESP_FAIL;
     } else if (strcmp(msg.type, "hb") == 0) {
+        ft8_tx_heartbeat(session->owner);
         tx_heartbeat(session->owner);
+    } else if (strcmp(msg.type, "ft8_arm") == 0) {
+        error = ft8_tx_arm(session->owner, msg.message, msg.hz, msg.odd, msg.dbfs);
+    } else if (strcmp(msg.type, "ft8_level") == 0) {
+        ft8_tx_set_level(session->owner, msg.dbfs);
+    } else if (strcmp(msg.type, "ft8_halt") == 0) {
+        ft8_tx_halt(session->owner, "FT8 halted");
+    } else if (strcmp(msg.type, "ft8_clock") == 0) {
+        ft8_tx_browser_clock(session->owner, msg.offset, msg.rtt);
+    } else if (strcmp(msg.type, "ft8_ping") == 0) {
+        char pong[64];
+        const int n = snprintf(pong, sizeof(pong), "{\"t\":\"ft8_pong\",\"mono\":%" PRId64 "}",
+                               esp_timer_get_time() / 1000);
+        frame = (httpd_ws_frame_t){.type = HTTPD_WS_TYPE_TEXT, .payload = (uint8_t *)pong, .len = n};
+        return httpd_ws_send_frame(req, &frame);
     } else if (strcmp(msg.type, "status") == 0) {
         // Inspect state without extending the heartbeat.
     } else if (!msg.on) {
+        ft8_tx_halt(session->owner, "FT8 halted");
         tx_release(session->owner, "PTT released");
     } else if (!tx_acquire(session->owner)) {
         error = "TX busy or unavailable";
@@ -1177,16 +1249,22 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
     const char *tx_vfo = cat.tx_vfo == CAT_TX_VFO_MAIN ? "main" :
                          cat.tx_vfo == CAT_TX_VFO_SUB ? "sub" : "";
     const char *phase = state.phase == TX_KEYED ? "KEYED" : state.phase == TX_ARMED ? "ARMED" : "IDLE";
-    char json[512], reason[32];
+    const ft8_tx_status_t ft8 = ft8_tx_status(session ? session->owner : 0);
+    char json[768], reason[32];
     const int n = snprintf(json, sizeof(json),
                            "{\"t\":\"tx\",\"state\":\"%s\",\"left_s\":%u,\"reason\":\"%s\","
                            "\"on_air\":%s,\"stopping\":%s,\"rx_confirmed\":%s,\"rx_paused\":%s,\"tx_vfo\":\"%s\",\"auth\":%s,\"owner\":%s,\"error\":\"%s\","
-                           "\"swr_x100\":%u,\"swr_raw\":%u,\"po_raw\":%u,\"po_valid\":%s}",
+                           "\"swr_x100\":%u,\"swr_raw\":%u,\"po_raw\":%u,\"po_valid\":%s,"
+                           "\"alc_raw\":%u,\"alc_valid\":%s, "
+                           "\"ft8_owned\":%s,\"ft8_preparing\":%s,\"ft8_remaining\":%u,\"ft8_reason\":\"%s\",\"ft8_clock\":\"%s\"}",
                            phase, state.left_s, tx_reason(&state, reason), state.on_air ? "true" : "false",
                            state.stopping ? "true" : "false", state.rx_confirmed ? "true" : "false",
                            usb_audio_rx_paused() ? "true" : "false", tx_vfo,
                            session ? "true" : "false", session && state.owner == session->owner ? "true" : "false",
-                           error, state.swr, state.swr_raw, state.po_raw, state.po_valid ? "true" : "false");
+                           error, state.swr, state.swr_raw, state.po_raw, state.po_valid ? "true" : "false",
+                           state.alc_raw, state.alc_valid ? "true" : "false",
+                           ft8.owned ? "true" : "false", ft8.preparing ? "true" : "false",
+                           ft8.remaining, ft8.reason, ft8.clock);
     if (n < 0 || (size_t)n >= sizeof(json)) {
         return ESP_FAIL;
     }
@@ -1472,6 +1550,7 @@ static esp_err_t reboot_handler(httpd_req_t *req)
 typedef struct {
     httpd_req_t *req;
     uint32_t min_interval_ms;
+    int64_t requested_ms;
 } scope_ctx_t;
 
 static void put_scope_header(uint8_t *h, const acc_scope_row_t *r, uint16_t points)
@@ -1503,18 +1582,24 @@ static void scope_task(void *arg)
     }
     uint32_t last_seq = 0;
     int64_t last_sent_ms = 0;
-    int64_t last_any_ms = esp_timer_get_time() / 1000;
+    int64_t last_any_ms = sc->requested_ms - 1000; // send headers on the first iteration, even without a frame
     while (err == ESP_OK) {
         vTaskDelay(pdMS_TO_TICKS(10));
         const int64_t now = esp_timer_get_time() / 1000;
         const uint32_t seq = acc_scope_seq();
         if (seq != last_seq && seq != 0 && now - last_sent_ms >= sc->min_interval_ms && acc_scope_get_row(row)) {
+            const bool first = last_seq == 0;
             last_seq = row->seq;
             last_sent_ms = now;
             last_any_ms = now;
             put_scope_header(rec, row, ACC_SCOPE_POINTS);
             memcpy(rec + SCOPE_REC_HDR, row->level, ACC_SCOPE_POINTS);
             err = httpd_resp_send_chunk(req, (const char *)rec, SCOPE_REC_HDR + ACC_SCOPE_POINTS);
+            if (first && err == ESP_OK) {
+                ESP_LOGI(TAG, "Scope first frame sent in %lld ms, fd=%d",
+                         (long long)(esp_timer_get_time() / 1000 - sc->requested_ms),
+                         httpd_req_to_sockfd(req));
+            }
         } else if (now - last_any_ms >= 1000) {
             last_any_ms = now;
             put_scope_header(rec, NULL, 0);
@@ -1559,6 +1644,8 @@ static esp_err_t scope_handler(httpd_req_t *req)
         return httpd_resp_send_500(req);
     }
     sc->req = async_req;
+    sc->requested_ms = esp_timer_get_time() / 1000;
+    ESP_LOGI(TAG, "Scope requested, fd=%d", httpd_req_to_sockfd(req));
     sc->min_interval_ms = 1000 / fps - 5;      // a little slack, so 25 fps really gets every frame
     // Core 1 with the web server; TLS record encryption runs in this task, hence the stack
     if (xTaskCreatePinnedToCore(scope_task, "scope", 6144, sc, 5, NULL, WEB_CORE) != pdPASS) {

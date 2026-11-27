@@ -62,6 +62,11 @@ To the best of the author's knowledge no source code of these projects was copie
 similarity of the constants and tables is unavoidable because they must match the
 specification exactly.
 
+Phase 4 TX uses the MIT-licensed ft8_lib encoder and message packer from upstream commit
+9fec6ca39886edbf96f4f5e71edc76da5074e871 in components/ft8_lib. See its LICENSE for the full terms.
+The GFSK timing and pulse-shaping reference is Eugen Trifu YO9VA's ftx1-pult
+(https://github.com/Eugen68/ftx1-pult), server/ft8.py.
+
 
 4. Map data
 -----------

@@ -16,6 +16,7 @@
 #include "tx_tone.h"
 
 #define USB_AUDIO_TX_RING_BYTES (16 * 1024)
+#define USB_FT8_LATE_GAP_US 20000U
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,6 +56,18 @@ typedef struct {
     esp_err_t submit_error;
 } usb_tx_transfer_stats_t;
 
+typedef struct {
+    unsigned count;
+    int first_ms, last_ms;
+} ft8_audio_event_t;
+
+typedef struct {
+    ft8_audio_event_t task_late, write_timeout, write_failed, iso_failed, iso_short, queue_empty;
+    unsigned max_task_gap_us;
+} ft8_audio_stats_t;
+
+ft8_audio_stats_t usb_audio_ft8_stats(void);
+void usb_audio_ft8_iso_event(unsigned failed, unsigned incomplete, bool drained, unsigned attempted_bytes);
 void usb_audio_tx_reset_transfer_stats(void);
 usb_tx_transfer_stats_t usb_audio_tx_transfer_stats(void);
 bool usb_audio_tx_available(void);
@@ -63,6 +76,7 @@ esp_err_t usb_audio_tx_prepare(bool share_rx_channel);
 bool usb_audio_tx_cleanup_pending(void);
 void usb_audio_tx_finished(void);
 bool usb_audio_rx_paused(void);
+bool usb_audio_ft8_complete(void);
 void usb_audio_tx_request(tx_tone_t tone, int dbfs);
 usb_tx_stats_t usb_audio_tx_stats(void);
 
@@ -107,6 +121,7 @@ void usb_audio_prepare_restart(void);
 
 /** @brief How often the USB bus was reset because the radio's audio did not come up */
 uint32_t usb_audio_bus_resets(void);
+bool usb_audio_recover_cat(unsigned attempt);
 
 #ifdef __cplusplus
 }
