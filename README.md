@@ -102,6 +102,7 @@ The label for each port is printed on the board (the silkscreen), next to the po
 - The port that goes to the FTX-1 is USB-OTG. In normal use you do not need to connect a PC to the USB-UART port.
 - Connect the USB-UART port to a PC only to use the serial menu (Wi-Fi settings and so on) and to flash the firmware (see "First-time setup and flashing").
 - In normal use, the USB-OTG port goes to the FTX-1, so connect a power source to the **USB-UART port**. It does not need to be anything special: an ordinary USB charger or a USB battery pack is enough (the power consumption is small).
+- With an FTDX10 you can instead power the board from the radio's ACC socket through a fused, filtered 5 V converter. See [`docs/acc-power.md`](docs/acc-power.md) (a proposal, not yet tested).
 - **Use USB cables that carry data.** A charge-only cable does not work for either port.
 - **The connector shapes depend on the board.** The official ESP32-S3-DevKitC-1 has two **Micro-USB** ports (see Espressif's [user guide](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide_v1.1.html)), while the FTX-1 has a **USB Type-C** port. Choose the cable or adapter to match the connector on your board and on the FTX-1.
 - **The author's setup (one example):** a compatible board from Freenove ([FNK0099](https://store.freenove.com/products/fnk0099), with two **USB Type-C** ports) connected to the FTX-1 with a good-quality data cable that has **USB Type-C on both ends** (not a charge-only cable). Because both sides are Type-C, one such cable is enough.
@@ -529,7 +530,8 @@ project (`docs/protocol.md`); the code here is written from that description.
 | 12 | CNT TX | 38 |
 
 Link GPIO38 and GPIO39 (the free ends of the pin 11 and 12 resistors) with a wire: the radio's once-a-second
-`alive` then comes back and the radio streams. **Never connect ACC pins 1, 7, 8 (13.8 V), 9 (PTT), 10 and 13.**
+`alive` then comes back and the radio streams. **Never connect ACC pins 1, 7, 8 (13.8 V), 9 (PTT), 10 and 13
+to the board.** Pin 8 may only feed the optional fused 5 V supply described in [`docs/acc-power.md`](docs/acc-power.md).
 Plug and unplug only with the radio's power supply off. Read that project's `docs/fuse-risk.md` first.
 
 - The pins are set up only after CAT has identified an **FTDX10**; with any other radio nothing is done with them.
