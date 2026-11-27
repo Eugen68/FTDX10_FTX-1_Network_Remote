@@ -19,6 +19,12 @@ CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65535
 CONFIG_LWIP_TCP_WND_DEFAULT=16384
 CONFIG_ESP_WIFI_TX_BA_WIN=16
+# The Wi-Fi driver copies every outgoing packet into a TX buffer in internal RAM (the LwIP buffers in PSRAM
+# do not change that, and its PSRAM TX cache needs SPIRAM_IGNORE_NOTFOUND off). With the default of 32 such
+# buffers (about 1.6 KB each) a weak link with retries filled them all: internal RAM fell to 3-5 KB, the
+# tcpip task spun in esf_buf_alloc_dynamic until the task watchdog fired and audio stopped for seconds.
+# 16 caps them near 26 KB; when they are all in use LwIP just waits and retransmits.
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
 CONFIG_ESP_WIFI_RX_BA_WIN=16
 # The HTTPS server uses max_open_sockets = 10 and the HTTP server reserves 3 sockets internally,
 # so LwIP needs at least 13 (the default of 10 makes httpd_ssl_start() fail and the firmware abort)
