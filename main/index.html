@@ -103,7 +103,10 @@
     display: flex;
     align-items: center;
     gap: .3rem;
+    justify-content: center;
+    text-decoration: none;
   }
+  #catRecoveryStatus { color: var(--text-muted); font-size: .75rem; }
   .pwr-btn.running {
     background: linear-gradient(180deg, #059669 0%, #047857 100%);
     border-color: #10b981;
@@ -995,7 +998,7 @@
     .brand-logo { flex: 1 1 100%; }
     .header-controls { flex: 1 1 100%; flex-wrap: wrap; justify-content: space-between; gap: .4rem; }
     .led-group { flex: 1 1 100%; justify-content: flex-start; }
-    .header-controls button { flex: 1 1 0; min-height: 2.4rem; padding: .3rem .4rem; }
+    .header-controls button, .header-controls a.pwr-btn { flex: 1 1 0; min-height: 2.4rem; padding: .3rem .4rem; }
     .tft-screen, .control-card { min-width: 0; }
     .vfo-ops-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: .3rem; }
     .vfo-op-btn { white-space: nowrap; font-size: .68rem; padding: .45rem .2rem; min-height: 2.4rem; }
@@ -1029,9 +1032,10 @@
   <div class="rig-header">
     <div class="brand-logo">
       <div class="brand-title" id="brandTitle">FTDX10 / FTX-1 Network Remote</div>
-      <div class="brand-build" id="buildInfo" title="Firmware build time"></div>
+      <div class="brand-build" id="buildInfo" title="Firmware build time and version"></div>
     </div>
     <span id="catCommandError" role="status" hidden></span>
+    <span id="catRecoveryStatus" role="status" hidden></span>
     <div class="header-controls">
       <div class="led-group">
         <div class="led-item"><div class="led" id="ledCat"></div>CAT</div>
@@ -1041,6 +1045,7 @@
       <button class="reboot-btn" id="btnReboot" title="Reboot the ESP32-S3 companion device">REBOOT</button>
       <button class="rig-off-btn" id="btnRigOff" title="Turn the radio power OFF (CAT: PS0;)">RIG OFF</button>
       <button class="pwr-btn" id="btnPlay">POWER / PLAY</button>
+      <a class="pwr-btn" href="/status" target="_blank" rel="noopener">STATUS</a>
     </div>
   </div>
 
@@ -4390,6 +4395,12 @@ async function smPoll() {
     }
     const now = Date.now();
     applyRigProfile(d);
+    const recovery = document.getElementById('catRecoveryStatus');
+    const resetCount = Number.isInteger(d.cat_usb_resets) ? d.cat_usb_resets : 0;
+    const recoveryText = !d.connected && d.waiting_for_cat
+      ? 'Waiting for radio CAT' + (resetCount ? ` (USB reset ${resetCount})` : '') : '';
+    if (recovery.textContent !== recoveryText) recovery.textContent = recoveryText;
+    recovery.hidden = !recoveryText;
     if (Number.isInteger(d.write_error_seq) && d.write_error_seq !== lastCatWriteError) {
       lastCatWriteError = d.write_error_seq;
       if (d.write_error) {
@@ -4699,8 +4710,8 @@ function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
 pollDeviceJson('/status')
   .then((s) => {
     if (typeof s?.build === 'string' && /^[A-Za-z0-9 :]{1,32}$/.test(s.build)) {
-      const ver = typeof s.version === 'string' && /^[0-9.]{1,12}$/.test(s.version) ? 'V' + s.version + '  ' : '';
-      document.getElementById('buildInfo').textContent = ver + 'BUILD ' + s.build;
+      const ver = typeof s.version === 'string' && /^[A-Za-z0-9.-]{1,32}$/.test(s.version) ? ' · v' + s.version : '';
+      document.getElementById('buildInfo').textContent = 'BUILD ' + s.build + ver;
     }
   })
   .catch(() => { /* build time is informational only */ });

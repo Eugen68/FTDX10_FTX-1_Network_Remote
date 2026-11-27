@@ -46,7 +46,7 @@
 #define WEB_CORE             0
 #define STREAM_CHUNK_BYTES   4096
 #define CAT_POST_MAX_BYTES   192     // largest accepted POST /cat body, including the NUL
-#define CAT_JSON_BYTES       1344    // GET /cat response
+#define CAT_JSON_BYTES       1408    // GET /cat response
 #define STREAM_READ_TIMEOUT  pdMS_TO_TICKS(200)
 #define KEEPALIVE_IDLE_READS 5       // idle waits (about 1 s) before a keep-alive silence block is sent
 #define KEEPALIVE_FRAMES     64      // length of that block in audio frames
@@ -886,7 +886,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
              "\"vol_main\":%u,\"vol_sub\":%u,"
              "\"sq_main\":%u,\"sq_sub\":%u,"
              "\"notch_main\":%s,\"notch_sub\":%s,\"notch_hz_main\":%u,\"notch_hz_sub\":%u,"
-             "\"age_ms\":%lu,\"devices\":%u,\"cp210x\":%u,\"answered\":%u,\"note\":\"%s\"}",
+             "\"age_ms\":%lu,\"devices\":%u,\"cp210x\":%u,\"answered\":%u,\"waiting_for_cat\":%s,\"cat_usb_resets\":%u,\"note\":\"%s\"}",
              st.connected ? "true" : "false", rig_name, rig_id,
              st.dual_rx ? "true" : "false", st.can_control ? "true" : "false", st.c4fm ? "true" : "false",
              st.sq_max, (unsigned long)st.freq_min, (unsigned long)st.freq_max,
@@ -901,7 +901,8 @@ static esp_err_t cat_handler(httpd_req_t *req)
              st.sq_main, st.sq_sub,
              st.notch_main ? "true" : "false", st.notch_sub ? "true" : "false",
              st.notch_hz_main, st.notch_hz_sub,
-             (unsigned long)st.age_ms, st.devices, st.cp210x, st.answered, note);
+             (unsigned long)st.age_ms, st.devices, st.cp210x, st.answered,
+             st.waiting_for_cat ? "true" : "false", st.cat_usb_resets, note);
     if (n > 0 && (size_t)n < sizeof(json)) {
         const char *rx_vfo = st.connected && st.rx_vfo_known
                            ? (st.rx_vfo_sub ? "\"sub\"" : "\"main\"") : "null";

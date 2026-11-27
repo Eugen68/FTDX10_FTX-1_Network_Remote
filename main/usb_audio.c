@@ -528,10 +528,10 @@ static void recover_bus_claimed(void)
     tx_resume();
 }
 
-bool usb_audio_recover_cat(unsigned attempt, unsigned limit)
+bool usb_audio_recover_cat(unsigned attempt)
 {
     if (!tx_begin_usb_recovery()) return false;
-    ESP_LOGW(TAG, "CP210x present without a valid CAT ID: resetting USB bus (attempt %u/%u)", attempt, limit);
+    ESP_LOGW(TAG, "CP210x present without a valid CAT ID: resetting USB bus (attempt %u)", attempt);
     recover_bus_claimed();
     return true;
 }

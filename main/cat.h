@@ -81,6 +81,8 @@ typedef struct {
     uint32_t age_ms;        /*!< Time since the last answer */
     uint8_t devices;        /*!< USB devices seen on the last scan (hubs included) */
     uint8_t cp210x;         /*!< Of those, CP210x (VID 0x10C4) devices opened */
+    bool waiting_for_cat;   /*!< Enumerated CP210x without a valid ID */
+    unsigned cat_usb_resets; /*!< Recovery attempts since the last valid ID */
     uint8_t answered;       /*!< Of those, devices that answered ID; */
     uint32_t write_error_seq;
     char write_error[80];   /*!< Last failed queued CAT write */

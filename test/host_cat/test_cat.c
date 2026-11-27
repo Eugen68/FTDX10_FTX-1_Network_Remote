@@ -31,18 +31,12 @@ esp_err_t g_write_result;
 
 static bool tx_enabled, tx_password;
 static bool mock_allow_reset = true;
-static unsigned mock_resets, mock_restarts;
+static unsigned mock_resets;
 void cat_cdc_probe_begin(void) {}
 cat_cdc_probe_t cat_cdc_probe_end(void) { return (cat_cdc_probe_t){0}; }
-static esp_reset_reason_t mock_reset_reason = ESP_RST_POWERON;
-esp_reset_reason_t esp_reset_reason(void) { return mock_reset_reason; }
-bool tx_begin_usb_recovery(void) { return mock_allow_reset; }
-void usb_audio_prepare_restart(void) { assert(!cat_usb_ready()); }
-void esp_restart(void) { ++mock_restarts; mock_reset_reason = ESP_RST_SW; }
-
-bool usb_audio_recover_cat(unsigned attempt, unsigned limit)
+bool usb_audio_recover_cat(unsigned attempt)
 {
-    assert(limit == CAT_RECOVER_MAX && attempt == mock_resets + 1);
+    assert(attempt == atomic_load(&s_cat_recoveries) + 1);
     if (!mock_allow_reset) return false;
     ++mock_resets;
     cat_usb_reset_begin();
@@ -265,6 +259,7 @@ static void test_rejected_tx_read_after_unkey(void)
 static unsigned open_attempts[16], open_attempt_count, closes;
 static uint8_t open_addr;
 static uint32_t mock_baud;
+static int64_t baud_changed_us;
 static bool swap_to_ftx1, fail_first_open, suppress_id;
 static unsigned cached_attempts, other_attempts, boot_probes_left;
 
@@ -291,6 +286,10 @@ static esp_err_t swap_request(cdc_acm_dev_hdl_t dev, uint8_t request, uint16_t l
     assert(open_addr == (uintptr_t)dev);
     if (request == CP210X_SET_BAUDRATE && length == sizeof(mock_baud)) {
         memcpy(&mock_baud, data, length);
+        baud_changed_us = g_now_us;
+        const uint32_t before = s_rx_bytes;
+        inject("\x7e\x8e");
+        CHECK(s_rx_bytes == before, "early CP210x bytes are ignored after baud change");
     }
     return ESP_OK;
 }
@@ -298,6 +297,7 @@ static esp_err_t swap_request(cdc_acm_dev_hdl_t dev, uint8_t request, uint16_t l
 static void swap_reply(const char *cmd, size_t length)
 {
     assert(cat_usb_ready());
+    assert(g_now_us - baud_changed_us >= CAT_BAUD_SETTLE_MS * 1000LL);
     assert(length == 3 && memcmp(cmd, "ID;", 3) == 0);
     if (mock_baud == s_last_baud) ++cached_attempts;
     else ++other_attempts;
@@ -390,45 +390,31 @@ static void test_hot_swap(void)
     CHECK(open_attempt_count == 4 && open_attempts[2] == 4 && open_attempts[3] == 2,
           "second scan starts with the other CP210x");
     CHECK(s_last_baud == 38400, "failed scans do not overwrite the cached baud");
-    g_now_us = s_cat_missing_since + CAT_RECOVER_US - 1;
-    recover_missing_cat(g_now_us);
-    CHECK(mock_resets == 0, "no power cycle before the CAT recovery threshold");
-    ++g_now_us;
-    mock_allow_reset = false;
-    recover_missing_cat(g_now_us);
-    CHECK(mock_resets == 0 && s_cat_recoveries == 0, "TX guard can defer a reset without using an attempt");
-    mock_allow_reset = true;
-    recover_missing_cat(g_now_us);
-    CHECK(mock_resets == 1 && !cat_usb_ready(), "missing ID triggers power cycle and a new settling period");
-    CHECK(!cat_usb_address_ready(2) && !cat_usb_address_ready(4), "forget prior USB enumeration");
-    for (unsigned i = 1; i < CAT_RECOVER_MAX; ++i) {
+    static const int64_t expected_delays[] = {15000000, 30000000, 60000000, 120000000, 300000000, 300000000};
+    for (unsigned i = 0; i < sizeof(expected_delays) / sizeof(*expected_delays); ++i) {
         s_cat_missing_since = g_now_us;
-        g_now_us += CAT_RECOVER_US;
+        g_now_us += expected_delays[i] - 1;
         recover_missing_cat(g_now_us);
+        CHECK(mock_resets == i, "wait for the scheduled recovery interval");
+        ++g_now_us;
+        mock_allow_reset = false;
+        recover_missing_cat(g_now_us);
+        CHECK(mock_resets == i && s_cat_recoveries == i, "TX guard defers recovery without using an attempt");
+        mock_allow_reset = true;
+        recover_missing_cat(g_now_us);
+        CHECK(mock_resets == i + 1 && !cat_usb_ready(), "missing ID triggers power cycle and a new settling period");
+        CHECK(!cat_usb_address_ready(2) && !cat_usb_address_ready(4), "forget prior USB enumeration");
+        cat_state_t state;
+        cat_get_state(&state);
+        CHECK(state.waiting_for_cat && state.cat_usb_resets == i + 1, "expose the recovery count while CAT is missing");
     }
-    s_cat_missing_since = g_now_us;
-    g_now_us += CAT_RECOVER_US;
-    mock_allow_reset = false;
-    recover_missing_cat(g_now_us);
-    CHECK(mock_restarts == 0 && !s_cat_restart_cookie, "TX guard also defers the board restart");
-    mock_allow_reset = true;
-    recover_missing_cat(g_now_us);
-    CHECK(mock_resets == CAT_RECOVER_MAX, "bound the number of automatic power cycles");
-    CHECK(mock_restarts == 1 && s_cat_restart_cookie == CAT_RESTART_COOKIE, "one board restart after USB recovery is exhausted");
-    load_cat_recovery_budget();
-    CHECK(s_cat_restart_used && s_cat_recoveries == CAT_RECOVER_MAX, "restore attempt guard after warm restart");
-    recover_missing_cat(g_now_us);
-    CHECK(mock_restarts == 1 && mock_resets == CAT_RECOVER_MAX, "persistent CAT failure cannot create a reboot loop");
-    cat_usb_reset_end();
     usb_added(2);
     usb_added(4);
     g_now_us += CAT_SETTLE_US;
     suppress_id = false;
     dev = find_cat_port();
-    CHECK(dev && s_rig->rig == CAT_RIG_FTX1 && !s_cat_recoveries && !s_cat_restart_used && !s_cat_restart_cookie,
-          "valid ID restores the recovery budget");
-    load_cat_recovery_budget();
-    CHECK(!s_cat_restart_used, "an ordinary restart after CAT connected does not use the recovery budget");
+    CHECK(dev && s_rig->rig == CAT_RIG_FTX1 && !s_cat_recoveries && !s_cat_waiting,
+          "valid ID clears the recovery counter and waiting marker");
     close_cat_port(&dev);
     CHECK(!ok(";") && !ok(";ID;"), "parser delimiter is not in the normal CAT allow-list");
     s_scan_after_addr = 0;
