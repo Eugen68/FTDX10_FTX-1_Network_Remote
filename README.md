@@ -540,7 +540,9 @@ Plug and unplug only with the radio's power supply off. Read that project's `doc
 - `GET /scope.bin` streams the rows (`?fps=1-25`). In the page, the MAIN scope has a **waterfall source** selector:
   **Auto** (the ACC scope when its data arrives, otherwise the audio scope), **Audio**, **ACC**. Click or tap on the
   ACC waterfall to tune MAIN there. The display scale follows the noise floor and the strongest signals.
-- Span, placement (Center / Cursor / Fix) and LEVEL are set on the radio; keep LEVEL at about +20.
+- While the ACC scope is shown, a **SPAN** selector (1 kHz – 1 MHz) in the MAIN scope header sets the radio's scope
+  span over CAT (`SS05…`); it shows the span the radio reports in its scope data, so it also follows the radio's own knob.
+  Placement (Center / Cursor / Fix) and LEVEL are set on the radio; keep LEVEL at about +20.
 
 ## Pseudo squelch (in the browser)
 
@@ -723,10 +725,10 @@ All endpoints (`/`, `/map`, `/status`, `/cat`, `POST /reboot`, `/stream.*`, `POS
 
 Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
 
-- The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `action`.
+- The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `scope_span` / `action`.
   Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main`.
-- Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `EX`), checked against the profile of the connected radio.
-  For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
+- Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `SS` `EX`), checked against the profile of the connected radio.
+  For `SS` only the FTDX10's scope SPAN item is allowed (`SS05` + 0–9 + `0000`). For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
   Supported radios also allow modulation menu queries and transmit VFO status (`FT;`). NET rigctl can set the active VFO, transmit VFO selection and filter width through radio-specific allow-listed commands. These commands cannot key the radio. `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.
   The ordinary CAT endpoint has no raw-command or PTT operation.
 - Frequency settings are range-checked against the radio's profile (FTX-1 30 kHz – 470 MHz, FTDX10 30 kHz – 75 MHz); anything outside it is rejected.

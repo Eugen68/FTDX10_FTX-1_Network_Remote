@@ -642,6 +642,8 @@
   .wf-source { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .6rem; padding: 0 .2rem; }
   .acc-info { font-size: .58rem; color: #fbbf24; font-weight: bold; white-space: nowrap; }
   .scope-container.acc-on .scope-spans [data-span], .scope-container.acc-on .scope-span-label { display: none; }
+  .acc-span { display: none; align-items: center; gap: .25rem; font-size: .58rem; color: #94a3b8; font-weight: bold; }
+  .scope-container.acc-on .acc-span { display: inline-flex; }
   .scope-container.acc-on .scope-canvas { cursor: crosshair; height: 210px; }
   #latencySel { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .58rem; padding: 0 .2rem; margin-right: .4rem; }
   .latency-text { color: #fbbf24; margin-right: .4rem; }
@@ -1250,6 +1252,13 @@
               <button type="button" class="scope-span-btn" data-span="1000" title="Narrow span for CW">1k</button>
               <button type="button" class="scope-span-btn active" data-span="3500">3.5k</button>
               <button type="button" class="scope-span-btn" data-span="6000">6k</button>
+              <label class="acc-span" title="The radio's scope span (CAT SS). The value shown is the one the radio reports in its scope data">SPAN
+                <select id="accSpanSel" class="wf-source" aria-label="FTDX10 scope span">
+                  <option value="0">1k</option><option value="1">2k</option><option value="2">5k</option>
+                  <option value="3">10k</option><option value="4">20k</option><option value="5">50k</option>
+                  <option value="6">100k</option><option value="7">200k</option><option value="8">500k</option>
+                  <option value="9">1M</option>
+                </select></label>
             </div>
           </div>
           <canvas id="scopeCanvasMain" class="scope-canvas" width="400" height="90"></canvas>
@@ -1975,7 +1984,22 @@ function accOnRecord(dv, off, points) {
   const place = ['CENTER', 'CURSOR', 'FIX'][rec.placement] || '';
   const spanTxt = rec.span >= 1000000 ? '1M' : (rec.span / 1000) + 'k';
   document.getElementById('accInfo').textContent = 'ACC ' + spanTxt + ' ' + place;
+  const code = ACC_SPANS_HZ.indexOf(rec.span);
+  if (code >= 0 && document.activeElement !== accSpanSel && Date.now() - accSpanChanged > 3000 &&
+      accSpanSel.value !== String(code)) {
+    accSpanSel.value = String(code);
+  }
 }
+
+// The radio's scope span (CAT SS05x). The select follows the span in the scope data; a choice made here
+// is held for 3 s while the radio switches.
+const ACC_SPANS_HZ = [1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000];
+const accSpanSel = document.getElementById('accSpanSel');
+let accSpanChanged = 0;
+accSpanSel.addEventListener('change', () => {
+  accSpanChanged = Date.now();
+  sendCatCommand({ target: 'main', scope_span: Number(accSpanSel.value) });
+});
 
 async function accStreamLoop() {
   const ctrl = accState.ctrl;

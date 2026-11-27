@@ -225,6 +225,7 @@ typedef struct {
     const char *poll_status;  // every 5 polls (BUSY / TX); NULL = none
     const char *sync_all;     // when the port is opened, then every 50 polls
     const char *resync_vfo;   // after SV / AB / BA
+    bool scope_span;          // SS0 5 <span> 0000: the scope span (FTDX10, whose ACC scope the page shows)
 } rig_profile_t;
 
 // No port open yet: only the identification query may be sent
@@ -255,6 +256,7 @@ static const rig_profile_t s_profiles[] = {
         .poll_fast = "RM1;",
         .poll_status = "BY;TX;",
         .sync_all = "FA;FB;MD0;MD1;AG0;SQ0;BP00;BP01;",
+        .scope_span = true,
         .resync_vfo = "FA;FB;MD0;MD1;",
     },
 };
@@ -633,6 +635,9 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         return pl == 9 && memcmp(p, rig->ex_data_out, 6) == 0 && all_digits(p + 6, 3) &&
                digits_value(p + 6, 3) <= USB_OUT_LEVEL_MAX;
     }
+    case CAT_TWO('S', 'S'):         // spectrum scope: only P2 = 5 (SPAN) 0-9 (1 kHz - 1 MHz), P4-P7 fixed 0
+        return ctl && rig->scope_span && pl == 7 && p[0] == '0' && p[1] == '5' && p[2] >= '0' && p[2] <= '9' &&
+               memcmp(p + 3, "0000", 4) == 0;
     case CAT_TWO('B', 'P'): {       // manual notch: kind 0 = ON/OFF, kind 1 = frequency in 10 Hz steps
         if (!ctl) {
             return false;
@@ -2547,6 +2552,15 @@ esp_err_t cat_set_volume(bool sub, uint8_t volume)
         xSemaphoreGive(s_lock);
     }
     return err;
+}
+
+esp_err_t cat_set_scope_span(uint8_t code)
+{
+    if (!s_rig->can_control || !s_rig->scope_span) return ESP_ERR_NOT_SUPPORTED;
+    if (code > 9) return ESP_ERR_INVALID_ARG;
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "SS05%u0000;", (unsigned)code);
+    return cat_enqueue(cmd);
 }
 
 esp_err_t cat_set_notch(bool sub, bool on)

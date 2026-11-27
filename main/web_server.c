@@ -945,6 +945,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
 //   vol, sq integer 0-255
 //   notch   0 | 1 | false | true           notch_hz integer 10-3200
 //   power   0 | 1 | false | true
+//   scope_span 0-9 (FTDX10 scope span, 1 kHz - 1 MHz)
 //   action  "swap" | "copy_main_to_sub" | "copy_sub_to_main"
 // Unknown or repeated keys, escapes, nesting and trailing data are rejected. There is no way to send a
 // raw CAT string.
@@ -965,6 +966,8 @@ typedef struct {
     uint16_t notch_hz;
     bool has_power;
     bool power;
+    bool has_scope_span;
+    uint8_t scope_span;
     bool has_action;
     char action[24];
 } cat_req_t;
@@ -1381,6 +1384,10 @@ static bool parse_cat_request(const char *s, cat_req_t *r)
         } else if (strcmp(key, "power") == 0) {
             if (is_text || r->has_power || !token_to_bool(token, &r->power)) return false;
             r->has_power = true;
+        } else if (strcmp(key, "scope_span") == 0) {
+            if (is_text || r->has_scope_span || !token_to_uint(token, 9, &num)) return false;
+            r->scope_span = (uint8_t)num;
+            r->has_scope_span = true;
         } else if (strcmp(key, "action") == 0) {
             if (!is_text || r->has_action) return false;
             strlcpy(r->action, text, sizeof(r->action));
@@ -1552,6 +1559,7 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     if (r.has_notch) APPLY(cat_set_notch(r.sub, r.notch));
     if (r.has_notch_hz) APPLY(cat_set_notch_freq(r.sub, r.notch_hz));
     if (r.has_power) APPLY(cat_set_power(r.power));
+    if (r.has_scope_span) APPLY(cat_set_scope_span(r.scope_span));
 #undef APPLY
 
     httpd_resp_set_type(req, "application/json");
