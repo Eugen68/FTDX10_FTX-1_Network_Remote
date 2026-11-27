@@ -1,8 +1,8 @@
 # Partition table for a 16 MB flash (ESP32-S3-N16R8).
 # nvs, otadata and phy_init keep the offsets of the earlier built-in "two large OTA" table, so writing this
 # table, otadata and the app over a configured board keeps its Wi-Fi and passwords (NVS at 0x9000).
-# Two 4 MB app slots (the app had grown to 94 % of the old 1700 KB slots); the rest is a data partition
-# kept for later (recordings, stored voice messages), not used by the firmware yet.
+# Two 4 MB app slots (the app had grown to 94 % of the old 1700 KB slots); the rest is a FAT data partition
+# (wear levelling) that holds the FT8 QSO log, formatted on first use; room is left for recordings later.
 # Name,     Type, SubType, Offset,   Size
 nvs,        data, nvs,     0x9000,   0x6000
 otadata,    data, ota,     0xf000,   0x2000
