@@ -546,7 +546,7 @@
   #txMicLevel { width: 6rem; vertical-align: middle; }
   .scope-mute-btn { margin-right: .2rem; }
   .scope-vol { width: 56px; height: 10px; margin-right: .4rem; accent-color: #38bdf8; }
-  .ft8-dtcorr { width: 3.6em; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .65rem; }
+  .ft8-dtcorr { width: 4.4em; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .65rem; }
   .scope-mute-btn.muted {
     background: #b91c1c;
     color: #fff;
@@ -1310,6 +1310,8 @@
           <div class="ft8-ctrls">
             <label class="ft8-dtcorr-label" title="Subtracted from every DT shown (MAIN and SUB): the delay the audio picks up on its way here (USB, Wi-Fi, browser). Set it to the DT most stations show, so DTs read as in WSJT-X">DT corr
               <input type="number" class="ft8-dtcorr" id="ft8DtCorr" min="-1" max="2" step="0.1" value="0.3"></label>
+            <span class="ft8-dtcorr-label" id="ft8DtMedian" title="Median raw DT (before DT corr) of the stations decoded on MAIN and SUB in the last 4 slots, and how many">med —</span>
+            <button type="button" class="ft8-btn" id="ft8DtApply" title="Set DT corr to this median" disabled>APPLY</button>
             <button type="button" class="ft8-btn" id="ft8EnableBtnMain">DECODER OFF</button>
             <button type="button" class="ft8-btn" id="ft8ClearBtnMain">CLEAR</button>
           </div>
@@ -4593,6 +4595,32 @@ function ft8DtCorrection() {
   return isFinite(v) ? Math.max(-1, Math.min(2, v)) : 0;
 }
 
+// Median raw DT of recent decodes: a robust estimate of the audio delay, offered for DT corr.
+// One station with a wrong clock moves a mean, not the median.
+const FT8_DT_SLOTS = 4, FT8_DT_MIN_STATIONS = 5;
+const ft8DtMedianEl = document.getElementById('ft8DtMedian');
+const ft8DtApplyBtn = document.getElementById('ft8DtApply');
+let ft8RawDts = [];   // { utc, dt }
+let ft8DtMedianValue = null;
+function ft8NoteRawDt(utc, dt) {
+  if (!isFinite(dt)) return;
+  ft8RawDts.push({ utc, dt });
+  const slots = [...new Set(ft8RawDts.map(e => e.utc))].slice(-FT8_DT_SLOTS);   // arrival order: safe at midnight
+  ft8RawDts = ft8RawDts.filter(e => slots.includes(e.utc));
+  const dts = ft8RawDts.map(e => e.dt).sort((a, b) => a - b);
+  const n = dts.length, mid = n >> 1;
+  ft8DtMedianValue = n >= FT8_DT_MIN_STATIONS ? (n % 2 ? dts[mid] : (dts[mid - 1] + dts[mid]) / 2) : null;
+  ft8DtMedianEl.textContent = ft8DtMedianValue === null ? 'med —'
+    : `med ${ft8DtMedianValue >= 0 ? '+' : ''}${ft8DtMedianValue.toFixed(2)} (${n})`;
+  ft8DtApplyBtn.disabled = ft8DtMedianValue === null;
+}
+ft8DtApplyBtn.addEventListener('click', () => {
+  if (ft8DtMedianValue === null) return;
+  const v = Math.max(-1, Math.min(2, Math.round(ft8DtMedianValue * 10) / 10));
+  ft8DtCorrInput.value = v.toFixed(1);
+  ft8DtCorrInput.dispatchEvent(new Event('input'));   // saved like a typed value
+});
+
 // One independent decoder state per receiver channel (left = MAIN, right = SUB)
 const ft8Chans = ['Main', 'Sub'].map((name, idx) => {
   const f = {
@@ -4722,6 +4750,7 @@ function addFt8Message(f, utc, db, dt, freq, msg, dialHz) {
   const dialStr = dial > 0 ? (dial / 1e6).toFixed(3) : '--';
   const rfTitle = dial > 0 ? `RF: ${((dial + freq) / 1e6).toFixed(6)} MHz (${(dial / 1e6).toFixed(3)} MHz + ${freq} Hz)` : `Audio: ${freq} Hz`;
 
+  ft8NoteRawDt(utc, dt);
   dt = dt - ft8DtCorrection();
   tr.innerHTML = `
     <td>${escapeHtml(utc)}</td>
