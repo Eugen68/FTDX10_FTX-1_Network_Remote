@@ -80,6 +80,10 @@ static yaesu_reply_t read_command(const char *name, const char *p, const cat_sta
                  mode_or_default(p[0] == '1' ? cat->mode_sub_raw : cat->mode_main_raw));
     } else if (!strcmp(name, "FT") && !pl) {
         snprintf(buf, sizeof(buf), "FT%c;", cat->tx_vfo == CAT_TX_VFO_SUB ? '1' : '0');
+    } else if (!strcmp(name, "ST") && !pl) {
+        const bool rx_sub = cat->rx_vfo_known && cat->rx_vfo_sub;
+        const bool split = cat->tx_vfo != CAT_TX_VFO_UNKNOWN && (cat->tx_vfo == CAT_TX_VFO_SUB) != rx_sub;
+        snprintf(buf, sizeof(buf), "ST%c;", split ? '1' : '0');
     } else if (!strcmp(name, "VS") && !pl) {
         snprintf(buf, sizeof(buf), "VS%c;", cat->rx_vfo_known && cat->rx_vfo_sub ? '1' : '0');
     } else if (!strcmp(name, "TX") && !pl) {
@@ -135,6 +139,11 @@ yaesu_reply_t yaesu_cat_command(const char *cmd, const cat_state_t *cat, yaesu_s
         const char main = cat->dual_rx ? '0' : '2';
         if (!cat->can_control || (p[0] != main && p[0] != main + 1)) return write_result(reply, false);
         action = (yaesu_set_t){.action = YAESU_SET_TX_VFO, .sub = p[0] == main + 1};
+    } else if (!strcmp(name, "ST") && pl == 1) {
+        // Split on: transmit on the VFO that is not receiving. ST2 (split +5 kHz) is not offered.
+        if (!cat->can_control || (p[0] != '0' && p[0] != '1')) return write_result(reply, false);
+        const bool rx_sub = cat->rx_vfo_known && cat->rx_vfo_sub;
+        action = (yaesu_set_t){.action = YAESU_SET_TX_VFO, .sub = p[0] == '1' ? !rx_sub : rx_sub};
     } else if ((!strcmp(name, "SV") || !strcmp(name, "AB") || !strcmp(name, "BA")) && !pl) {
         if (!cat->can_control) return write_result(reply, false);
         action.action = name[0] == 'S' ? YAESU_SWAP_VFO : name[0] == 'A' ? YAESU_COPY_A_TO_B : YAESU_COPY_B_TO_A;
