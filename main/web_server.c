@@ -41,6 +41,8 @@
 #include "esp_netif.h"
 #include "usb_audio.h"
 #include "web_auth.h"
+#include "ui_prefs.h"
+#include "nvs.h"
 #include "web_server.h"
 
 #define WEB_CORE             0
@@ -1423,6 +1425,75 @@ static bool content_type_is_json(httpd_req_t *req)
     return strncasecmp(type, json_type, sizeof(json_type) - 1) == 0;
 }
 
+#define UI_PREFS_NAMESPACE "ui_prefs"
+#define UI_PREFS_KEY "settings"
+
+static esp_err_t prefs_load(ui_prefs_t *settings, char *json, size_t capacity)
+{
+    *settings = (ui_prefs_t){0};
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(UI_PREFS_NAMESPACE, NVS_READONLY, &handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) return ESP_OK;
+    if (err != ESP_OK) return err;
+    err = nvs_get_str(handle, UI_PREFS_KEY, json, &capacity);
+    nvs_close(handle);
+    if (err == ESP_OK) {
+        bool reset;
+        if (!ui_prefs_parse(json, settings, &reset) || reset) *settings = (ui_prefs_t){0};
+    } else if (err == ESP_ERR_NVS_NOT_FOUND || err == ESP_ERR_NVS_INVALID_LENGTH) {
+        err = ESP_OK;
+    }
+    return err;
+}
+
+static esp_err_t prefs_get_handler(httpd_req_t *req)
+{
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) return ESP_OK;
+    ui_prefs_t settings;
+    char json[UI_PREFS_JSON_BYTES];
+    const int n = prefs_load(&settings, json, sizeof(json)) == ESP_OK
+        ? ui_prefs_format(&settings, json, sizeof(json)) : -1;
+    return send_json(req, json, n, sizeof(json));
+}
+
+static esp_err_t prefs_post_handler(httpd_req_t *req)
+{
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, true)) return ESP_OK;
+    web_auth_set_common_headers(req);
+    if (req->content_len >= UI_PREFS_JSON_BYTES) {
+        httpd_resp_set_hdr(req, "Connection", "close");
+        return httpd_resp_send_err(req, HTTPD_413_CONTENT_TOO_LARGE, "Request body is too large");
+    }
+    char json[UI_PREFS_JSON_BYTES];
+    ui_prefs_t patch, settings;
+    bool reset;
+    if (!content_type_is_json(req) || !read_body(req, json, sizeof(json))) {
+        httpd_resp_set_hdr(req, "Connection", "close");
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON body");
+    }
+    if (!ui_prefs_parse(json, &patch, &reset)) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid UI preference");
+    }
+
+    // The HTTP server serializes these handlers. Merge only the fields changed by this client.
+    esp_err_t err = reset ? ESP_OK : prefs_load(&settings, json, sizeof(json));
+    if (err == ESP_OK && !reset) {
+        const ui_prefs_t before = settings;
+        ui_prefs_merge(&settings, &patch);
+        if (memcmp(&settings, &before, sizeof(settings)) == 0) return send_json(req, "{}", 2, 3);
+        if (ui_prefs_format(&settings, json, sizeof(json)) < 0) err = ESP_FAIL;
+    }
+    nvs_handle_t handle;
+    if (err == ESP_OK) err = nvs_open(UI_PREFS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err == ESP_OK) {
+        err = reset ? nvs_erase_key(handle, UI_PREFS_KEY) : nvs_set_str(handle, UI_PREFS_KEY, json);
+        if (reset && err == ESP_ERR_NVS_NOT_FOUND) err = ESP_OK;
+        if (err == ESP_OK) err = nvs_commit(handle);
+        nvs_close(handle);
+    }
+    return send_json(req, "{}", err == ESP_OK ? 2 : -1, 3);
+}
+
 static esp_err_t cat_post_handler(httpd_req_t *req)
 {
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, true)) {
@@ -1803,6 +1874,8 @@ esp_err_t web_server_start(void)
         {.uri = "/tx_mic.js",  .method = HTTP_GET,  .handler = tx_mic_handler},
         {.uri = "/map",        .method = HTTP_GET,  .handler = map_handler},
         {.uri = "/status",     .method = HTTP_GET,  .handler = status_handler},
+        {.uri = "/prefs",      .method = HTTP_GET,  .handler = prefs_get_handler},
+        {.uri = "/prefs",      .method = HTTP_POST, .handler = prefs_post_handler},
         {.uri = "/cat",        .method = HTTP_GET,  .handler = cat_handler},
         {.uri = "/cat",        .method = HTTP_POST, .handler = cat_post_handler},
         {.uri = "/reboot",     .method = HTTP_POST, .handler = reboot_handler},
