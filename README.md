@@ -427,7 +427,7 @@ All of them require Basic authentication (see "Security notes" below).
 | Path | Description |
 | --- | --- |
 | `/` | Browser player |
-| `/status` | Stream state and diagnostics (JSON): firmware version (`version`), build time (`build`), audio format, uptime, heap (`heap_free` / `heap_min` / `heap_block`; these include PSRAM if it is enabled), internal-RAM-only heap (`int_free` / `int_min` / `int_block`), Wi-Fi `rssi`, and stream send statistics (`stream.slow_sends` / `stream.max_send_ms`, and others) |
+| `/status` | Stream state and diagnostics (JSON): firmware version (`version`), build time (`build`), audio format, uptime, heap (`heap_free` / `heap_min` / `heap_block`; these include PSRAM if it is enabled), internal-RAM-only heap (`int_free` / `int_min` / `int_block`), Wi-Fi `rssi`, stream send statistics (`stream.slow_sends` / `stream.max_send_ms`, and others), and the CAT commands the radio refused: `cat_rejected_commands` (count since boot), `cat_last_rejected` (the last one, e.g. `"BP00;"`) and `cat_last_rejected_age_s` (seconds ago, `null` if none) |
 | `POST /cat` | Controls the radio (frequency, mode, volume, and so on; JSON, `X-Requested-With: ftx1` required) |
 | `POST /reboot` | Reboot the ESP32-S3 (JSON, `X-Requested-With: ftx1` required) |
 | `/stream.pcm` | Raw PCM (little endian). The format is reported in the `X-Sample-Rate` / `X-Channels` / `X-Bytes-Per-Sample` headers |

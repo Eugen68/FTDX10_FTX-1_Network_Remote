@@ -160,6 +160,15 @@ static void test_startup(void)
           "FTX-1 reads before first write");
     CHECK(cat_rejected_commands() == rejected + 1 && !poll_rejected("BP00;"),
           "one explicit rejection does not suppress a read");
+    {
+        char last[CAT_LOG_TEXT_LEN];
+        uint32_t age_s = 99, later_s = 0;
+        CHECK(cat_last_rejected(last, sizeof(last), &age_s) && strcmp(last, "BP00;") == 0,
+              "status names the read the radio refused (%s)", last);
+        g_now_us += 3000000;
+        CHECK(cat_last_rejected(last, sizeof(last), &later_s) && later_s == age_s + 3, "and how long ago");
+        g_now_us -= 3000000;
+    }
     g_sent[0] = '\0';
     send_poll((void *)1, "BP00;BP01;");
     CHECK(strcmp(g_sent, "BP00;BP01;") == 0 && !poll_rejected("BP00;"), "retry after two rejections");

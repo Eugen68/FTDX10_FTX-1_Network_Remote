@@ -296,3 +296,5 @@ esp_err_t cat_set_power(bool on);
 void cat_usb_reset_begin(void);
 void cat_usb_reset_end(void);
 unsigned cat_rejected_commands(void);
+/** The command the radio last answered "?;" to and how long ago (s); false if none since boot */
+bool cat_last_rejected(char *out, size_t size, uint32_t *age_s);

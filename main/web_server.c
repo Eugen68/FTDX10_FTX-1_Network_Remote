@@ -694,7 +694,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     }
     usb_audio_format_t fmt;
     char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 400 + 2 * RIGCTL_LINE_SIZE + 736 +
-              2 * YAESU_CAT_CMD_MAX + 256];
+              2 * YAESU_CAT_CMD_MAX + 256 + 64 + 2 * CAT_LOG_TEXT_LEN];   // + cat_last_rejected
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -799,13 +799,19 @@ static esp_err_t status_handler(httpd_req_t *req)
     }
     if (n > 0 && (size_t)n < sizeof(json)) {
         const cat_write_stats_t cat = cat_get_write_stats();
+        char rejected[CAT_LOG_TEXT_LEN], rejected_json[2 * CAT_LOG_TEXT_LEN + 1], rejected_age[12];
+        uint32_t age_s;
+        const bool any_rejected = cat_last_rejected(rejected, sizeof(rejected), &age_s);
+        json_escape(rejected, rejected_json, sizeof(rejected_json));   // bytes we sent, escaped anyway
+        snprintf(rejected_age, sizeof(rejected_age), any_rejected ? "%lu" : "null", (unsigned long)age_s);
         n--;
         n += snprintf(json + n, sizeof(json) - n,
+                      ",\"cat_last_rejected\":\"%s\",\"cat_last_rejected_age_s\":%s"
                       ",\"cat_rejected_commands\":%u,\"cat_write\":{\"budget_ms\":%u,\"keyed_poll_budget_ms\":%u,"
                       "\"all\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
                       "\"keyed\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u},"
                       "\"meters\":{\"calls\":%u,\"timeouts\":%u,\"over_budget\":%u,\"max_us\":%u}}}",
-                      cat_rejected_commands(), cat.budget_ms, cat.keyed_poll_budget_ms, cat.all.calls, cat.all.timeouts, cat.all.over_budget, cat.all.max_us,
+                      rejected_json, rejected_age, cat_rejected_commands(), cat.budget_ms, cat.keyed_poll_budget_ms, cat.all.calls, cat.all.timeouts, cat.all.over_budget, cat.all.max_us,
                       cat.keyed.calls, cat.keyed.timeouts, cat.keyed.over_budget, cat.keyed.max_us,
                       cat.meters.calls, cat.meters.timeouts, cat.meters.over_budget, cat.meters.max_us);
     }
