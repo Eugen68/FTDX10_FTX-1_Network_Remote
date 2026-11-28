@@ -725,7 +725,7 @@ Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
 
 - The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `action`.
   Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main`.
-- Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `EX`), checked against the profile of the connected radio.
+- Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `PC` `EX`), checked against the profile of the connected radio.
   For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
   Supported radios also allow modulation menu queries and transmit VFO status (`FT;`). NET rigctl can set the active VFO, transmit VFO selection and filter width through radio-specific allow-listed commands. These commands cannot key the radio. `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.
   The ordinary CAT endpoint has no raw-command or PTT operation.
@@ -743,6 +743,10 @@ and the TX password. Five failed TX password attempts from the same IP trigger t
 One browser can hold PTT at a time. Hold the button or Space while the page has focus. During confirmed TX, the PTT button and the
 frequency readout for the radio-selected TX VFO turn red.
 The TX panel offers PTT only, a 1,000 Hz test tone, and a 700 + 1,900 Hz two-tone test. Set MAIN to USB, LSB, DATA-USB or DATA-LSB.
+Its **Power** slider shows the radio's TX power (CAT `PC`, read every 5 s) and, after **Authorize TX**, sets it:
+5–100 W on the FTDX10; on the FTX-1 5–10 W on the field head or 5–100 W with the SPA-1, as the radio reports.
+The power is written only over the authorized TX connection and only with remote TX enabled (never from
+`/cat`, the CAT console or the network CAT servers), and not while transmitting.
 On FTX-1, when SUB is selected for transmit, set SUB to one of those modes too. On FTDX10, select MAIN
 for remote PTT. The firmware waits for fresh
 CAT confirmation of the mode and the selected transmitter. Select USB modulation on the radio to use the test tones. The firmware leaves the modulation-source and transmit-gain menus under local control.

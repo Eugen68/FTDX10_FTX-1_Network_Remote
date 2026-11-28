@@ -59,6 +59,8 @@ typedef struct {
     bool rx_vfo_sub;
     int8_t width_code[2];     /*!< SH code for each receiver, -1 if unavailable */
     int8_t key_pitch;         /*!< CW key pitch, KP code 0-75 (300-1050 Hz in 10 Hz steps), -1 if unread */
+    int16_t tx_power_w;       /*!< TX power setting (PC), watts; -1 if unread */
+    uint8_t tx_power_head;    /*!< FTX-1 PC P1: 1 field head (5-10 W), 2 SPA-1 (5-100 W); 0 = FTDX10 or unread */
     bool tx_cat;
     bool tx_radio;
     bool tx_radio_known;
@@ -175,6 +177,12 @@ const char *cat_data_mode_error(void);
  * typed arguments, and cat.c only lets an allow-list of commands (frequency, mode, AF gain, squelch,
  * notch, VFO swap/copy, power) reach the radio. Nothing in this firmware can make the radio transmit.
  */
+
+/**
+ * @brief Set the TX power (CAT "PC"): FTDX10 5-100 W; FTX-1 5-10 W (field head) or 5-100 W (SPA-1), as the radio
+ * reports. Only with remote TX enabled, and called only from the authenticated TX panel. It never keys the radio.
+ */
+esp_err_t cat_set_tx_power(unsigned watts);
 
 /** @brief Swap the MAIN and SUB VFOs (CAT "SV") */
 esp_err_t cat_swap_vfo(void);

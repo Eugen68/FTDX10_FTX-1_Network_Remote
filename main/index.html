@@ -1582,6 +1582,9 @@
       </select>
     </label>
     <label id="txToneLevel">Level <input id="txLevel" type="number" value="-24" min="-60" max="-6" step="1"> dBFS</label>
+    <label id="txPowerRow" hidden title="The radio's TX power (CAT PC). Set from here only after Authorize TX; the radio keeps it">Power
+      <input id="txPower" type="range" min="5" max="100" step="1" value="50" disabled aria-label="TX power">
+      <output id="txPowerVal">-- W</output></label>
     <span id="txMicControls" hidden>
       <button id="txMicToggle" type="button">Enable microphone</button>
       <label>Mic gain <input id="txMicGain" type="range" min="-36" max="0" value="-12" step="1">
@@ -4084,11 +4087,34 @@ ft8Tx.Arm.addEventListener('click', async () => {
           odd: ft8Tx.Slot.value === 'odd', dbfs: ft8SentLevel});
 });
 
+// TX power (CAT PC): shown from /cat; changed only over the authorized TX connection (message "power")
+const txPower = document.getElementById('txPower');
+const txPowerVal = document.getElementById('txPowerVal');
+let txPowerChanged = 0;
+txPower.addEventListener('input', () => {
+  txPowerChanged = Date.now();
+  txPowerVal.textContent = txPower.value + ' W';
+});
+txPower.addEventListener('change', () => {
+  txPowerChanged = Date.now();
+  if (txAuthenticated) sendTx({t: 'power', w: Number(txPower.value)});
+});
+function txPowerApply(d) {
+  const known = Number.isInteger(d.tx_power) && d.tx_power_max > 0;
+  document.getElementById('txPowerRow').hidden = !known;
+  if (!known) return;
+  txPower.max = d.tx_power_max;
+  if (document.activeElement === txPower || Date.now() - txPowerChanged < 3000) return;
+  txPower.value = d.tx_power;
+  txPowerVal.textContent = d.tx_power + ' W';
+}
+
 function updateTxControls() {
   const voice = txTone.value === 'voice';
   micControls.hidden = !voice;
   document.getElementById('txToneLevel').hidden = voice || txTone.value === 'off';
   micToggle.disabled = !txAuthenticated || micOpening;
+  txPower.disabled = !txAuthenticated || txStopping;
   ft8Tx.Controls.hidden = !txAuthenticated;
   ft8Tx.Arm.disabled = !txAuthenticated || ft8Pending || ft8Armed || txHeld || txKeyed || txStopping || ft8Clock === 'none';
   ft8Tx.Halt.disabled = !ft8Pending && !ft8Armed;
@@ -4451,6 +4477,7 @@ async function smPoll() {
     }
     const now = Date.now();
     applyRigProfile(d);
+    txPowerApply(d);
     catTxVfo = d.connected ? (d.tx_vfo || null) : null;
     catRxVfo = d.connected ? (d.rx_vfo || null) : null;
     const recovery = document.getElementById('catRecoveryStatus');

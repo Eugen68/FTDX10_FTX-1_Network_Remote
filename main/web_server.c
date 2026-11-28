@@ -926,13 +926,23 @@ static esp_err_t cat_handler(httpd_req_t *req)
                            ? (st.rx_vfo_sub ? "\"sub\"" : "\"main\"") : "null";
         const char *tx_vfo = st.connected && st.tx_vfo == CAT_TX_VFO_MAIN ? "\"main\"" :
                              st.connected && st.tx_vfo == CAT_TX_VFO_SUB ? "\"sub\"" : "null";
+        // TX power for the TX panel: the setting and the most the radio's current source allows
+        char power[8] = "null";
+        unsigned power_max = 0;
+        if (st.connected && st.tx_power_w >= 0) {
+            snprintf(power, sizeof(power), "%d", st.tx_power_w);
+            power_max = st.rig == CAT_RIG_FTX1 ? (st.tx_power_head == 1 ? 10u : st.tx_power_head == 2 ? 100u : 0u)
+                                               : st.rig == CAT_RIG_FTDX10 ? 100u : 0u;
+        }
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,"
-                      "\"rx_vfo\":%s,\"tx_vfo\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\"}",
+                      "\"rx_vfo\":%s,\"tx_vfo\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\","
+                      "\"tx_power\":%s,\"tx_power_max\":%u}",
                       (unsigned)st.voice_source, app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
-                      st.tx_radio_known ? "true" : "false", rx_vfo, tx_vfo, (unsigned long)st.write_error_seq, write_error);
+                      st.tx_radio_known ? "true" : "false", rx_vfo, tx_vfo, (unsigned long)st.write_error_seq, write_error,
+                      power, power_max);
     }
     return send_json(req, json, n, sizeof(json));
 }
@@ -1021,7 +1031,7 @@ typedef struct {
     char pass[APP_CONFIG_PASS_MAX_LEN + 1];
     char message[FT8_TX_TEXT_SIZE];
     int64_t offset;
-    unsigned hz, rtt;
+    unsigned hz, rtt, watts;
     bool on, odd;
     tx_tone_t tone;
     int dbfs;
@@ -1060,7 +1070,7 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
         return false;
     }
     enum { TYPE = 1, PASS = 2, ON = 4, TONE = 8, DBFS = 16,
-           MESSAGE = 32, HZ = 64, ODD = 128, OFFSET = 256, RTT = 512 };
+           MESSAGE = 32, HZ = 64, ODD = 128, OFFSET = 256, RTT = 512, WATTS = 1024 };
     msg->dbfs = TX_TONE_DEFAULT_DBFS;
     unsigned fields = 0;
     for (;;) {
@@ -1120,6 +1130,13 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
             if (field == HZ) msg->hz = (unsigned)value;
             else if (field == RTT) msg->rtt = (unsigned)value;
             else msg->offset = value;
+        } else if (strcmp(key, "w") == 0) {
+            field = WATTS;
+            char token[8], *end;
+            if (!parse_token(&p, token, sizeof(token)) || token[0] < '0' || token[0] > '9') return false;
+            const unsigned long value = strtoul(token, &end, 10);
+            if (*end || value > 100) return false;
+            msg->watts = (unsigned)value;
         } else if (strcmp(key, "odd") == 0) {
             field = ODD;
             char token[8];
@@ -1160,6 +1177,7 @@ static bool parse_tx_message(const char *p, tx_ws_message_t *msg)
                            (!(fields & (TONE | DBFS)) || (msg->on && (fields & TONE))) && strcmp(msg->type, "ptt") == 0) ||
                           ((fields & ~DBFS) == (TYPE | MESSAGE | HZ | ODD) && strcmp(msg->type, "ft8_arm") == 0) ||
                           (fields == (TYPE | DBFS) && strcmp(msg->type, "ft8_level") == 0) ||
+                          (fields == (TYPE | WATTS) && strcmp(msg->type, "power") == 0) ||
                           (fields == (TYPE | OFFSET | RTT) && strcmp(msg->type, "ft8_clock") == 0) ||
                           (fields == TYPE && (strcmp(msg->type, "hb") == 0 || strcmp(msg->type, "status") == 0 ||
                                               strcmp(msg->type, "ft8_ping") == 0 || strcmp(msg->type, "ft8_halt") == 0)));
@@ -1239,6 +1257,11 @@ static esp_err_t tx_ws_handler(httpd_req_t *req)
         error = ft8_tx_arm(session->owner, msg.message, msg.hz, msg.odd, msg.dbfs);
     } else if (strcmp(msg.type, "ft8_level") == 0) {
         ft8_tx_set_level(session->owner, msg.dbfs);
+    } else if (strcmp(msg.type, "power") == 0) {
+        // TX power: only from this authenticated TX session (cat_set_tx_power refuses other paths)
+        const esp_err_t err = cat_set_tx_power(msg.watts);
+        if (err == ESP_ERR_INVALID_ARG) error = "Power out of range";
+        else if (err != ESP_OK) error = "Power not set: radio busy or its power source not read yet";
     } else if (strcmp(msg.type, "ft8_halt") == 0) {
         ft8_tx_halt(session->owner, "FT8 halted");
     } else if (strcmp(msg.type, "ft8_clock") == 0) {

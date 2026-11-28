@@ -606,7 +606,8 @@ int main(void) {
     tx_password = true;
     CHECK(ok("TX1;") && ok("TX0;") && !ok("TX2;"), "FTX-1 authorized TX");
     use("0761");
-    CHECK(ok("TX1;") && ok("TX0;") && !ok("TX2;") && !ok("MX1;") && !ok("KY0;") && !ok("VX1;") && !ok("PC100;"),
+    // PC (TX power) passes the allow-list with TX enabled; only cat_set_tx_power() can queue it (tested below)
+    CHECK(ok("TX1;") && ok("TX0;") && !ok("TX2;") && !ok("MX1;") && !ok("KY0;") && !ok("VX1;") && ok("PC100;"),
           "FTDX10 only allows the intended TX commands");
     CHECK(ok("EX010415;") && !ok("EX010415001;"), "TX menu read only");
     use("9999");
@@ -647,6 +648,39 @@ int main(void) {
     CHECK(cat_set_freq(false, 14074000) == ESP_ERR_INVALID_STATE, "unknown set");
     use("0840");
     CHECK(cat_set_squelch(true, 255) == ESP_OK && cat_set_freq(true, 433000000) == ESP_OK, "ftx1 setters");
+
+    // TX power (PC): read always; write only with remote TX enabled, only through cat_set_tx_power
+    {
+        const bool saved_enabled = tx_enabled, saved_password = tx_password;
+        tx_enabled = false;
+        use("0761");
+        CHECK(ok("PC;") && !ok("PC050;"), "FTDX10 PC read; no write with TX off");
+        CHECK(cat_set_tx_power(50) == ESP_ERR_INVALID_STATE, "no power write with TX off");
+        tx_enabled = tx_password = true;
+        CHECK(ok("PC005;") && ok("PC100;") && !ok("PC004;") && !ok("PC101;") && !ok("PC1050;"), "FTDX10 5-100 W");
+        g_queue_send_hook = capture_cat_item;
+        CHECK(cat_set_tx_power(50) == ESP_OK && strcmp(queued_rigctl.cmd, "PC050;") == 0, "FTDX10 power write");
+        CHECK(cat_set_tx_power(4) == ESP_ERR_INVALID_ARG && cat_set_tx_power(101) == ESP_ERR_INVALID_ARG, "FTDX10 range");
+        CHECK(cat_enqueue("PC060;") == ESP_ERR_NOT_SUPPORTED, "a PC write is refused outside the TX panel path");
+        handle_cat_packet("PC075;");
+        cat_state_t pw;
+        cat_get_state(&pw);
+        CHECK(pw.tx_power_w == 75 && pw.tx_power_head == 0, "FTDX10 power answer");
+        use("0840");
+        CHECK(ok("PC1010;") && !ok("PC1011;") && ok("PC2100;") && !ok("PC3050;") && !ok("PC050;"), "FTX-1 head / SPA-1");
+        s_state.tx_power_head = 0;
+        CHECK(cat_set_tx_power(10) == ESP_ERR_INVALID_STATE, "FTX-1 needs its power source read first");
+        handle_cat_packet("PC1008;");
+        cat_get_state(&pw);
+        CHECK(pw.tx_power_w == 8 && pw.tx_power_head == 1, "FTX-1 field-head answer");
+        CHECK(cat_set_tx_power(10) == ESP_OK && strcmp(queued_rigctl.cmd, "PC1010;") == 0, "FTX-1 head 10 W");
+        CHECK(cat_set_tx_power(11) == ESP_ERR_INVALID_ARG, "FTX-1 head max 10 W");
+        handle_cat_packet("PC2050;");
+        CHECK(cat_set_tx_power(100) == ESP_OK && strcmp(queued_rigctl.cmd, "PC2100;") == 0, "FTX-1 SPA-1 100 W");
+        g_queue_send_hook = NULL;
+        tx_enabled = saved_enabled;
+        tx_password = saved_password;
+    }
 
     // parsers
     int m, sb; bool b;
