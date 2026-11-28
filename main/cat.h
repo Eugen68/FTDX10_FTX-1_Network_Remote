@@ -171,10 +171,21 @@ const char *cat_voice_mode_error(bool starting);
 const char *cat_data_mode_error(void);
 
 /*
- * There is deliberately no function that sends a free-form CAT string. Every command is built here from
- * typed arguments, and cat.c only lets an allow-list of commands (frequency, mode, AF gain, squelch,
+ * The only free-form input is the page's CAT console (cat_send_console), and it goes through the same
+ * allow-list, never keys the radio, and sends nothing if a command is refused. Every other command is built
+ * here from typed arguments, and cat.c only lets an allow-list of commands (frequency, mode, AF gain, squelch,
  * notch, VFO swap/copy, power) reach the radio. Nothing in this firmware can make the radio transmit.
  */
+
+#define CAT_CONSOLE_MAX_BYTES 64
+#define CAT_CONSOLE_MAX_CMDS  8
+
+/**
+ * @brief Send a line typed in the page's CAT LOG console, e.g. "FA014074000;" or "FA;MD0;".
+ * Every command must be on the allow-list (refused ones are logged as BLOCKED), transmit (TX1 / TX2) is always
+ * refused, and if any command is refused nothing is sent. why gets the reason on failure.
+ */
+esp_err_t cat_send_console(const char *line, char *why, size_t why_size);
 
 /** @brief Swap the MAIN and SUB VFOs (CAT "SV") */
 esp_err_t cat_swap_vfo(void);

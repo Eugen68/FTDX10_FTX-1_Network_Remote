@@ -647,6 +647,11 @@
   .latency-text { color: #fbbf24; margin-right: .4rem; }
   #streamRateSel { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .58rem; padding: 0 .2rem; margin-right: .4rem; }
   .catlog-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; padding: .4rem .6rem; font-size: .7rem; color: #94a3b8; }
+  .catlog-console { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: 0 .6rem .4rem; font-size: .7rem; }
+  .catlog-console input { flex: 1 1 16rem; min-width: 0; background: #0f172a; color: #e2e8f0; border: 1px solid #334155;
+                          border-radius: 3px; font-family: monospace; font-size: .75rem; padding: .2rem .35rem; text-transform: uppercase; }
+  #catConsoleInfo { color: #94a3b8; }
+  #catConsoleInfo.err { color: #f87171; }
   .catlog-legend span { margin-right: .5rem; }
   #catLogInfo { margin-left: auto; }
   .catlog-list { height: 220px; overflow-y: auto; margin: 0 .6rem .6rem; padding: .3rem .5rem; background: #020617;
@@ -1608,6 +1613,13 @@
       <span class="catlog-legend"><span class="k0">&#8594; sent</span> <span class="k2">&#8592; received</span> <span class="k3">blocked (not sent)</span> <span class="k4">write error</span></span>
       <span id="catLogInfo"></span>
     </div>
+    <form class="catlog-console" id="catConsoleForm" onsubmit="return false;"
+          title="Commands go through the same allow-list as the page (others are logged as BLOCKED). Transmit (TX1 / TX2) is refused here: use the TX panel. If one command is refused, none is sent.">
+      <input id="catConsoleInput" maxlength="64" autocomplete="off" spellcheck="false"
+             placeholder="CAT command, e.g. FA014074000;  or several: FA;MD0;" aria-label="CAT command">
+      <button type="submit" class="ft8-btn">SEND</button>
+      <span id="catConsoleInfo" role="status"></span>
+    </form>
     <div class="catlog-list" id="catLogList"></div>
   </details>
 </div>
@@ -3907,6 +3919,47 @@ freqMainInput.addEventListener('focus', () => { isUserEditingMain = true; });
 freqMainInput.addEventListener('blur', () => { isUserEditingMain = false; });
 freqSubInput.addEventListener('focus', () => { isUserEditingSub = true; });
 freqSubInput.addEventListener('blur', () => { isUserEditingSub = false; });
+
+// ---- CAT console (in the CAT LOG): type commands, SEND. The board checks each against the allow-list and
+// never transmits from here; the radio's answers show up in the log below. Up / Down recall earlier lines.
+(function catConsole() {
+  const form = document.getElementById('catConsoleForm');
+  const input = document.getElementById('catConsoleInput');
+  const info = document.getElementById('catConsoleInfo');
+  const history = [];
+  let pos = 0;
+  form.addEventListener('submit', async () => {
+    let line = input.value.trim().toUpperCase().replace(/\s+/g, '');
+    if (!line) return;
+    if (!line.endsWith(';')) line += ';';
+    info.className = '';
+    info.textContent = 'Sending…';
+    try {
+      const res = await fetch('/cat', { method: 'POST', headers: CAT_POST_HEADERS, body: JSON.stringify({ raw: line }) });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        info.textContent = 'Sent ' + line;
+        if (history[history.length - 1] !== line) history.push(line);
+        if (history.length > 30) history.shift();
+        pos = history.length;
+        input.value = '';
+      } else {
+        info.className = 'err';
+        info.textContent = 'Refused: ' + (d.message || ('HTTP ' + res.status));
+      }
+    } catch (e) {
+      info.className = 'err';
+      info.textContent = 'No connection to the board';
+    }
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    if (!history.length) return;
+    e.preventDefault();
+    pos = Math.max(0, Math.min(history.length, pos + (e.key === 'ArrowUp' ? -1 : 1)));
+    input.value = pos < history.length ? history[pos] : '';
+  });
+})();
 
 // ---- CAT LOG panel: polls GET /catlog once a second while the panel is open ----
 (function catLog() {
