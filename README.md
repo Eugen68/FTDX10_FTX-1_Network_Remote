@@ -29,6 +29,7 @@ Firmware for the ESP32-S3, a small Wi-Fi-capable microcontroller board. You conn
 - **Control and status**: through the FTX-1's USB serial port, the browser changes frequency and mode and reads the S-meter and other values. This way of controlling and monitoring a radio from a computer is called **CAT** (Computer Aided Transceiver).
 - **FT8**: the received audio is decoded inside the browser.
 - **CW**: Morse is decoded inside the browser by the DeepCW neural decoder (see "CW decoder").
+- **AI noise reduction**: the HamNoise neural denoiser cleans the audio you hear, in the browser (see "AI noise reduction").
 
 All the PC / Mac needs is a browser on the same LAN. No dedicated software is required.
 
@@ -147,7 +148,7 @@ The parts written by pizzamax are distributed under the MIT License with his per
 When you redistribute it or publish a modified version, keep the `LICENSE` file with its copyright lines.
 
 Part of this project follows the structure of the example code of Espressif's `usb_host_uac` component (Apache License 2.0, the USB Host task in [`main/usb_audio.c`](main/usb_audio.c)), and that part remains under the Apache License 2.0. Details are in [`NOTICE`](NOTICE).
-Third-party components fetched at build time (the ESP-IDF and the components under `managed_components`) keep their own licenses. For the projects the FT8 decoder refers to, see "About the FT8 decoder". The CW decoder is a port of DeepCW (MIT License), see "CW decoder".
+Third-party components fetched at build time (the ESP-IDF and the components under `managed_components`) keep their own licenses. For the projects the FT8 decoder refers to, see "About the FT8 decoder". The CW decoder is a port of DeepCW (MIT License), see "CW decoder"; the AI noise reduction uses HamNoise (MIT License), see "AI noise reduction".
 
 ---
 
@@ -775,6 +776,38 @@ connections to `https://cdn.jsdelivr.net`, `blob:` scripts (the checked runtime 
 ### Future improvement ideas
 
 For technical evaluations, memory estimations on on-device FT8 decoding on the ESP32-S3, two-pass decoding, and other ideas, see [`docs/future_ideas.md`](docs/future_ideas.md).
+
+## AI noise reduction
+
+**AI NR**, next to MUTE above each receiver's scope, puts that receiver's audio through
+[HamNoise](https://github.com/e04/HamNoise) by e04 (MIT License): a small neural network trained on amateur
+radio audio that removes the noise and keeps the signal. It runs in this browser on the audio you hear only:
+the scope, the FT8 and CW decoders, recordings, the radio and the board get the original audio.
+
+- The settings are in the DSP panel (NOISE SQUELCH GATE section), one **AI NOISE REDUCTION** box per receiver
+  under its squelch (on the FTDX10, the one box sits beside MAIN SQUELCH):
+  - **Model**: `AUTO` uses HamNoise's CW model in CW and its voice model in every other mode (SSB, AM, FM, DATA);
+    `CW`, `VOICE` or `VOICE LITE` chooses one by hand. `VOICE` is the best and the heaviest; `VOICE LITE` (HamNoise's
+    first voice model) costs about 1/45 of it. With AI NR on for both receivers, `AUTO` uses `VOICE LITE` for voice:
+    all of the page's audio processing runs on one audio thread of the browser, and two `VOICE` models can need more
+    than all of it on a slower PC, which stops the audio (it sounds like a mute).
+  - **Strength**: how much of the cleaned audio is heard, the rest being the original (100 % = fully cleaned).
+- The button is green while it works, amber while the model loads, red on an error (the original audio is
+  played then; the reason is in the DSP panel).
+- It adds about 0.1 s of delay to what you hear.
+- A receiver that plays nothing (below −70 dBFS for half a second, e.g. the FTX-1's receiver that is not
+  receiving while MAIN and SUB are both on HF) is not processed: its box says `paused` and it costs no CPU.
+  It resumes with the first audio.
+- **CPU**: the CW model is very light. The voice model is heavy: about half of one CPU core per receiver on a
+  PC. Each box shows its load; above 70 % it suggests `VOICE LITE`, and with both receivers on it warns when
+  together they need more than 85 % of the audio thread.
+- The settings are kept in this browser.
+
+**Download from the Internet.** Like the CW decoder, the models are too large for the firmware (CW 1.7 MB,
+voice 4.3 MB of WebAssembly). On first use the browser downloads them from `cdn.jsdelivr.net` (the files of
+[e04/HamNoise](https://github.com/e04/HamNoise) at a fixed commit), checks each against its SHA-256 written in
+the page and refuses a file that does not match. They are kept in the browser's cache storage. Only the
+browser goes to the Internet; the board opens nothing.
 
 ## OTA update
 
