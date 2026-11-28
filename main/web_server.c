@@ -1876,6 +1876,8 @@ esp_err_t web_server_start(void)
     // freezes the whole server and the real request ends in ERR_TOO_MANY_RETRIES. A normal handshake
     // takes about 0.6 s here, so 3 s leaves plenty of margin even on a weak Wi-Fi link.
     config.tls_handshake_timeout_ms = 3000;
+    // Resume the TLS session of a reconnecting browser instead of a new key exchange (see sdkconfig.defaults)
+    config.session_tickets = true;
     // When all sockets are taken, drop the least recently used one instead of refusing new clients,
     // so idle or half-open connections cannot starve a legitimate user
     config.httpd.lru_purge_enable = true;

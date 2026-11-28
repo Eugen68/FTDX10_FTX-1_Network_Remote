@@ -42,6 +42,10 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
 # CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA is not set
 # CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT is not set
+# TLS session tickets: a browser that reconnects (the scope stream after a tab switch, the audio stream, the
+# status polls) resumes its session instead of a full handshake. The full one does an ECDH P-256 computation
+# on the HTTPS task; a few in a row kept CPU 0 busy past the 5 s task watchdog and stalled the network.
+CONFIG_ESP_TLS_SERVER_SESSION_TICKETS=y
 # PSRAM (ESP32-S3-N16R8 and similar: 8 MB octal PSRAM). Large allocations (TLS record buffers, Wi-Fi / LwIP
 # buffers) go to PSRAM and leave the internal RAM to the USB host, the tasks' stacks and DMA. A board without
 # PSRAM (or with quad PSRAM) still boots: the PSRAM is then simply not used and everything stays internal.
