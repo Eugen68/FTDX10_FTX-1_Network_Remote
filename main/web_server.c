@@ -965,11 +965,12 @@ static esp_err_t cat_handler(httpd_req_t *req)
                              st.connected && st.tx_vfo == CAT_TX_VFO_SUB ? "\"sub\"" : "null";
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,"
+                      ",\"cat_console\":%s,\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,"
                       "\"rx_vfo\":%s,\"tx_vfo\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\","
                       "\"pa_bands\":%u,\"att_max\":%u,\"preamp\":[%d,%d,%d],\"att\":%d,\"rfg\":[%d,%d],\"agc\":[%d,%d],"
                       "\"nb_switch\":%s,\"dnr_max\":%u,\"nb\":[%d,%d],\"nb_level\":[%d,%d],\"dnr\":[%d,%d],"
                       "\"dnr_level\":[%d,%d],\"dnf\":[%d,%d],\"ifs\":[%s,%s]}",
+                      app_config_cat_console_enabled() ? "true" : "false",
                       (unsigned)st.voice_source, app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
                       st.tx_radio_known ? "true" : "false", rx_vfo, tx_vfo, (unsigned long)st.write_error_seq, write_error,
@@ -994,6 +995,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
 //   nb, dnr, dnf  0 | 1 | false | true   nb_level 0-10   dnr_level 0-15 (with nb / dnr)   ifs -1200..1200
 //   scope_span 0-9 (FTDX10 scope span, 1 kHz - 1 MHz)
 //   action  "swap" | "copy_main_to_sub" | "copy_sub_to_main"
+//   raw     the CAT LOG console line, e.g. "FA014074000;" (alone; allow-list checked, never transmit)
 // Unknown or repeated keys, escapes, nesting and trailing data are rejected. There is no way to send a
 // raw CAT string.
 typedef struct {
@@ -1022,6 +1024,9 @@ typedef struct {
     uint8_t scope_span;
     bool has_action;
     char action[24];
+    bool has_raw;
+    char raw[CAT_CONSOLE_MAX_BYTES + 1];
+    unsigned keys;            // keys in the request (raw must be alone)
 } cat_req_t;
 
 static void skip_ws(const char **p)
@@ -1408,7 +1413,7 @@ static bool parse_cat_request(const char *s, cat_req_t *r)
         }
         skip_ws(&s);
 
-        char text[24] = {0};      // string value
+        char text[CAT_CONSOLE_MAX_BYTES + 1] = {0};   // string value (the console line is the longest)
         char token[12] = {0};     // bare value
         const bool is_text = (*s == '"');
         if (is_text ? !parse_string(&s, text, sizeof(text)) : !parse_token(&s, token, sizeof(token))) {
@@ -1416,6 +1421,7 @@ static bool parse_cat_request(const char *s, cat_req_t *r)
         }
 
         uint32_t num = 0;
+        r->keys++;
         if (strcmp(key, "target") == 0) {
             if (!is_text || r->has_target) return false;
             if (strcmp(text, "main") == 0) r->sub = false;
@@ -1493,6 +1499,10 @@ static bool parse_cat_request(const char *s, cat_req_t *r)
             if (is_text || r->has_scope_span || !token_to_uint(token, 9, &num)) return false;
             r->scope_span = (uint8_t)num;
             r->has_scope_span = true;
+        } else if (strcmp(key, "raw") == 0) {
+            if (!is_text || r->has_raw || text[0] == '\0') return false;
+            strlcpy(r->raw, text, sizeof(r->raw));
+            r->has_raw = true;
         } else if (strcmp(key, "action") == 0) {
             if (!is_text || r->has_action) return false;
             strlcpy(r->action, text, sizeof(r->action));
@@ -1646,6 +1656,21 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     }
     if (!parse_cat_request(buf, &r)) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request");
+    }
+
+    if (r.has_raw) {
+        // The CAT LOG console: a line of commands, alone in the request (see cat_send_console)
+        char why[96] = "", why_json[2 * sizeof(why) + 1], json[sizeof(why_json) + 48];
+        const bool alone = r.keys == 1, enabled = app_config_cat_console_enabled();
+        const esp_err_t err = enabled && alone ? cat_send_console(r.raw, why, sizeof(why)) : ESP_ERR_INVALID_ARG;
+        if (!enabled) strlcpy(why, "The CAT console is off (serial menu, k)", sizeof(why));
+        else if (!alone) strlcpy(why, "raw must be the only key", sizeof(why));
+        json_escape(why, why_json, sizeof(why_json));
+        httpd_resp_set_type(req, "application/json");
+        if (err == ESP_OK) return httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+        snprintf(json, sizeof(json), "{\"status\":\"error\",\"message\":\"%s\"}", why_json);
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, json);
     }
 
     esp_err_t err = ESP_OK;

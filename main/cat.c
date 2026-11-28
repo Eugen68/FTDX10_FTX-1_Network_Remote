@@ -2660,6 +2660,56 @@ int cat_rigctl_result(unsigned ticket)
     return (result >> 2) == ticket ? ((result & 3u) == 1u ? 1 : -1) : 0;
 }
 
+esp_err_t cat_send_console(const char *line, char *why, size_t why_size)
+{
+    // A line typed in the page's CAT LOG console: one or more complete commands. Each must pass the same
+    // allow-list as everything else, and transmit (TX1 / TX2) is always refused here: keying stays with the
+    // TX panel (TX password, time limit, heartbeat). If any command is refused, nothing of the line is sent.
+    const size_t len = line ? strlen(line) : 0;
+    if (len == 0 || len > CAT_CONSOLE_MAX_BYTES) {
+        snprintf(why, why_size, "1 to %u characters", (unsigned)CAT_CONSOLE_MAX_BYTES);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (line[len - 1] != ';') {
+        snprintf(why, why_size, "End each command with ;");
+        return ESP_ERR_INVALID_ARG;
+    }
+    char cmds[CAT_CONSOLE_MAX_CMDS][CAT_CMD_MAX_BYTES + 1];
+    size_t count = 0;
+    for (size_t start = 0, i = 0; i < len; i++) {
+        if (line[i] != ';') continue;
+        const size_t n = i - start + 1;
+        char cmd[CAT_CMD_MAX_BYTES + 2];
+        snprintf(cmd, sizeof(cmd), "%.*s", (int)(n <= CAT_CMD_MAX_BYTES ? n : CAT_CMD_MAX_BYTES + 1), line + start);
+        start = i + 1;
+        const char *refused = NULL;
+        if (n > CAT_CMD_MAX_BYTES || count == CAT_CONSOLE_MAX_CMDS) {
+            refused = n > CAT_CMD_MAX_BYTES ? "too long" : "too many commands in one line";
+        } else if (strncmp(cmd, "TX", 2) == 0 && n > 3 && cmd[2] != '0') {
+            refused = "transmit only from the TX panel";
+        } else if (strncmp(cmd, "PC", 2) == 0 && n > 3) {
+            refused = "set the TX power from the TX panel";
+        } else if (!cat_cmds_allowed(cmd, 1)) {
+            refused = "not on the allow-list";
+        }
+        if (refused) {
+            log_cmds('T', CAT_LOG_BLOCKED, cmd);
+            snprintf(why, why_size, "%s: %s", cmd, refused);
+            return ESP_ERR_NOT_SUPPORTED;
+        }
+        strlcpy(cmds[count++], cmd, sizeof(cmds[0]));
+    }
+    for (size_t i = 0; i < count; i++) {
+        const esp_err_t err = cat_enqueue(cmds[i]);
+        if (err != ESP_OK) {
+            snprintf(why, why_size, "%s: %s", cmds[i], err == ESP_ERR_INVALID_STATE ? "radio busy or not connected"
+                                                                                   : esp_err_to_name(err));
+            return err;
+        }
+    }
+    return ESP_OK;
+}
+
 esp_err_t cat_swap_vfo(void)
 {
     return cat_enqueue("SV;");

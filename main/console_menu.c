@@ -241,6 +241,7 @@ static void print_config_summary(const app_config_t *cfg)
         " d) NET rigctl trace : %s\r\n"
         " y) Yaesu CAT (TCP)  : %s, TCP %u (same allowed IPv4)\r\n"
         " g) Yaesu CAT trace  : %s\r\n"
+        " k) CAT console      : %s\r\n"
         " h) Host name        : %s.local\r\n"
         "==================================================\r\n",
         cfg->wifi_ssid[0] ? cfg->wifi_ssid : "(not set)",
@@ -254,7 +255,8 @@ static void print_config_summary(const app_config_t *cfg)
         cfg->swr_max / 10, cfg->swr_max % 10,
         cfg->rigctl_enabled ? "on" : "off", cfg->rigctl_port,
         cfg->rigctl_ip[0] ? cfg->rigctl_ip : "any", cfg->rigctl_debug ? "on" : "off",
-        cfg->yaesu_enabled ? "on" : "off", cfg->yaesu_port, cfg->yaesu_debug ? "on" : "off", cfg->hostname
+        cfg->yaesu_enabled ? "on" : "off", cfg->yaesu_port, cfg->yaesu_debug ? "on" : "off",
+        cfg->cat_console ? "on (CAT LOG panel)" : "off", cfg->hostname
     );
     console_write_str(msg);
 }
@@ -298,10 +300,11 @@ void console_menu_run(void)
             "  y: Toggle Yaesu CAT over TCP for OmniRig (trusted LAN/VPN only)\r\n"
             "  u: Set Yaesu CAT TCP port\r\n"
             "  g: Toggle tracing of all Yaesu CAT commands and replies\r\n"
+            "  k: Toggle the CAT console in the page (typed CAT commands, allow-list checked, never TX)\r\n"
             "  h: Set Host name (mDNS / DHCP)\r\n"
             "  c: Regenerate HTTPS certificate\r\n"
             "--------------------------------------------------\r\n"
-            "Enter selection (0-9, h, t, p, m, s, c, n, r, i, d, y, u, g): "
+            "Enter selection (0-9, h, t, p, m, s, c, n, r, i, d, y, u, g, k): "
         );
 
         char opt[8] = {0};
@@ -431,6 +434,9 @@ void console_menu_run(void)
                 break;
             case 'y':
                 cfg.yaesu_enabled = !cfg.yaesu_enabled;
+                break;
+            case 'k':
+                cfg.cat_console = !cfg.cat_console;
                 break;
             case 'g':
                 cfg.yaesu_debug = !cfg.yaesu_debug;

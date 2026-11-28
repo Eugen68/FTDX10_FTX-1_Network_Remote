@@ -103,6 +103,9 @@ esp_err_t app_config_load(app_config_t *cfg)
         cfg->yaesu_debug = yaesu_debug != 0;
         nvs_get_u16(handle, "yaesu_port", &cfg->yaesu_port);
         if (!cfg->yaesu_port) cfg->yaesu_port = YAESU_CAT_DEFAULT_PORT;
+        uint8_t cat_console = 0;     // absent key: off
+        nvs_get_u8(handle, "cat_console", &cat_console);
+        cfg->cat_console = cat_console != 0;
         nvs_close(handle);
     } else {
         // NVS namespace not created yet; fall back to defaults
@@ -153,6 +156,7 @@ esp_err_t app_config_save(const app_config_t *cfg)
     if (err == ESP_OK) err = nvs_set_u8(handle, "yaesu_enable", cfg->yaesu_enabled);
     if (err == ESP_OK) err = nvs_set_u8(handle, "yaesu_trace", cfg->yaesu_debug);
     if (err == ESP_OK) err = nvs_set_u16(handle, "yaesu_port", cfg->yaesu_port);
+    if (err == ESP_OK) err = nvs_set_u8(handle, "cat_console", cfg->cat_console);
 
     if (err == ESP_OK) {
         err = nvs_commit(handle);
@@ -229,6 +233,11 @@ bool app_config_rigctl_enabled(void)
 bool app_config_yaesu_enabled(void)
 {
     return s_active_config.yaesu_enabled;
+}
+
+bool app_config_cat_console_enabled(void)
+{
+    return s_active_config.cat_console;
 }
 
 bool app_config_tx_enabled(void)

@@ -773,12 +773,18 @@ All endpoints (`/`, `/map`, `/status`, `/cat`, `POST /reboot`, `/stream.*`, `POS
 
 Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
 
-- The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `preamp` / `pa_band` / `att` / `rfg` / `agc` / `nb` / `nb_level` / `dnr` / `dnr_level` / `dnf` / `ifs` / `scope_span` / `action`.
+- The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `preamp` / `pa_band` / `att` / `rfg` / `agc` / `nb` / `nb_level` / `dnr` / `dnr_level` / `dnf` / `ifs` / `scope_span` / `action`, or `raw` alone (the CAT console, below).
   Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main` / `split_on` / `split_off`.
 - Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `PA` `RA` `RG` `GT` `NB` `NL` `NR` `RL` `BC` `IS` `SS` `EX`), checked against the profile of the connected radio.
   For `SS` only the FTDX10's scope SPAN item is allowed (`SS05` + 0–9 + `0000`). For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
   Supported radios also allow modulation menu queries and transmit VFO status (`FT;`). NET rigctl can set the active VFO, transmit VFO selection and filter width through radio-specific allow-listed commands. The page's **SPLIT** button selects the transmit VFO the same way (`FT1;`/`FT0;` on the FTX-1, `FT3;`/`FT2;` on the FTDX10); `FT;` is read every 500 ms so the button also follows the radio's own SPLIT key. These commands cannot key the radio. `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.
-  The ordinary CAT endpoint has no raw-command or PTT operation.
+  The ordinary CAT endpoint has no PTT operation.
+- **CAT console** (off by default: enable it with **k** in the serial menu, then save with 6). The CAT LOG
+  panel then has a field to type commands and **SEND** them (several per line, e.g. `FA;MD0;`;
+  Up / Down recall earlier lines; the radio's answers appear in the log). Each command must pass the same allow-list
+  as everything else (refused ones are logged as BLOCKED), **transmit (`TX1` / `TX2`) is always refused there** so
+  keying stays with the TX panel (TX password, time limit, heartbeat), and if one command of a line is refused none
+  is sent. At most 8 commands and 64 characters per line.
 - Frequency settings are range-checked against the radio's profile (FTX-1 30 kHz – 470 MHz, FTDX10 30 kHz – 75 MHz); anything outside it is rejected.
 - The allow list and the answer parsers are covered by a host test that runs without the board: `test/host_cat/run.sh`.
 - As a second safeguard, consider also setting `RPTT SELECT` / `TX INHIBIT` on the radio itself.
