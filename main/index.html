@@ -111,6 +111,8 @@
   .step-row { display: flex; align-items: center; gap: .3rem; }
   .step-select { margin-left: .4rem; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px;
                  font: inherit; font-size: .68rem; padding: .1rem .2rem; min-width: 5.5rem; }
+  .zin-btn { margin-left: .4rem; padding: .1rem .5rem; font-size: .68rem; min-height: 0; }
+  .zin-btn:disabled { opacity: .4; cursor: not-allowed; }
   #uiPrefsFeedback { font-size: .75rem; }
   #catRecoveryStatus { color: var(--text-muted); font-size: .75rem; }
   .pwr-btn.running {
@@ -1203,6 +1205,8 @@
           <option value="100000">100 kHz</option>
           <option value="1000000">1 MHz</option>
         </select>
+        <button type="button" class="rig-btn zin-btn" id="zinMain" disabled
+                title="ZIN: the radio tunes MAIN onto the CW signal (CW AUTO ZERO IN, CAT ZI). CW mode only">ZIN</button>
       </div>
 
       <!-- Direct Input -->
@@ -1611,6 +1615,8 @@
           <option value="100000">100 kHz</option>
           <option value="1000000">1 MHz</option>
         </select>
+        <button type="button" class="rig-btn zin-btn" id="zinSub" disabled
+                title="ZIN: the radio tunes SUB onto the CW signal (CW AUTO ZERO IN, CAT ZI). CW mode only">ZIN</button>
       </div>
 
       <!-- Direct Input -->
@@ -3607,8 +3613,20 @@ async function stepFreq(sub, delta) {
   }
 }
 
+// ZIN (CW AUTO ZERO IN): the radio tunes the receiver onto the CW signal. The FTDX10 has one receiver,
+// so its MAIN panel (VFO-A or VFO-B) always sends ZI0; the SUB button exists on the FTX-1 only.
+function zinRefresh() {
+  const isCw = (mode) => /^CW/.test(mode || '');
+  document.getElementById('zinMain').disabled = !isCw(rxMode(0));
+  document.getElementById('zinSub').disabled = !isCw(modeBadgeSub.textContent);
+}
+['Main', 'Sub'].forEach((side) => document.getElementById('zin' + side).addEventListener('click', () => {
+  sendCatCommand({ target: side === 'Sub' ? 'sub' : 'main', zero_in: true });
+}));
+
 function updateModeButtons(sub, mode) {
   refreshStep(sub, mode);
+  if (typeof zinRefresh === 'function') zinRefresh();   // not defined in the host test
   const containerId = sub ? 'modeBtnsSub' : 'modeBtnsMain';
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -4225,6 +4243,7 @@ var panelShownB = null;
 function renderPanel() {
   try {
     renderPanelNow();
+    zinRefresh();
   } catch (e) {
     if (!(e instanceof ReferenceError)) throw e;   // called before the page script finished loading
   }

@@ -1034,6 +1034,7 @@ typedef struct {
     uint8_t scope_span;
     bool has_scope_level;
     int16_t scope_level;
+    bool has_zero_in;         // CW zero in on the target receiver (the value must be true)
     bool has_action;
     char action[24];
     bool has_raw;
@@ -1530,6 +1531,10 @@ static bool parse_cat_request(const char *s, cat_req_t *r)
             if (is_text || r->has_scope_level || !token_to_uint(token + neg, 300, &num)) return false;
             r->scope_level = (int16_t)(neg ? -(int)num : (int)num);
             r->has_scope_level = true;
+        } else if (strcmp(key, "zero_in") == 0) {
+            bool on = false;
+            if (is_text || r->has_zero_in || !token_to_bool(token, &on) || !on) return false;
+            r->has_zero_in = true;
         } else if (strcmp(key, "raw") == 0) {
             if (!is_text || r->has_raw || text[0] == '\0') return false;
             strlcpy(r->raw, text, sizeof(r->raw));
@@ -1734,6 +1739,7 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     if (r.has_ifs) APPLY(cat_set_if_shift(r.sub, r.ifs));
     if (r.has_scope_span) APPLY(cat_set_scope_span(r.scope_span));
     if (r.has_scope_level) APPLY(cat_set_scope_level(r.scope_level));
+    if (r.has_zero_in) APPLY(cat_zero_in(r.sub));
 #undef APPLY
 
     httpd_resp_set_type(req, "application/json");

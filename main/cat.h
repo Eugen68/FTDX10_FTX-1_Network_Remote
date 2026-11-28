@@ -248,6 +248,12 @@ esp_err_t cat_set_dnr(bool sub, bool on, uint8_t level);
 /** @brief Auto notch / DNF (CAT "BC") */
 esp_err_t cat_set_dnf(bool sub, bool on);
 
+/**
+ * CW AUTO ZERO IN (ZI0; / ZI1;): the radio tunes the receiver onto the CW signal, as its ZIN key does.
+ * Set only, never transmits. FTX-1: MAIN or SUB; FTDX10: one receiver (P1 fixed 0), so sub is refused.
+ */
+esp_err_t cat_zero_in(bool sub);
+
 /** @brief IF shift (CAT "IS"), -1200..+1200 Hz in 20 Hz steps */
 esp_err_t cat_set_if_shift(bool sub, int hz);
 
