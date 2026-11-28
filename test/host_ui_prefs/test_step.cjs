@@ -14,16 +14,16 @@ const code = section('const PREF_STEP_VALUES', 'function formatFreq') +
   section('function updateModeButtons(', '// CW follows') +
   `function reportCat(d) { const now = Date.now() + 2000; ${catModeUpdates} }`;
 
-const buttons = [false, true].map(() => [10, 100, 500, 1000, 12500].map(step => ({
-  dataset: { step }, classList: { toggle(_, on) { this.active = on; } },
-  addEventListener(_, fn) { this.choose = fn; }
-})));
+const selects = [false, true].map(() => ({ value: '', addEventListener(_, fn) { this.change = fn; },
+  choose(value) { this.value = String(value); this.change({ target: this }); } }));
 const groups = [{}, {}];
 const prefs = Object.create(null), commands = [];
 const context = vm.createContext({
   document: {
-    getElementById(id) { return id.startsWith('modeBtns') ? null : groups[id.endsWith('Sub') ? 1 : 0]; },
-    querySelectorAll(selector) { return buttons[selector.includes('Sub') ? 1 : 0]; },
+    getElementById(id) {
+      if (id.startsWith('modeBtns')) return null;
+      return (id.startsWith('stepSel') ? selects : groups)[id.endsWith('Sub') ? 1 : 0];
+    },
   },
   uiPrefValues: prefs,
   queueUiPref: (name, value) => { prefs[name] = value; },
@@ -35,13 +35,13 @@ vm.runInContext(code, context);
 const check = (sub, expectedGroup, expectedStep) => {
   assert.equal(groups[Number(sub)].textContent, expectedGroup);
   assert.equal(context.getStep(sub), expectedStep);
-  assert.equal(buttons[Number(sub)].find(b => b.classList.active).dataset.step, expectedStep);
+  assert.equal(selects[Number(sub)].value, String(expectedStep));
 };
 check(false, 'SSB', 100);
 check(true, 'AM', 1000);
 context.setMode(false, 'CW-L');
 check(false, 'CW', 10);
-buttons[0].find(b => b.dataset.step === 500).choose();
+selects[0].choose(500);
 check(false, 'CW', 500);
 assert.equal(prefs.stepMainCW, 500);
 context.reportCat({mode_main: 'DATA-FM-N', mode_sub: 'CW-U'});
