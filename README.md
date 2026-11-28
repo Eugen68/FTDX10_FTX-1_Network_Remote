@@ -430,7 +430,8 @@ The FTDX10 has one receiver and two VFOs, and its **A/B** key selects the VFO it
   VFO-B but leave the receiver on VFO-A's frequency.) The page also follows the radio's own **A/B** key.
 - The left panel always shows and changes the **active** VFO: band, mode, dial, arrows, step and direct entry.
   It turns green and reads **VFO-B (A/B)** while VFO-B is active. The screen keeps VFO-A above and VFO-B below,
-  with the active one framed in green. There is no separate VFO-B card on the FTDX10.
+  with the active one framed in green. There is no separate VFO-B card on the FTDX10: the right column is
+  **TX & RX SETTINGS** instead, with the TX panel and, under it, the FRONT END and NOISE / IF rows.
 - FT8, the scope and recordings follow the active VFO.
 - **Remote PTT (and FT8 transmit) works on VFO-A only**: with VFO-B active the TX panel reports
   "Select VFO-A (A/B) for remote PTT", and VFO-B becoming active while transmitting releases PTT.
