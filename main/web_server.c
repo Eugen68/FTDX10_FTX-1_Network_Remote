@@ -926,13 +926,17 @@ static esp_err_t cat_handler(httpd_req_t *req)
                            ? (st.rx_vfo_sub ? "\"sub\"" : "\"main\"") : "null";
         const char *tx_vfo = st.connected && st.tx_vfo == CAT_TX_VFO_MAIN ? "\"main\"" :
                              st.connected && st.tx_vfo == CAT_TX_VFO_SUB ? "\"sub\"" : "null";
+        char level[8] = "null";
+        if (st.connected && st.scope_level_known) snprintf(level, sizeof(level), "%d", st.scope_level_x10);
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,"
-                      "\"rx_vfo\":%s,\"tx_vfo\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\"}",
+                      "\"rx_vfo\":%s,\"tx_vfo\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\","
+                      "\"scope_level_x10\":%s}",
                       (unsigned)st.voice_source, app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
-                      st.tx_radio_known ? "true" : "false", rx_vfo, tx_vfo, (unsigned long)st.write_error_seq, write_error);
+                      st.tx_radio_known ? "true" : "false", rx_vfo, tx_vfo, (unsigned long)st.write_error_seq, write_error,
+                      level);
     }
     return send_json(req, json, n, sizeof(json));
 }
@@ -945,7 +949,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
 //   vol, sq integer 0-255
 //   notch   0 | 1 | false | true           notch_hz integer 10-3200
 //   power   0 | 1 | false | true
-//   scope_span 0-9 (FTDX10 scope span, 1 kHz - 1 MHz)
+//   scope_span 0-9 (FTDX10 scope span, 1 kHz - 1 MHz)   scope_level -300..300 (tenths of a dB, steps of 5)
 //   action  "swap" | "copy_main_to_sub" | "copy_sub_to_main"
 // Unknown or repeated keys, escapes, nesting and trailing data are rejected. There is no way to send a
 // raw CAT string.
@@ -968,6 +972,8 @@ typedef struct {
     bool power;
     bool has_scope_span;
     uint8_t scope_span;
+    bool has_scope_level;
+    int16_t scope_level;
     bool has_action;
     char action[24];
 } cat_req_t;
@@ -1388,6 +1394,12 @@ static bool parse_cat_request(const char *s, cat_req_t *r)
             if (is_text || r->has_scope_span || !token_to_uint(token, 9, &num)) return false;
             r->scope_span = (uint8_t)num;
             r->has_scope_span = true;
+        } else if (strcmp(key, "scope_level") == 0) {
+            // signed tenths of a dB; the range and the 0.5 dB step are checked in cat.c
+            const bool neg = token[0] == '-';
+            if (is_text || r->has_scope_level || !token_to_uint(token + neg, 300, &num)) return false;
+            r->scope_level = (int16_t)(neg ? -(int)num : (int)num);
+            r->has_scope_level = true;
         } else if (strcmp(key, "action") == 0) {
             if (!is_text || r->has_action) return false;
             strlcpy(r->action, text, sizeof(r->action));
@@ -1560,6 +1572,7 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     if (r.has_notch_hz) APPLY(cat_set_notch_freq(r.sub, r.notch_hz));
     if (r.has_power) APPLY(cat_set_power(r.power));
     if (r.has_scope_span) APPLY(cat_set_scope_span(r.scope_span));
+    if (r.has_scope_level) APPLY(cat_set_scope_level(r.scope_level));
 #undef APPLY
 
     httpd_resp_set_type(req, "application/json");

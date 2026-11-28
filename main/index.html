@@ -644,6 +644,8 @@
   .scope-container.acc-on .scope-spans [data-span], .scope-container.acc-on .scope-span-label { display: none; }
   .acc-span { display: none; align-items: center; gap: .25rem; font-size: .58rem; color: #94a3b8; font-weight: bold; }
   .scope-container.acc-on .acc-span { display: inline-flex; }
+  .acc-level { width: 6rem; }
+  .acc-level-val { min-width: 3.2rem; color: #e2e8f0; font-variant-numeric: tabular-nums; }
   .scope-container.acc-on .scope-canvas { cursor: crosshair; height: 210px; }
   #latencySel { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .58rem; padding: 0 .2rem; margin-right: .4rem; }
   .latency-text { color: #fbbf24; margin-right: .4rem; }
@@ -1259,6 +1261,9 @@
                   <option value="6">100k</option><option value="7">200k</option><option value="8">500k</option>
                   <option value="9">1M</option>
                 </select></label>
+              <label class="acc-span" title="The radio's scope LEVEL (CAT SS04), -30 to +30 dB in 0.5 dB steps. About +20 suits the page">LEVEL
+                <input type="range" id="accLevel" class="acc-level" min="-30" max="30" step="0.5" value="20" aria-label="FTDX10 scope level">
+                <output id="accLevelVal" class="acc-level-val">--</output></label>
             </div>
           </div>
           <canvas id="scopeCanvasMain" class="scope-canvas" width="400" height="90"></canvas>
@@ -1996,6 +2001,23 @@ function accOnRecord(dv, off, points) {
 const ACC_SPANS_HZ = [1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000];
 const accSpanSel = document.getElementById('accSpanSel');
 let accSpanChanged = 0;
+// The radio's scope LEVEL (CAT SS04): shown from /cat, sent after a short pause while dragging
+const accLevel = document.getElementById('accLevel');
+const accLevelVal = document.getElementById('accLevelVal');
+let accLevelChanged = 0, accLevelTimer = null;
+const fmtLevel = (db) => (db > 0 ? '+' : '') + db.toFixed(1) + ' dB';
+accLevel.addEventListener('input', () => {
+  accLevelChanged = Date.now();
+  accLevelVal.textContent = fmtLevel(Number(accLevel.value));
+  clearTimeout(accLevelTimer);
+  accLevelTimer = setTimeout(() => sendCatCommand({ target: 'main', scope_level: Math.round(Number(accLevel.value) * 10) }), 200);
+});
+function accLevelApply(d) {
+  if (!Number.isInteger(d.scope_level_x10) || document.activeElement === accLevel || Date.now() - accLevelChanged < 3000) return;
+  accLevel.value = d.scope_level_x10 / 10;
+  accLevelVal.textContent = fmtLevel(d.scope_level_x10 / 10);
+}
+
 accSpanSel.addEventListener('change', () => {
   accSpanChanged = Date.now();
   sendCatCommand({ target: 'main', scope_span: Number(accSpanSel.value) });
@@ -4475,6 +4497,7 @@ async function smPoll() {
     }
     const now = Date.now();
     applyRigProfile(d);
+    accLevelApply(d);
     catTxVfo = d.connected ? (d.tx_vfo || null) : null;
     catRxVfo = d.connected ? (d.rx_vfo || null) : null;
     const recovery = document.getElementById('catRecoveryStatus');
