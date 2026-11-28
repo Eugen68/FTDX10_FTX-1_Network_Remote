@@ -4261,6 +4261,9 @@ function resetChannelAudio(idx) {
   ft8Chans[idx].resampleSum = 0;
   ft8Chans[idx].resampleCount = 0;
   scopes[idx].clearWaterfall();
+  // CW: new line, old audio dropped; the next CAT poll keeps the new frequency without a second break
+  cwQsy(idx);
+  if (cwReady) cwChans[idx].rxFreq = 0;
 }
 
 // FTDX10 (one receiver): the A/B key (VS) selects the VFO the radio receives and transmits on. The MAIN panel
@@ -5187,6 +5190,7 @@ async function smPoll() {
       feApply(d);
       nrApply(d);
       renderPanel();
+      cwTrackRx();
     } else {
       radioBusy = false;
       ledCat.classList.remove('on-green');
@@ -5713,6 +5717,9 @@ ft8MapChannel.onmessage = (e) => {
   }
 };
 
+// The CW section below is set up (var, not const: resetChannelAudio may test it at any time)
+var cwReady = false;
+
 // ============================================================================
 // CW decoder: the DeepCW neural decoder (see <script id="cw-worker-src"> at the end of the page).
 // The page feeds it the receiver audio at 9600 Hz and shows the text it returns. Receive only.
@@ -5745,7 +5752,9 @@ const cwChans = ['Main', 'Sub'].map((name, idx) => {
     infoEl: box.insertBefore(Object.assign(document.createElement('div'), { className: 'cw-info', hidden: true }), box.firstChild),
     lastAudio: 0,   // performance.now() of the last audio fed to the decoder
     hz: null,       // tone being decoded, from the last result
-    fixedHz: null   // tone chosen by a click on this receiver's scope (see cwPickTone)
+    fixedHz: null,  // tone chosen by a click on this receiver's scope (see cwPickTone)
+    rxFreq: 0,      // receiver frequency and mode last kept by cwTrackRx (0 / '' = none yet)
+    rxMode: ''
   };
 });
 // What the decoder is doing, shown inside the panels (the status word in the header is easy to miss)
@@ -5847,6 +5856,35 @@ function cwPickTone(idx, hz) {
   cwSetTone(idx, hz);
 }
 
+// ---- New line at QSY: a change of frequency (CW_QSY_BREAK_HZ or more), mode or VFO on a receiver that
+// decodes CW starts a new line and drops the audio of the old frequency (see the worker's 'qsy').
+const CW_QSY_BREAK_HZ = 150;
+
+function cwQsy(idx) {
+  if (!cwReady || !cwSettings.on[idx] || !cwWorker) return;
+  const c = cwChans[idx];
+  c.fixedHz = null;          // a tone chosen on the scope belonged to the old station
+  c.hz = null;
+  c.pendingEl.textContent = '';
+  cwWorker.postMessage({ type: 'qsy', ch: idx });
+  cwShowTone(c);
+}
+
+// Called with every CAT poll. The kept frequency moves only at a break (or the first time), so several
+// small tuning steps add up and break the line once they reach CW_QSY_BREAK_HZ together.
+function cwTrackRx() {
+  if (!cwReady) return;
+  [0, 1].forEach((idx) => {
+    const f = rxFreq(idx), m = rxMode(idx);
+    if (!cwSettings.on[idx] || !(f > 0) || !m) return;
+    const c = cwChans[idx];
+    const changed = c.rxFreq > 0 && (Math.abs(f - c.rxFreq) >= CW_QSY_BREAK_HZ || m !== c.rxMode);
+    if (changed) cwQsy(idx);
+    if (changed || !c.rxFreq) { c.rxFreq = f; c.rxMode = m; }
+  });
+}
+// ---- end of the QSY tracking
+
 function cwApply() {
   cwModelSel.value = cwSettings.model;
   cwAutoBtn.classList.toggle('active', cwSettings.auto);
@@ -5855,7 +5893,12 @@ function cwApply() {
   cwAutoBtn.disabled = !narrow;
   cwPitchInput.disabled = !narrow || cwSettings.auto;
   cwChans.forEach((c) => {
-    if (!cwSettings.on[c.idx]) { c.pendingEl.textContent = ''; cwSetTone(c.idx, null); }
+    if (!cwSettings.on[c.idx]) {
+      c.pendingEl.textContent = '';
+      cwSetTone(c.idx, null);
+      c.rxFreq = 0;            // start tracking afresh when CW is turned on again
+      c.rxMode = '';
+    }
     cwShowTone(c);
   });
   cwShowInfo();
@@ -5929,6 +5972,8 @@ function cwFeedAudio(channels, rate) {
     cwWorker.postMessage({ type: 'audio', ch: c.idx, samples: chunk }, [chunk.buffer]);
   });
 }
+
+cwReady = true;
 
 // The worker's source is at the end of the page: restart a saved decoder only once the page is parsed
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', cwApply);
@@ -7200,6 +7245,15 @@ self.onmessage = (e) => {
     if (m.enabled.some(Boolean)) cwLoadModel(cwCfg.model);
   } else if (m.type === 'reset') {
     cwReset(cwChans[m.ch]);
+  } else if (m.type === 'qsy') {
+    // The receiver changed frequency, mode or VFO: keep what was pending, start a new line and drop all
+    // the buffered audio (unlike cwBreak, none of it belongs to the new frequency). gen++ in cwReset
+    // also drops a decode still running on the old audio.
+    const c = cwChans[m.ch];
+    if (!c) return;
+    c.fixedHz = null;
+    self.postMessage({ type: 'text', ch: c.idx, commit: c.pending, pending: '', hz: null, brk: true });
+    cwReset(c);
   } else if (m.type === 'tone') {
     // A tone chosen on the scope (or null: back to AUTO / Hz): keep what was pending, start a new line
     const c = cwChans[m.ch];
