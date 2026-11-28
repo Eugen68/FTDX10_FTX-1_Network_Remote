@@ -72,6 +72,7 @@ typedef struct {
     int8_t dnf[2];            /*!< Auto notch (DNF) per receiver; -1 unread */
     int16_t if_shift[2];      /*!< IF shift in Hz, -1200..+1200 */
     bool if_shift_known[2];
+    int8_t roofing;           /*!< FTDX10 roofing filter as its set code: 1 12 kHz, 2 3 kHz, 4 500 Hz, 5 300 Hz; -1 unread */
     int16_t scope_level_x10;  /*!< FTDX10 scope LEVEL in tenths of a dB (-300 .. 300) */
     bool scope_level_known;
     int16_t tx_power_w;       /*!< TX power setting (PC), watts; -1 if unread */
@@ -256,6 +257,12 @@ esp_err_t cat_zero_in(bool sub);
 
 /** @brief IF shift (CAT "IS"), -1200..+1200 Hz in 20 Hz steps */
 esp_err_t cat_set_if_shift(bool sub, int hz);
+
+/** @brief Receiver filter width (CAT "SH"): code 0 (the mode's default) - 23, see the radio's bandwidth chart */
+esp_err_t cat_set_width(bool sub, uint8_t code);
+
+/** @brief FTDX10 roofing filter (CAT "RF0"): 1 12 kHz, 2 3 kHz, 4 500 Hz, 5 300 Hz (optional filter) */
+esp_err_t cat_set_roofing(uint8_t code);
 
 /** @brief FTDX10 scope span (CAT "SS05"): 0 1 kHz, 1 2k, 2 5k, 3 10k, 4 20k, 5 50k, 6 100k, 7 200k, 8 500k, 9 1 MHz.
  *  The ACC scope frames report the span the radio uses. */

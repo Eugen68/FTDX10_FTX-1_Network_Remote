@@ -156,7 +156,7 @@ static void test_startup(void)
     reject_notch = true;
     const unsigned rejected = cat_rejected_commands();
     initialize_reads((void *)1, s_rig);
-    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;AG1;SQ0;SQ1;RI0;TX;RM0;BP00;BP01;BP10;BP11;FT;PA0;PA1;PA2;RA0;RG0;RG1;GT0;GT1;NL0;NL1;RL0;RL1;BC0;BC1;IS0;IS1;AI1;") == 0,
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;AG1;SQ0;SQ1;RI0;TX;RM0;BP00;BP01;BP10;BP11;FT;PA0;PA1;PA2;RA0;RG0;RG1;GT0;GT1;NL0;NL1;RL0;RL1;BC0;BC1;IS0;IS1;SH0;SH1;AI1;") == 0,
           "FTX-1 reads before first write");
     CHECK(cat_rejected_commands() == rejected + 1 && !poll_rejected("BP00;"),
           "one explicit rejection does not suppress a read");
@@ -196,12 +196,12 @@ static void test_startup(void)
     startup_ai = "AI1;";
     g_sent[0] = '\0';
     initialize_reads((void *)1, s_rig);
-    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;PA0;RA0;RG0;GT0;NB0;NL0;NR0;RL0;BC0;IS0;") == 0, "FTDX10 leaves AI1 alone");
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;PA0;RA0;RG0;GT0;NB0;NL0;NR0;RL0;BC0;IS0;SH0;RF0;") == 0, "FTDX10 leaves AI1 alone");
     startup_ai = NULL;
     g_sent[0] = '\0';
     const int64_t before = g_now_us;
     initialize_reads((void *)1, s_rig);
-    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;PA0;RA0;RG0;GT0;NB0;NL0;NR0;RL0;BC0;IS0;AI1;") == 0 &&
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;PA0;RA0;RG0;GT0;NB0;NL0;NR0;RL0;BC0;IS0;SH0;RF0;AI1;") == 0 &&
           g_now_us - before >= ANSWER_TIMEOUT_MS * 1000, "silent AI enables it after timeout and all reads");
     startup_ai = "AI2;";
     g_sent[0] = '\0';
@@ -772,6 +772,38 @@ int main(void) {
     CHECK(cat_set_dnr(false, true, 15) == ESP_OK && cat_set_dnf(true, true) == ESP_ERR_NOT_SUPPORTED, "ftdx10 DNR / no SUB");
     use("9999");
     CHECK(cat_set_if_shift(false, 0) == ESP_ERR_NOT_SUPPORTED, "unknown radio: no IF shift");
+    // filter width (SH) on both radios, roofing filter (RF) on the FTDX10 only; RF answers use other codes
+    CHECK(cat_set_width(false, 10) == ESP_ERR_NOT_SUPPORTED && cat_set_roofing(1) == ESP_ERR_NOT_SUPPORTED &&
+          !ok("RF0;") && !ok("RF01;"), "unknown radio: no width or roofing");
+    use("0840");
+    CHECK(cat_set_width(true, 13) == ESP_OK && strcmp(queued_rigctl.cmd, "SH1013;") == 0, "ftx1 SUB width");
+    CHECK(cat_set_width(false, 0) == ESP_OK && strcmp(queued_rigctl.cmd, "SH0000;") == 0, "ftx1 default width");
+    CHECK(cat_set_width(false, 24) == ESP_ERR_INVALID_ARG, "width code max 23");
+    CHECK(cat_set_roofing(2) == ESP_ERR_NOT_SUPPORTED && !ok("RF0;") && !ok("RF02;"), "ftx1 has no roofing command");
+    use("0761");
+    CHECK(cat_set_width(false, 23) == ESP_OK && strcmp(queued_rigctl.cmd, "SH0023;") == 0, "ftdx10 width");
+    CHECK(cat_set_width(true, 5) == ESP_ERR_NOT_SUPPORTED, "ftdx10 has one receiver");
+    CHECK(cat_set_roofing(4) == ESP_OK && strcmp(queued_rigctl.cmd, "RF04;") == 0, "ftdx10 500 Hz roofing");
+    CHECK(cat_set_roofing(5) == ESP_OK && strcmp(queued_rigctl.cmd, "RF05;") == 0, "ftdx10 300 Hz roofing");
+    CHECK(cat_set_roofing(3) == ESP_ERR_INVALID_ARG && cat_set_roofing(6) == ESP_ERR_INVALID_ARG, "roofing set codes");
+    CHECK(ok("RF0;") && ok("RF01;") && ok("RF02;") && ok("RF04;") && ok("RF05;") && !ok("RF03;") && !ok("RF06;") &&
+          !ok("RF1;") && !ok("RF011;"), "ftdx10 roofing allow-list");
+    {
+        cat_state_t rf;
+        handle_cat_packet("RF09;");
+        cat_get_state(&rf);
+        CHECK(rf.roofing == 4, "RF0 answer 9 (500 Hz) is set code 4");
+        handle_cat_packet("RF0A;");
+        cat_get_state(&rf);
+        CHECK(rf.roofing == 5, "RF0 answer A (300 Hz) is set code 5");
+        handle_cat_packet("RF06;");
+        cat_get_state(&rf);
+        CHECK(rf.roofing == 1, "RF0 answer 6 (12 kHz) is set code 1");
+        handle_cat_packet("RF08;");
+        cat_get_state(&rf);
+        CHECK(rf.roofing == 1, "RF0 answer 8 (not a filter) is ignored");
+    }
+    use("9999");
     // CW zero in (ZIN): FTX-1 MAIN or SUB, FTDX10 one receiver (P1 fixed 0), never on an unknown radio
     use("0840");
     CHECK(cat_zero_in(false) == ESP_OK && strcmp(queued_rigctl.cmd, "ZI0;") == 0, "ftx1 MAIN zero in");

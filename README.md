@@ -418,6 +418,20 @@ Under FRONT END, each receiver has a **NOISE / IF** row, read the same way:
 
 On the FTX-1 all four are separate for MAIN and SUB.
 
+### Filter: roofing and width
+
+Under NOISE / IF, a **FILTER** row:
+
+- **ROOF** (FTDX10 only; the FTX-1 has no roofing filter command): the roofing filter, 12 kHz, 3 kHz, 500 Hz or
+  300 Hz (CAT `RF`). 300 Hz needs the optional filter; the list always shows what the radio reports.
+- **WIDTH**: the receiver filter width (CAT `SH`), in the steps of the radio's bandwidth chart for the mode,
+  shown in Hz. SSB has 23 steps from 300 Hz to 4 kHz; CW, RTTY, DATA and PSK 21 steps from 50 Hz to 4 kHz.
+  AM and FM have fixed widths: the slider is greyed out and shows `fixed`. `default` means the radio uses
+  the mode's default width (which depends on the roofing filter on the FTDX10).
+
+Both are read from the radio every 5 s and right after a change, so a change made on the radio shows up too.
+On the FTX-1 the width is separate for MAIN and SUB; on the FTDX10 it is the active VFO's.
+
 ### FTDX10: A / B (one receiver)
 
 The FTDX10 has one receiver and two VFOs, and its **A/B** key selects the VFO it receives and transmits on
@@ -429,7 +443,7 @@ The FTDX10 has one receiver and two VFOs, and its **A/B** key selects the VFO it
 - The left panel always shows and changes the **active** VFO: band, mode, dial, arrows, step, ZIN and direct entry.
   It turns green and reads **VFO-B (A/B)** while VFO-B is active. The screen keeps VFO-A above and VFO-B below,
   with the active one framed in green. There is no separate VFO-B card on the FTDX10: the right column is
-  **TX & RX SETTINGS** instead, with the TX panel and, under it, the FRONT END and NOISE / IF rows.
+  **TX & RX SETTINGS** instead, with the TX panel and, under it, the FRONT END, NOISE / IF and FILTER rows.
 - FT8, the scope and recordings follow the active VFO.
 - **Remote PTT (and FT8 transmit) works on VFO-A only**: with VFO-B active the TX panel reports
   "Select VFO-A (A/B) for remote PTT", and VFO-B becoming active while transmitting releases PTT.
@@ -844,9 +858,9 @@ All endpoints (`/`, `/map`, `/status`, `/cat`, `POST /reboot`, `/stream.*`, `POS
 
 Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
 
-- The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `preamp` / `pa_band` / `att` / `rfg` / `agc` / `nb` / `nb_level` / `dnr` / `dnr_level` / `dnf` / `ifs` / `scope_span` / `scope_level` / `action`, or `raw` alone (the CAT console, below).
+- The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `preamp` / `pa_band` / `att` / `rfg` / `agc` / `nb` / `nb_level` / `dnr` / `dnr_level` / `dnf` / `ifs` / `width` / `roofing` / `scope_span` / `scope_level` / `action`, or `raw` alone (the CAT console, below).
   Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main` / `split_on` / `split_off`.
-- Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `PA` `RA` `RG` `GT` `NB` `NL` `NR` `RL` `BC` `IS` `SS` `PC` `EX` `ZI`), checked against the profile of the connected radio.
+- Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `PA` `RA` `RG` `GT` `NB` `NL` `NR` `RL` `BC` `IS` `SH` `RF` `SS` `PC` `EX` `ZI`), checked against the profile of the connected radio.
 - **ZIN**, next to STEP on each receiver, sends CW AUTO ZERO IN (`ZI0;` MAIN, `ZI1;` SUB): the radio tunes that receiver onto the CW signal, as its own ZIN key does. It is enabled only while that receiver is in CW (CW-U / CW-L). The FTDX10 has one receiver, so only `ZI0;` is allowed there, whichever VFO is active. ZI is set only and cannot key the radio.
   For `SS` only the FTDX10's scope SPAN (`SS05` + 0–9 + `0000`) and LEVEL (`SS04`, read or −30.0 … +30.0 in 0.5 dB steps) items are allowed. For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
   Supported radios also allow modulation menu queries and transmit VFO status (`FT;`). NET rigctl can set the active VFO, transmit VFO selection and filter width through radio-specific allow-listed commands. The page's **SPLIT** button selects the transmit VFO the same way (`FT1;`/`FT0;` on the FTX-1, `FT3;`/`FT2;` on the FTDX10); `FT;` is read every 500 ms so the button also follows the radio's own SPLIT key. These commands cannot key the radio. `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.
