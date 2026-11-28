@@ -33,14 +33,17 @@
 _Static_assert((APP_CONFIG_WEB_USER_MAX_LEN + 1 + APP_CONFIG_WEB_PASS_MAX_LEN + 1) <= AUTH_FIELD_BYTES, "web credentials field is too small");
 _Static_assert((APP_CONFIG_OTA_USER_MAX_LEN + 1 + APP_CONFIG_OTA_PASS_MAX_LEN + 1) <= AUTH_FIELD_BYTES, "OTA credentials field is too small");
 
-// The embedded pages use inline scripts and styles and Google Fonts. The FT8 decoder runs in a Web
-// Worker created from a Blob URL (worker-src blob:). Everything else (connections, frames, forms,
-// <base>, plugins) is restricted to this device.
+// The embedded pages use inline scripts and styles and Google Fonts. The FT8 and CW decoders run in
+// Web Workers created from Blob URLs (worker-src blob:). The CW decoder downloads its ONNX runtime
+// and models from cdn.jsdelivr.net (too large for the firmware), checks their SHA-256, then imports
+// the runtime from a blob: URL and compiles its WebAssembly ('wasm-unsafe-eval'). Everything else
+// (connections, frames, forms, <base>, plugins) is restricted to this device.
 #define CONTENT_SECURITY_POLICY                                                         \
-    "default-src 'none'; script-src 'self' 'unsafe-inline'; worker-src blob:; "          \
+    "default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; "   \
+    "worker-src blob:; "                                                                 \
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "                    \
     "font-src https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; " \
-    "connect-src 'self'"
+    "connect-src 'self' https://cdn.jsdelivr.net"
 #define CONTENT_SECURITY_POLICY_END "; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 static const char *TAG = "web_auth";
