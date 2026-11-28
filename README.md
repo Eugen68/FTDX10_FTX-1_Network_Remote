@@ -645,6 +645,20 @@ its rejection.
 - It does not judge by the content of the audio, so noise with large swings (such as lightning) opens it.
 - Reading the radio's BUSY or S-meter over CAT would be more accurate, but it needs USB serial (CDC) host support and is not implemented.
 
+## Decoder selector
+
+Under the scopes there is one decoder panel per receiver: MAIN, and SUB on the FTX-1. The **DECODER** list in
+its header chooses what runs on that receiver: `OFF` (the default), `FT8` or `CW`. Choosing a decoder starts it,
+`OFF` stops it. MAIN and SUB are independent (for example CW on MAIN and FT8 on SUB), and only one decoder runs
+per receiver. The panel shows only the parts of the chosen decoder.
+
+- The controls shared by MAIN and SUB stay in the MAIN header and show while either receiver uses that
+  decoder: DT corr, med and APPLY for FT8; Model, AUTO, Hz and the status for CW.
+- The FT8 transmit controls (shown after TX authorization) do not depend on the list and always stay visible,
+  so `Halt` is reachable whatever decoder is chosen.
+- FT8 keeps its choice on the board, as before; CW keeps it in this browser. If the board says FT8 for a
+  receiver, CW stops there.
+
 ## About the FT8 decoder
 
 The real-time FT8 decoder implemented in the browser ([`main/index.html`](main/index.html)) is based on the specifications and implementations of the following open-source projects.
@@ -674,14 +688,14 @@ Due to Wi-Fi transmission and browser audio buffering, an unavoidable transmissi
 
 - **Absorption by DT (Time Offset) search**: The FT8 protocol is inherently designed to tolerate propagation delays and clock skews between stations. The decoder searches for timing offsets (DT) during sync detection (Costas array search). The network latency is naturally absorbed as a positive shift in DT (typically +0.1s to +0.4s) and does not affect decoding success.
 - **Adjusted decode trigger timing (14.0s)**: In a standard 15-second FT8 slot, transmission takes place between 0.5s and 13.14s (for DT=0). To accommodate transmission delay and buffering of late-arriving symbols, the decoder snapshots 15.0 seconds of audio and triggers the Web Worker at **14.0s** into the cycle rather than the 15.0s slot boundary. This ensures trailing symbols are not cut off.
-- **DT corr and its median**: the **DT corr** field next to the decoder buttons is subtracted from every DT shown, so DTs read as in WSJT-X. Beside it, **med** shows the median raw DT of the stations decoded on MAIN and SUB in the last four slots, and how many (at least five are needed). **APPLY** copies it, rounded to 0.1 s, into DT corr; nothing is applied on its own. It only changes the DTs shown, not decoding or transmit timing.
+- **DT corr and its median**: the **DT corr** field in the MAIN decoder header is subtracted from every DT shown, so DTs read as in WSJT-X. Beside it, **med** shows the median raw DT of the stations decoded on MAIN and SUB in the last four slots, and how many (at least five are needed). **APPLY** copies it, rounded to 0.1 s, into DT corr; nothing is applied on its own. It only changes the DTs shown, not decoding or transmit timing.
 - **Waveform continuity**: Network jitter in packet arrival does not alter the sample rate timing; audio is placed into the continuous ring buffer at fixed sample rates (48 kHz / 6.4 kHz), preserving the exact relative phase and timing across symbols.
 
 ### FT8 world map
 
 ![FT8 world map window: stations plotted by grid locator, with the list of decoded stations below (callsigns in the screenshot are dummies)](docs/ft8_map.png)
 
-Pressing `DECODER ON` opens a world map in a separate window (`/map`) and plots each station at the grid locator (4 characters) contained in the decoded message.
+Choosing `FT8` in a DECODER list opens a world map in a separate window (`/map`) and plots each station at the grid locator (4 characters) contained in the decoded message.
 
 - Call signs are not always shown on the map. Click a marker to see it together with the grid, SNR, distance, and bearing. You can also select a station by clicking a row in the list, and a station that is off screen is moved into view. When several stations overlap at the same grid, each click cycles through them in turn. Click an empty spot or press Esc to deselect.
 - The map can be zoomed and dragged (up to ×40). Zoom with the mouse wheel, a double click, or `+` / `−` in the header, and return to the whole view with `FIT`. When zoomed in, grid squares (such as `PM95`) and their names appear.
@@ -694,19 +708,19 @@ Pressing `DECODER ON` opens a world map in a separate window (`/map`) and plots 
 
 ## CW decoder
 
-Under the FT8 panels there is a CW decoder for MAIN and SUB (SUB only on the FTX-1). It is a port of
+Choose `CW` in the DECODER list of a receiver (see "Decoder selector"). The CW decoder is a port of
 [DeepCW](https://github.com/e04/web-deep-cw-decoder) by e04 (MIT License): a neural network trained on
 weak, fading and noisy CW, which copies well below the level where classic decoders give up. It only
 listens: it never keys the radio and sends no CAT command.
 
-- Press `DECODER ON` on a panel. Text appears word by word; the last word, still uncertain, is shown in grey
+- Text appears word by word; the last word, still uncertain, is shown in grey
   until it is confirmed. A new station or the end of a transmission starts a new line. `CLEAR` empties the panel.
 - **Model**: `Narrow` (default) decodes one signal, the tone at the pitch; `Wide` decodes the strongest
   signal between 400 and 1200 Hz, is heavier and needs more CPU (a phone may struggle).
 - **AUTO** (narrow model): follows the strongest CW tone between 300 and 1200 Hz and shows it next to the title.
   With AUTO off, the tone in **Hz** is decoded, normally the radio's CW pitch (700 Hz by default). Narrow the
   radio's filter around the station for the best copy.
-- The settings and the ON/OFF state are kept in this browser (`localStorage`).
+- The settings, and which receivers use CW, are kept in this browser (`localStorage`).
 - Like FT8, it works on the audio the page is playing: on a phone, when the page goes to the background, it pauses.
 
 **Download from the Internet.** The decoder needs the ONNX runtime (12 MB, about 3 MB compressed on the wire)
