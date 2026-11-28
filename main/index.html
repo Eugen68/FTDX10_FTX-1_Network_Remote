@@ -786,6 +786,7 @@
     white-space: pre-wrap; word-break: break-word; letter-spacing: .03em;
   }
   .cw-pending { color: #64748b; }
+  .cw-fixed { outline: 1px solid #22d3ee; cursor: pointer; }
   .cw-info { color: #94a3b8; font-style: italic; font-size: .7rem; letter-spacing: 0; }
   .cw-info.err { color: #f87171; font-style: normal; font-weight: bold; }
   .cw-info[hidden] { display: none; }
@@ -2632,6 +2633,26 @@ function makeScope(name, idx) {
       sctx.restore();
     }
 
+    // CW decoder tone: chosen by a click here, or followed by AUTO. The band is the narrow model's 3 bins.
+    const cwHz = cwToneFor(idx);
+    if (cwHz && cwHz < sc.spanHz) {
+      const cx = (cwHz / sc.spanHz) * w;
+      const bandPx = Math.max(3, (37.5 / sc.spanHz) * w);
+      sctx.save();
+      sctx.fillStyle = 'rgba(34, 211, 238, 0.18)';
+      sctx.fillRect(cx - bandPx / 2, 0, bandPx, specH + wfH);
+      sctx.strokeStyle = '#22d3ee';
+      sctx.lineWidth = 1;
+      sctx.setLineDash(cwChans[idx].fixedHz ? [] : [3, 3]);
+      sctx.strokeRect(cx - bandPx / 2 + 0.5, 0.5, bandPx - 1, specH + wfH - 1);
+      sctx.setLineDash([]);
+      sctx.font = 'bold 9px monospace';
+      sctx.fillStyle = '#67e8f9';
+      sctx.textAlign = cx > w - 70 ? 'right' : 'left';
+      sctx.fillText('CW ' + Math.round(cwHz) + 'Hz', cx + (cx > w - 70 ? -bandPx / 2 - 3 : bandPx / 2 + 3), specH - 4);
+      sctx.restore();
+    }
+
     // Frequency ruler: minor tick every minorHz, longer tick + label every majorHz
     const barY = specH + wfH;
     sctx.fillStyle = '#0a0f1d';
@@ -2699,6 +2720,19 @@ document.addEventListener('keydown', e => {
     if (hz > 30000 && hz < 75000000) setFreq(false, hz);
   });
 })();
+
+// CW: click (or tap) on a receiver's audio scope decodes the CW signal there (cwPickTone). The ACC scope
+// keeps its own click (tune the radio).
+['Main', 'Sub'].forEach((name, idx) => {
+  const cv = document.getElementById('scopeCanvas' + name);
+  const pickable = () => scopes[idx].source === 'audio' && cwSettings.on[idx];
+  cv.addEventListener('click', (e) => {
+    if (!pickable()) return;
+    const b = cv.getBoundingClientRect();
+    cwPickTone(idx, (e.clientX - b.left) / b.width * scopes[idx].spanHz);
+  });
+  cv.addEventListener('pointermove', () => { cv.style.cursor = pickable() ? 'crosshair' : ''; });
+});
 
 function renderScope(now) {
   followModeSpan();
@@ -5710,7 +5744,8 @@ const cwChans = ['Main', 'Sub'].map((name, idx) => {
     rate: 0, lp: null, t: 0, prev: 0,
     infoEl: box.insertBefore(Object.assign(document.createElement('div'), { className: 'cw-info', hidden: true }), box.firstChild),
     lastAudio: 0,   // performance.now() of the last audio fed to the decoder
-    hz: null        // tone being decoded, from the last result
+    hz: null,       // tone being decoded, from the last result
+    fixedHz: null   // tone chosen by a click on this receiver's scope (see cwPickTone)
   };
 });
 // What the decoder is doing, shown inside the panels (the status word in the header is easy to miss)
@@ -5744,8 +5779,8 @@ function cwOnMessage(m) {
     if (done.length > CW_MAX_TEXT) done = done.slice(done.length - CW_MAX_TEXT);
     if (done !== c.doneEl.textContent) c.doneEl.textContent = done;
     c.pendingEl.textContent = m.pending ? (done && !/\s$/.test(done) ? ' ' : '') + m.pending : '';
-    c.toneEl.textContent = m.hz ? Math.round(m.hz) + ' Hz' : (cwSettings.model === 'wide' ? '400-1200' : '—');
     c.hz = m.hz || null;
+    cwShowTone(c);
     cwShowInfo();
     if (nearBottom) c.box.scrollTop = c.box.scrollHeight;
   } else if (m.type === 'perf') {
@@ -5779,6 +5814,39 @@ function cwShowInfo() {
 }
 setInterval(cwShowInfo, 1000);
 
+// The tone badge next to the title: the tone being decoded; outlined when it was chosen on the scope
+function cwShowTone(c) {
+  const hz = c.fixedHz || c.hz;
+  c.toneEl.textContent = !cwSettings.on[c.idx] ? '—' : hz ? Math.round(hz) + ' Hz'
+    : (cwSettings.model === 'wide' ? '400-1200' : '—');
+  c.toneEl.classList.toggle('cw-fixed', !!c.fixedHz);
+  c.toneEl.title = c.fixedHz ? 'Tone chosen on the scope. Click here (or AUTO) to go back to AUTO / Hz'
+                             : 'Tone being decoded. Click a signal on the audio scope to decode that one';
+}
+
+// A tone chosen on a receiver's scope (null: back to AUTO or the Hz field), for that receiver only
+function cwSetTone(idx, hz) {
+  const c = cwChans[idx];
+  if ((c.fixedHz || null) === (hz || null)) return;
+  c.fixedHz = hz || null;
+  c.hz = null;
+  if (cwWorker) cwWorker.postMessage({ type: 'tone', ch: idx, hz: c.fixedHz });
+  cwShowTone(c);
+}
+
+function cwToneFor(idx) {
+  const c = cwChans[idx];
+  return cwSettings.on[idx] && cwSettings.model === 'narrow' ? (c.fixedHz || c.hz) : null;
+}
+
+// Click on the audio scope: decode the CW signal at that audio frequency, with the narrow model
+function cwPickTone(idx, hz) {
+  hz = Math.round(hz / 10) * 10;
+  if (!cwSettings.on[idx] || hz < 200 || hz > 2400) return;
+  if (cwSettings.model !== 'narrow') { cwSettings.model = 'narrow'; cwSave(); cwApply(); }
+  cwSetTone(idx, hz);
+}
+
 function cwApply() {
   cwModelSel.value = cwSettings.model;
   cwAutoBtn.classList.toggle('active', cwSettings.auto);
@@ -5787,7 +5855,8 @@ function cwApply() {
   cwAutoBtn.disabled = !narrow;
   cwPitchInput.disabled = !narrow || cwSettings.auto;
   cwChans.forEach((c) => {
-    if (!cwSettings.on[c.idx]) { c.pendingEl.textContent = ''; c.toneEl.textContent = '—'; }
+    if (!cwSettings.on[c.idx]) { c.pendingEl.textContent = ''; cwSetTone(c.idx, null); }
+    cwShowTone(c);
   });
   cwShowInfo();
   if (!cwSettings.on.some(Boolean) && !cwWorker) { cwStatusEl.textContent = 'OFF'; return; }
@@ -5807,13 +5876,21 @@ cwModelSel.addEventListener('change', () => {
   if (cwSettings.on.some(Boolean)) { cwStatusEl.textContent = 'LOADING'; Object.assign(cwState, { kind: 'loading', progress: 0 }); }
   cwSave(); cwApply();
 });
-cwAutoBtn.addEventListener('click', () => { cwSettings.auto = !cwSettings.auto; cwSave(); cwApply(); });
+cwAutoBtn.addEventListener('click', () => {
+  // A tone chosen on the scope is left with AUTO: the first press only goes back to AUTO
+  if (cwChans.some((c) => c.fixedHz)) cwSettings.auto = true;
+  else cwSettings.auto = !cwSettings.auto;
+  cwChans.forEach((c) => cwSetTone(c.idx, null));
+  cwSave(); cwApply();
+});
 cwPitchInput.addEventListener('change', () => {
   const v = Math.round(Number(cwPitchInput.value) / 10) * 10;
   if (v >= 300 && v <= 1200) cwSettings.pitch = v;
+  cwChans.forEach((c) => cwSetTone(c.idx, null));
   cwSave(); cwApply();
 });
 cwChans.forEach((c) => {
+  c.toneEl.addEventListener('click', () => cwSetTone(c.idx, null));
   c.clearBtn.addEventListener('click', () => { c.doneEl.textContent = ''; c.pendingEl.textContent = ''; cwShowInfo(); });
 });
 
@@ -6990,7 +7067,8 @@ async function cwInfer(model, input) {
 const cwCfg = { model: 'narrow', auto: true, pitch: 700 };
 const cwChans = [0, 1].map((idx) => ({
   idx, enabled: false, buf: new Float32Array(CW_MAX_SEG + 2 * CW_RATE), len: 0,
-  lastRun: 0, lockHz: null, gen: 0, pending: ''
+  lastRun: 0, lockHz: null, gen: 0, pending: '',
+  fixedHz: null   // tone chosen on the scope for this receiver (narrow model), overrides AUTO and the Hz field
 }));
 let cwBusy = false;
 
@@ -7030,7 +7108,9 @@ async function cwProcess(c) {
   const len = Math.min(c.len, CW_MAX_SEG), audio = c.buf.slice(0, len);
   let hz = null;
   if (model === 'narrow') {
-    if (cwCfg.auto) {
+    if (c.fixedHz) {
+      hz = c.fixedHz;
+    } else if (cwCfg.auto) {
       const det = cwStrongestTone(audio.subarray(Math.max(0, len - CW_DETECT_SEC * CW_RATE)), c.lockHz);
       if (!det) {
         // Nothing keyed: keep only the last seconds so a new signal is decoded from its start
@@ -7120,6 +7200,13 @@ self.onmessage = (e) => {
     if (m.enabled.some(Boolean)) cwLoadModel(cwCfg.model);
   } else if (m.type === 'reset') {
     cwReset(cwChans[m.ch]);
+  } else if (m.type === 'tone') {
+    // A tone chosen on the scope (or null: back to AUTO / Hz): keep what was pending, start a new line
+    const c = cwChans[m.ch];
+    if (!c) return;
+    c.fixedHz = m.hz > 0 ? m.hz : null;
+    c.lockHz = null;
+    cwBreak(c, c.fixedHz);
   }
 };
 </script>

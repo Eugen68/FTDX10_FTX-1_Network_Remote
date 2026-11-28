@@ -720,6 +720,11 @@ listens: it never keys the radio and sends no CAT command.
 - **AUTO** (narrow model): follows the strongest CW tone between 300 and 1200 Hz and shows it next to the title.
   With AUTO off, the tone in **Hz** is decoded, normally the radio's CW pitch (700 Hz by default). Narrow the
   radio's filter around the station for the best copy.
+- **Click a signal on the audio scope** of a receiver that uses CW: that receiver decodes the CW signal at that
+  audio frequency (with the narrow model), whatever AUTO or Hz say. A cyan band marked `CW 720Hz` shows on the
+  scope where the decoder listens (dashed while AUTO follows a tone, solid when chosen by a click), and the tone
+  badge next to the title is outlined. Click the badge, or AUTO, to go back to AUTO / Hz. On the FTDX10's ACC
+  scope a click still tunes the radio.
 - The settings, and which receivers use CW, are kept in this browser (`localStorage`).
 - Like FT8, it works on the audio the page is playing: on a phone, when the page goes to the background, it pauses.
 
