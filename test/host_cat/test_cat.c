@@ -619,6 +619,14 @@ int main(void) {
     use("9999");
     CHECK(!ok("FT0;") && !ok("FT2;") && !ok("VS1;") && !ok("SH0013;"), "unknown rig cannot set VFO/filter");
 
+    // CW zero in: set only, the receivers this radio has
+    use("0840");
+    CHECK(ok("ZI0;") && ok("ZI1;") && !ok("ZI2;") && !ok("ZI;") && !ok("ZI00;"), "FTX-1 ZI MAIN / SUB");
+    use("0761");
+    CHECK(ok("ZI0;") && !ok("ZI1;") && !ok("ZI;"), "FTDX10 ZI fixed P1 0");
+    use("9999");
+    CHECK(!ok("ZI0;"), "unknown rig: no ZI");
+
     // front-end: pre-amp, attenuator, RF gain, AGC, each with the radio's own parameter ranges
     use("0840");
     CHECK(ok("PA0;") && ok("PA1;") && ok("PA2;") && !ok("PA3;") && !ok("PA;"), "FTX-1 PA bands");
@@ -764,6 +772,15 @@ int main(void) {
     CHECK(cat_set_dnr(false, true, 15) == ESP_OK && cat_set_dnf(true, true) == ESP_ERR_NOT_SUPPORTED, "ftdx10 DNR / no SUB");
     use("9999");
     CHECK(cat_set_if_shift(false, 0) == ESP_ERR_NOT_SUPPORTED, "unknown radio: no IF shift");
+    // CW zero in (ZIN): FTX-1 MAIN or SUB, FTDX10 one receiver (P1 fixed 0), never on an unknown radio
+    use("0840");
+    CHECK(cat_zero_in(false) == ESP_OK && strcmp(queued_rigctl.cmd, "ZI0;") == 0, "ftx1 MAIN zero in");
+    CHECK(cat_zero_in(true) == ESP_OK && strcmp(queued_rigctl.cmd, "ZI1;") == 0, "ftx1 SUB zero in");
+    use("0761");
+    CHECK(cat_zero_in(false) == ESP_OK && strcmp(queued_rigctl.cmd, "ZI0;") == 0, "ftdx10 zero in");
+    CHECK(cat_zero_in(true) == ESP_ERR_NOT_SUPPORTED, "ftdx10 has no SUB receiver to zero in");
+    use("9999");
+    CHECK(cat_zero_in(false) == ESP_ERR_NOT_SUPPORTED, "unknown radio: no zero in");
     g_queue_send_hook = NULL;
     use("0840");
     {

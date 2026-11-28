@@ -35,6 +35,7 @@
  *   SV;             set    swap MAIN and SUB (FTDX10: VFO-A and VFO-B)
  *   AB;             set    copy MAIN to SUB
  *   BA;             set    copy SUB to MAIN
+ *   ZIR;            set    CW AUTO ZERO IN of receiver R (the page's ZIN button); no read form. FTDX10: R = 0 only
  *   PSn;            set    power, 0 = OFF, 1 = ON (the browser's POWER button)
  *
  *   FTX-1 only (ID 0840):
@@ -728,6 +729,8 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         const unsigned v = pl == 3 && all_digits(p + 1, 2) ? digits_value(p + 1, 2) : 99u;
         return v <= rig->dnr_max && (!rig->nb_switch || v >= 1);
     }
+    case CAT_TWO('Z', 'I'):         // CW zero in (set only): tunes the receiver onto a CW signal, never transmits
+        return ctl && pl == 1 && is_rx_side(rig, p[0]);
     case CAT_TWO('B', 'C'):         // auto notch (DNF) on-off
         return ctl && rig->dnr_max && is_rx_side(rig, p[0]) && (pl == 1 || (pl == 2 && is_side(p[1])));
     case CAT_TWO('I', 'S'):         // IF shift: P2 fixed 0, sign, 0000-1200 Hz in 20 Hz steps
@@ -3025,6 +3028,14 @@ esp_err_t cat_set_dnf(bool sub, bool on)
     char cmd[16];
     snprintf(cmd, sizeof(cmd), "BC%c%c;", sub ? '1' : '0', on ? '1' : '0');
     return cat_enqueue(cmd);
+}
+
+esp_err_t cat_zero_in(bool sub)
+{
+    if (!s_rig->can_control || (sub && !s_rig->dual_rx)) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    return cat_enqueue(sub ? "ZI1;" : "ZI0;");
 }
 
 esp_err_t cat_set_if_shift(bool sub, int hz)
