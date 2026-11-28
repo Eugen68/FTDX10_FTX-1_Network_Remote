@@ -480,14 +480,6 @@ static void capture_cat_item(const void *item)
     queued_rigctl = *(const cat_cmd_item_t *)item;
 }
 
-static char ab_cmds[4][16];
-static unsigned ab_count;
-
-static void capture_ab(const void *item)
-{
-    if (ab_count < 4) strlcpy(ab_cmds[ab_count++], ((const cat_cmd_item_t *)item)->cmd, sizeof(ab_cmds[0]));
-}
-
 static void rigctl_readback(const char *cmd, size_t len)
 {
     const char *answer = NULL;
@@ -998,22 +990,10 @@ int main(void) {
               "VFO-A's mode with B active goes to MD1 (%s)", queued_rigctl.cmd);
         CHECK(cat_set_vfo_mode(true, "CW-U") == ESP_OK && strcmp(queued_rigctl.cmd, "MD03;") == 0,
               "VFO-B's mode with B active goes to MD0 (%s)", queued_rigctl.cmd);
-        // VS alone leaves the FTDX10's receiver on the old frequency: the new VFO's frequency is written back
-        handle_cat_packet("FA003710000;");
-        handle_cat_packet("FB007074000;");
-        g_queue_send_hook = capture_ab;
-        ab_count = 0;
-        CHECK(cat_select_vfo(false) == ESP_OK && ab_count == 2 && strcmp(ab_cmds[0], "VS0;") == 0 &&
-              strcmp(ab_cmds[1], "FA003710000;") == 0, "A/B to VFO-A retunes with FA (%s %s)", ab_cmds[0], ab_cmds[1]);
-        ab_count = 0;
-        CHECK(cat_select_vfo(true) == ESP_OK && ab_count == 2 && strcmp(ab_cmds[0], "VS1;") == 0 &&
-              strcmp(ab_cmds[1], "FB007074000;") == 0, "A/B to VFO-B retunes with FB (%s %s)", ab_cmds[0], ab_cmds[1]);
-        g_queue_send_hook = capture_cat_item;
         handle_cat_packet("VS0;");
         g_now_us += RADIO_STATUS_MAX_AGE_US + 1;
         CHECK(strcmp(cat_ptt_mode_error(0), "Waiting for VFO confirmation") == 0, "a stale VS cannot key");
         use("0840");
-        CHECK(cat_select_vfo(true) == ESP_ERR_NOT_SUPPORTED, "FTX-1 keeps its own MAIN / SUB");
         CHECK(cat_set_vfo_mode(true, "USB") == ESP_OK && strcmp(queued_rigctl.cmd, "MD12;") == 0, "FTX-1 SUB mode");
         g_queue_send_hook = NULL;
     }

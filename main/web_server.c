@@ -955,7 +955,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
 //   vol, sq integer 0-255
 //   notch   0 | 1 | false | true           notch_hz integer 10-3200
 //   power   0 | 1 | false | true
-//   action  "swap" | "copy_main_to_sub" | "copy_sub_to_main" | "vfo_a" | "vfo_b" (FTDX10 A/B)
+//   action  "swap" | "copy_main_to_sub" | "copy_sub_to_main"
 // Unknown or repeated keys, escapes, nesting and trailing data are rejected. There is no way to send a
 // raw CAT string.
 typedef struct {
@@ -1553,8 +1553,6 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
         if (strcmp(r.action, "swap") == 0) APPLY(cat_swap_vfo());
         else if (strcmp(r.action, "copy_main_to_sub") == 0) APPLY(cat_copy_main_to_sub());
         else if (strcmp(r.action, "copy_sub_to_main") == 0) APPLY(cat_copy_sub_to_main());
-        else if (strcmp(r.action, "vfo_a") == 0) APPLY(cat_select_vfo(false));
-        else if (strcmp(r.action, "vfo_b") == 0) APPLY(cat_select_vfo(true));
         else err = ESP_ERR_INVALID_ARG, ops++;
     }
     if (r.has_freq) APPLY(cat_set_freq(r.sub, r.freq));

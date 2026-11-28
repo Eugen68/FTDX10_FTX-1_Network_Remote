@@ -194,9 +194,6 @@ static inline bool cat_modes_swapped(const cat_state_t *s)
     return !s->dual_rx && s->rx_vfo_known && s->rx_vfo_sub;
 }
 
-/** @brief FTDX10: make VFO-A or VFO-B the active VFO (CAT "VS", the radio's A/B key); it receives and transmits */
-esp_err_t cat_select_vfo(bool vfo_b);
-
 /** @brief Set the mode of VFO-A or VFO-B, whichever is active (the FTDX10's MD0 / MD1 are relative) */
 esp_err_t cat_set_vfo_mode(bool vfo_b, const char *mode_name);
 

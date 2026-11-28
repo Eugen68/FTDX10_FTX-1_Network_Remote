@@ -1681,9 +1681,6 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
                 const char readback[] = {'M', 'D', item.cmd[2], ';', '\0'};
                 send_poll(dev, readback);
             }
-            if (strncmp(item.cmd, "VS", 2) == 0) {
-                send_poll(dev, "VS;MD0;MD1;FT;");   // the new VFO and both modes at once
-            }
             // SV (swap) / AB / BA (copy) change both VFOs: re-read them so the UI does not
             // show stale values until the next periodic sync
             if (strcmp(item.cmd, "SV;") == 0 || strcmp(item.cmd, "AB;") == 0 || strcmp(item.cmd, "BA;") == 0) {
@@ -2537,20 +2534,6 @@ esp_err_t cat_set_mode_char(bool sub, char mode_char)
         }
         xSemaphoreGive(s_lock);
     }
-    return err;
-}
-
-esp_err_t cat_select_vfo(bool vfo_b)
-{
-    if (!s_rig->can_control || s_rig->dual_rx) return ESP_ERR_NOT_SUPPORTED;   // FTDX10 A/B only
-    esp_err_t err = cat_enqueue(vfo_b ? "VS1;" : "VS0;");
-    // Tested on an FTDX10: VS moves the display, the LEDs and the mode to the other VFO, but the receiver stays
-    // on the old frequency until that VFO's frequency is written (the A/B key retunes at once). So write the
-    // new VFO's own frequency back to it.
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    const uint32_t hz = vfo_b ? s_state.freq_sub : s_state.freq_main;
-    xSemaphoreGive(s_lock);
-    if (err == ESP_OK && hz) err = cat_set_freq(vfo_b, hz);
     return err;
 }
 

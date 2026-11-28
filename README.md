@@ -396,8 +396,9 @@ Enter Host name without ".local" [Current: trx-remote] (a-z, 0-9, '-'; DEFAULT t
 The FTDX10 has one receiver and two VFOs, and its **A/B** key selects the VFO it receives and transmits on
 (CAT `VS`). The page works the same way:
 
-- The **A / B** button (where the FTX-1 has SWAP) is that key: the radio moves to the other VFO, so you
-  hear, meter and see on the scope the frequency you would transmit on. It also follows the radio's own key.
+- The page's **A / B** button (where the FTX-1 has SWAP) swaps VFO-A and VFO-B (CAT `SV`), so you hear the
+  other frequency at once and VFO-A, which remote PTT uses, takes it. (CAT `VS` would move the display to
+  VFO-B but leave the receiver on VFO-A's frequency.) The page also follows the radio's own **A/B** key.
 - The left panel always shows and changes the **active** VFO: band, mode, dial, arrows, step and direct entry.
   It turns green and reads **VFO-B (A/B)** while VFO-B is active. The screen keeps VFO-A above and VFO-B below,
   with the active one framed in green. There is no separate VFO-B card on the FTDX10.
@@ -742,7 +743,7 @@ All endpoints (`/`, `/map`, `/status`, `/cat`, `POST /reboot`, `/stream.*`, `POS
 Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
 
 - The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `action`.
-  Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main` / `vfo_a` / `vfo_b` (FTDX10 A/B).
+  Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main`.
 - Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `EX`), checked against the profile of the connected radio.
   For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
   Supported radios also allow modulation menu queries and transmit VFO status (`FT;`). NET rigctl can set the active VFO, transmit VFO selection and filter width through radio-specific allow-listed commands. These commands cannot key the radio. `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.

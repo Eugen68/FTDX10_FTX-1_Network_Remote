@@ -3845,7 +3845,8 @@ function renderPanelNow() {
   document.getElementById('vfdBezelSub').classList.toggle('vfo-active', b);
   const swap = document.getElementById('btnSwapVfo');
   swap.innerHTML = single ? '<span class="vfo-op-icon">&#8645;</span> A / B' : '<span class="vfo-op-icon">&#8596;</span> SWAP (A &#8596; B)';
-  swap.title = single ? "Like the radio's A/B key: receive and transmit on the other VFO (VS). Remote PTT works on VFO-A only"
+  // FTDX10: CAT VS moved the display but left the receiver on the old frequency, so A / B swaps the VFOs (SV)
+  swap.title = single ? 'A / B: swap VFO-A and VFO-B (SV). You hear the other frequency, and VFO-A, which remote PTT uses, takes it'
                       : 'Swap frequency and mode between MAIN and SUB (SV;)';
   if (!b) {
     if (panelShownB) {                 // back to VFO-A: repaint the panel with A's mode and step
@@ -3875,14 +3876,6 @@ function panelVfoChanged() {
 }
 
 document.getElementById('btnSwapVfo').addEventListener('click', () => {
-  if (singleRx()) {
-    // FTDX10: A/B like the radio's key (VS). The radio then receives and transmits on the other VFO.
-    const toB = catRxVfo !== 'sub';
-    catRxVfo = toB ? 'sub' : 'main';
-    panelVfoChanged();
-    sendCatCommand({ action: toB ? 'vfo_b' : 'vfo_a' });
-    return;
-  }
   resetChannelAudio(0);
   resetChannelAudio(1);
   lastUserChangeMain = Date.now();
