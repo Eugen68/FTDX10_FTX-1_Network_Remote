@@ -784,14 +784,16 @@ For technical evaluations, memory estimations on on-device FT8 decoding on the E
 radio audio that removes the noise and keeps the signal. It runs in this browser on the audio you hear only:
 the scope, the FT8 and CW decoders, recordings, the radio and the board get the original audio.
 
-- **Model** (DSP panel, NOISE SQUELCH GATE section): `AUTO` uses HamNoise's CW model in CW and its voice model
-  in every other mode (SSB, AM, FM, DATA); `CW` or `VOICE` chooses one by hand. MAIN and SUB are separate on the FTX-1.
-- **Strength**: how much of the cleaned audio is heard, the rest being the original (100 % = fully cleaned).
+- The settings are in the DSP panel (NOISE SQUELCH GATE section), one **AI NOISE REDUCTION** box per receiver
+  under its squelch (on the FTDX10, the one box sits beside MAIN SQUELCH):
+  - **Model**: `AUTO` uses HamNoise's CW model in CW and its voice model in every other mode (SSB, AM, FM, DATA);
+    `CW` or `VOICE` chooses one by hand.
+  - **Strength**: how much of the cleaned audio is heard, the rest being the original (100 % = fully cleaned).
 - The button is green while it works, amber while the model loads, red on an error (the original audio is
   played then; the reason is in the DSP panel).
 - It adds about 0.1 s of delay to what you hear.
 - **CPU**: the CW model is very light. The voice model is heavy: about half of one CPU core per receiver on a
-  PC. The DSP panel shows the load; above 70 % it says the device is too slow (crackling audio): turn it off,
+  PC. Each box shows its load; above 70 % it says the device is too slow (crackling audio): turn it off,
   or use it on one receiver only.
 - The settings are kept in this browser.
 

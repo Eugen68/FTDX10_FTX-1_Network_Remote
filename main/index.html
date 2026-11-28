@@ -1013,8 +1013,6 @@
     border-radius: 5px;
     padding: .4rem .5rem;
   }
-  .hn-box { grid-column: 1 / -1; }
-  body.single-rx .hn-box { grid-column: auto; }
   .sq-row {
     display: flex;
     align-items: center;
@@ -1802,21 +1800,37 @@
         <div class="sq-status" id="stateSub">SUB: --</div>
       </div>
 
-      <!-- AI noise reduction: beside MAIN SQUELCH on a one-receiver radio (FTDX10), a full row under MAIN / SUB otherwise -->
-      <div class="sq-box hn-box">
-        <strong>AI NOISE REDUCTION (HamNoise, this PC only)</strong>
+      <!-- AI noise reduction, one box per receiver under its squelch; on a one-receiver radio (FTDX10) the
+           MAIN box sits beside MAIN SQUELCH -->
+      <div class="sq-box hn-box" id="hnBoxMain">
+        <strong>MAIN AI NOISE REDUCTION (HamNoise, this PC only)</strong>
         <div class="sq-row">
           <span>Model:</span>
-          <select id="hnModel" title="AUTO: CW model in CW, voice model in the other modes">
+          <select id="hnModelMain" title="AUTO: CW model in CW, voice model in the other modes">
             <option value="auto">AUTO (by mode)</option><option value="cw">CW</option><option value="voice">VOICE</option>
           </select>
         </div>
         <div class="sq-row">
           <span>Strength:</span>
-          <input type="range" id="hnStrength" min="0" max="100" step="5" value="100" title="How much of the cleaned audio is heard (the rest is the original)">
-          <span id="hnStrengthVal" style="font-family:monospace; min-width:40px;">100 %</span>
+          <input type="range" id="hnStrengthMain" min="0" max="100" step="5" value="100" title="How much of the cleaned audio is heard (the rest is the original)">
+          <span id="hnStrengthValMain" style="font-family:monospace; min-width:40px;">100 %</span>
         </div>
-        <div class="sq-status" id="hnStatus">Off. Turn it on with AI NR next to MUTE.</div>
+        <div class="sq-status" id="hnStatusMain">Off. Turn it on with AI NR next to MUTE.</div>
+      </div>
+      <div class="sq-box hn-box dual-rx-only" id="hnBoxSub">
+        <strong>SUB AI NOISE REDUCTION (HamNoise, this PC only)</strong>
+        <div class="sq-row">
+          <span>Model:</span>
+          <select id="hnModelSub" title="AUTO: CW model in CW, voice model in the other modes">
+            <option value="auto">AUTO (by mode)</option><option value="cw">CW</option><option value="voice">VOICE</option>
+          </select>
+        </div>
+        <div class="sq-row">
+          <span>Strength:</span>
+          <input type="range" id="hnStrengthSub" min="0" max="100" step="5" value="100" title="How much of the cleaned audio is heard (the rest is the original)">
+          <span id="hnStrengthValSub" style="font-family:monospace; min-width:40px;">100 %</span>
+        </div>
+        <div class="sq-status" id="hnStatusSub">Off. Turn it on with AI NR next to MUTE.</div>
       </div>
     </div>
     <div class="sq-row" style="margin-top:8px;">
@@ -6213,15 +6227,22 @@ const HN_CACHE = 'hamnoise-v1';
 const HN_PREFS_KEY = 'ftx1.hn';
 const HN_OUTPUT_LATENCY_MS = 45;   // the worklet's output cushion (HamNoise default 90 ms)
 let HN_CDN = 'https://cdn.jsdelivr.net';
-const hnSettings = { on: [false, false], model: 'auto', strength: 100 };
+// Per receiver: [MAIN, SUB]
+const hnSettings = { on: [false, false], model: ['auto', 'auto'], strength: [100, 100] };
+const hnModelOk = (m) => ['auto', 'cw', 'voice'].includes(m);
+const hnStrengthOk = (v) => Number.isFinite(v) && v >= 0 && v <= 100;
 try {
   const saved = JSON.parse(localStorage.getItem(HN_PREFS_KEY) || '{}');
   if (Array.isArray(saved.on)) hnSettings.on = [saved.on[0] === true, saved.on[1] === true];
-  if (['auto', 'cw', 'voice'].includes(saved.model)) hnSettings.model = saved.model;
-  if (saved.strength >= 0 && saved.strength <= 100) hnSettings.strength = Math.round(saved.strength / 5) * 5;
+  [0, 1].forEach((i) => {
+    const m = Array.isArray(saved.model) ? saved.model[i] : saved.model;   // older pages kept one for both
+    const v = Array.isArray(saved.strength) ? saved.strength[i] : saved.strength;
+    if (hnModelOk(m)) hnSettings.model[i] = m;
+    if (hnStrengthOk(v)) hnSettings.strength[i] = Math.round(v / 5) * 5;
+  });
 } catch (e) {}
 let hnBus = null;                      // { ctx, splitter, ch } while audio plays
-const hnChan = [0, 1].map(() => ({ node: null, target: null, gen: 0, state: 'off', error: '' }));
+const hnChan = [0, 1].map((idx) => ({ idx, node: null, target: null, gen: 0, state: 'off', error: '' }));
 const hnBytes = {};                    // target -> Promise<ArrayBuffer> (checked)
 const hnModuleCtx = new WeakMap();     // AudioContext -> Promise (worklet module added)
 let hnMode = ['', ''];                 // the receivers' modes from /cat (FTDX10: the active VFO's)
@@ -6277,12 +6298,12 @@ function hnModule(c) {
 
 // CW model in CW, the voice model in every other mode (unless chosen by hand)
 function hnTargetFor(i) {
-  if (hnSettings.model !== 'auto') return hnSettings.model;
+  if (hnSettings.model[i] !== 'auto') return hnSettings.model[i];
   return /^CW/.test(hnMode[i] || '') ? 'cw' : 'voice';
 }
 
 function hnParams(chan) {
-  chan.node?.port.postMessage({ type: 'params', enabled: true, wet: hnSettings.strength / 100, gain: 1,
+  chan.node?.port.postMessage({ type: 'params', enabled: true, wet: hnSettings.strength[chan.idx] / 100, gain: 1,
                                 modelId: HN_MODEL_ID[chan.target], outputLatencyMs: HN_OUTPUT_LATENCY_MS });
 }
 
@@ -6365,32 +6386,29 @@ function hnApplyCat(d) {
 }
 
 const hnBtns = ['Main', 'Sub'].map((S) => document.getElementById('btnHn' + S));
-const hnStatusEl = document.getElementById('hnStatus');
-const hnModelSel = document.getElementById('hnModel');
-const hnStrength = document.getElementById('hnStrength');
-const hnStrengthVal = document.getElementById('hnStrengthVal');
+const hnEls = ['Main', 'Sub'].map((S) => ({
+  status: document.getElementById('hnStatus' + S), model: document.getElementById('hnModel' + S),
+  strength: document.getElementById('hnStrength' + S), strengthVal: document.getElementById('hnStrengthVal' + S),
+}));
 
 function hnShow() {
-  const names = ['MAIN', 'SUB'];
   hnBtns.forEach((btn, i) => {
-    const c = hnChan[i], on = hnSettings.on[i];
+    const c = hnChan[i], on = hnSettings.on[i], el = hnEls[i], t = hnTargetFor(i);
     btn.classList.toggle('active', on && c.state === 'on');
     btn.classList.toggle('loading', on && c.state === 'loading');
     btn.classList.toggle('error', on && c.state === 'error');
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    let text = 'Off. Turn it on with AI NR next to MUTE.';
+    if (on && !hnBus) text = 'On: starts with the audio.';
+    else if (on && c.state === 'loading') text = 'Loading the ' + t + ' model (' + HN_ASSETS[t].mb + ' MB, first time only)…';
+    else if (on && c.state === 'error') text = 'ERROR ' + c.error + ' (downloaded from cdn.jsdelivr.net): original audio.';
+    else if (on) text = (c.target || t).toUpperCase() + ' model' +
+      (Number.isFinite(c.load) ? ', CPU ' + c.load + ' %' + (c.load > 70 ? ' (too heavy for this device: turn it off)' : '') : '');
+    el.status.textContent = text;
+    el.model.value = hnSettings.model[i];
+    el.strength.value = hnSettings.strength[i];
+    el.strengthVal.textContent = hnSettings.strength[i] + ' %';
   });
-  const parts = [0, 1].filter((i) => hnSettings.on[i]).map((i) => {
-    const c = hnChan[i], t = hnTargetFor(i);
-    if (!hnBus) return names[i] + ': on, starts with the audio';
-    if (c.state === 'loading') return names[i] + ': loading the ' + t + ' model (' + HN_ASSETS[t].mb + ' MB, first time only)…';
-    if (c.state === 'error') return names[i] + ': ERROR ' + c.error + ' (downloaded from cdn.jsdelivr.net), original audio';
-    return names[i] + ': ' + (c.target || t).toUpperCase() + ' model' +
-           (Number.isFinite(c.load) ? ', CPU ' + c.load + ' %' + (c.load > 70 ? ' (too heavy for this device: turn it off)' : '') : '');
-  });
-  hnStatusEl.textContent = parts.length ? parts.join(' · ') : 'Off. Turn it on with AI NR next to MUTE.';
-  hnModelSel.value = hnSettings.model;
-  hnStrength.value = hnSettings.strength;
-  hnStrengthVal.textContent = hnSettings.strength + ' %';
 }
 
 hnBtns.forEach((btn, i) => btn.addEventListener('click', () => {
@@ -6398,16 +6416,18 @@ hnBtns.forEach((btn, i) => btn.addEventListener('click', () => {
   hnSave();
   hnRoute(i);
 }));
-hnModelSel.addEventListener('change', () => {
-  hnSettings.model = ['auto', 'cw', 'voice'].includes(hnModelSel.value) ? hnModelSel.value : 'auto';
-  hnSave();
-  [0, 1].forEach(hnRoute);
-});
-hnStrength.addEventListener('input', () => {
-  hnSettings.strength = Number(hnStrength.value);
-  hnSave();
-  hnChan.forEach(hnParams);
-  hnShow();
+hnEls.forEach((el, i) => {
+  el.model.addEventListener('change', () => {
+    hnSettings.model[i] = hnModelOk(el.model.value) ? el.model.value : 'auto';
+    hnSave();
+    hnRoute(i);
+  });
+  el.strength.addEventListener('input', () => {
+    hnSettings.strength[i] = Number(el.strength.value);
+    hnSave();
+    hnParams(hnChan[i]);
+    hnShow();
+  });
 });
 hnShow();
 </script>

@@ -51,9 +51,9 @@ for (const [from, to, radius] of [[48000, 9600, 128], [16000, 9600, 128], [44100
 }
 
 // 2. AUTO: the CW model in CW only
-const sel = vm.createContext({ hnSettings: { model: 'auto' }, hnMode: ['', ''] });
+const sel = vm.createContext({ hnSettings: { model: ['auto', 'auto'] }, hnMode: ['', ''] });
 vm.runInContext(section('function hnTargetFor(i) {', 'function hnParams(') + 'this.hnTargetFor = hnTargetFor;', sel);
-const pick = (mode, model = 'auto') => { sel.hnSettings.model = model; sel.hnMode[0] = mode; return sel.hnTargetFor(0); };
+const pick = (mode, model = 'auto') => { sel.hnSettings.model[0] = model; sel.hnMode[0] = mode; return sel.hnTargetFor(0); };
 assert.equal(pick('CW-U'), 'cw');
 assert.equal(pick('CW-L'), 'cw');
 for (const m of ['USB', 'LSB', 'AM', 'FM', 'DATA-USB', 'RTTY-LSB', 'C4FM-DN', '']) assert.equal(pick(m), 'voice', m);
