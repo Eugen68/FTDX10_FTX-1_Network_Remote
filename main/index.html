@@ -7289,6 +7289,7 @@ function cwOverlapClear(c) {
   c.merger = new CwMerger(CW_EDGE_GUARD, CW_TOLERANCE);
   c.nextWin = -1; c.lastWin = -1; c.carry = []; c.lastCommitted = -Infinity; c.previewTok = []; c.lastPreview = 0;
   c.skipUntil = -Infinity;
+  c.lastChar = -Infinity; c.overEnded = false;   // the last confirmed character (not a space); its over ended
 }
 cwChans.forEach(cwOverlapClear);
 
@@ -7444,9 +7445,12 @@ function cwTakeWords(c) {
   return k < 0 ? '' : cwTokText(c.carry.splice(0, k + 1));
 }
 
-// The end of an over with overlapping windows: confirm the whole carry, then start a new line
+// The end of an over with overlapping windows: confirm the whole carry, then start a new line (once)
 function cwOverEnd(c, hz) {
-  self.postMessage({ type: 'text', ch: c.idx, commit: cwTokText(c.carry.splice(0)), pending: '', hz });
+  c.overEnded = true;
+  if (c.lastChar === -Infinity) return;   // nothing decoded yet: no line to end
+  const text = cwTokText(c.carry.splice(0));
+  if (text) self.postMessage({ type: 'text', ch: c.idx, commit: text, pending: '', hz });
   self.postMessage({ type: 'text', ch: c.idx, commit: null, pending: '', hz, brk: true });
 }
 
@@ -7480,9 +7484,13 @@ async function cwProcessOverlap(c) {
     // Never twice: after a restart on audio already partly confirmed (see above), skip what was confirmed
     for (const t of committed) {
       if (t.s <= c.skipUntil) continue;
-      // A pause of CW_QUIET or more between two characters: the end of an over (the model need not put a
-      // word space there), so the carry is confirmed on its line and the next over starts a new one
-      if (c.carry.length && t.s - c.carry[c.carry.length - 1].s >= CW_QUIET) cwOverEnd(c, hz);
+      if (t.i !== CW_SPACE) {
+        // A pause of CW_QUIET or more before a character: the end of an over (the model need not put a
+        // word space there), so what came before is confirmed on its line and this over starts a new one
+        if (!c.overEnded && t.s - c.lastChar >= CW_QUIET) cwOverEnd(c, hz);
+        c.lastChar = t.s;
+        c.overEnded = false;
+      }
       c.carry.push(t);
       c.lastCommitted = t.s;
     }
@@ -7490,7 +7498,7 @@ async function cwProcessOverlap(c) {
     cwDrop(c, c.lastWin - c.base);   // the audio before the last window is no longer needed
     if (commit) self.postMessage({ type: 'text', ch: c.idx, commit, pending: '', hz });
     // The last word of an over has no word space after it: confirm it once the merger is CW_QUIET past it
-    if (c.carry.length && c.merger.committedUntil - c.carry[c.carry.length - 1].s >= CW_QUIET) cwOverEnd(c, hz);
+    if (!c.overEnded && c.merger.committedUntil - c.lastChar >= CW_QUIET) cwOverEnd(c, hz);
     self.postMessage({ type: 'text', ch: c.idx, commit: null, pending: cwOverlapPending(c), hz });
     return;
   }
