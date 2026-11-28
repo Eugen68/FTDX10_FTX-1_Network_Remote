@@ -748,6 +748,8 @@ here. On an FTDX10 with RPTT SELECT on RTS / DTR, an owner saw a short transmiss
 reset the board, and **also when the USB cable between the board and the radio was unplugged and when it
 was plugged back in**. The pulse comes from the radio's own USB interface while it attaches or detaches,
 before (or without) any software on the other end, so no firmware can prevent it: only the radio setting can.
+An FTX-1 tested the same way, with RTS / DTR keying on in CW, DATA and RTTY, did **not** transmit, so this
+is needed above all on the FTDX10; on the FTX-1 the settings below are a precaution.
 
 Set the radio so that RTS / DTR cannot key it:
 
@@ -755,8 +757,8 @@ Set the radio so that RTS / DTR cannot key it:
 | --- | --- | --- |
 | FTDX10 | **RPTT SELECT** (SSB, AM, FM, DATA, …) | **DAKY** (PTT from the rear DATA jack only; the menu has no OFF) |
 | FTDX10 | **PC KEYING** (CW SETTING) | **OFF** |
-| FTX-1 | **RPTT SELECT** (SSB, AM, FM, DATA, RTTY, PRESET 1–5) | **OFF** (factory default) |
-| FTX-1 | **PC KEYING** | **OFF** (factory default) |
+| FTX-1 (precaution) | **RPTT SELECT** (SSB, AM, FM, DATA, RTTY, PRESET 1–5) | **OFF** (factory default) |
+| FTX-1 (precaution) | **PC KEYING** | **OFF** (factory default) |
 
 Remote PTT from this page keeps working: it does not use RTS / DTR.
 
