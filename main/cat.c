@@ -155,6 +155,12 @@ static cat_write_stats_t s_write_stats;
 static int64_t s_tx_vfo_status_us;
 static int64_t s_rx_vfo_status_us;      // last VS answer (FTDX10: which VFO the receiver and PTT use)
 static int64_t s_mode_status_us[2];
+// FTX-1: besides answering our reads, the radio reports SH / IS on its own after a change (auto
+// information), and such a report can name the other receiver (seen: a SUB width or IF shift change shown
+// on MAIN until the next read). So for these two only the answer to our own read of that receiver is used.
+enum { SIDE_QUERY_SH, SIDE_QUERY_IS, SIDE_QUERY_KINDS };
+#define SIDE_QUERY_WINDOW_US 1000000
+static int64_t s_side_query_us[SIDE_QUERY_KINDS][2];   // when the read was sent; 0 = none outstanding
 static int64_t s_ssb_menu_us[2];
 static char s_ssb_menu[2];
 static int64_t s_data_menu_us[2];
@@ -893,6 +899,30 @@ static unsigned keyed_write_timeout_ms(void)
 }
 
 /** The only place that writes to the radio */
+/** Note the SH0; SH1; IS0; IS1; reads in a batch just sent. Caller holds s_lock. */
+static void note_side_queries_locked(const char *cmds, int64_t now)
+{
+    for (const char *c = cmds; c && *c;) {
+        const char *end = strchr(c, ';');
+        if (!end) break;
+        if (end - c == 3 && (c[2] == '0' || c[2] == '1')) {
+            const int kind = strncmp(c, "SH", 2) == 0 ? SIDE_QUERY_SH : strncmp(c, "IS", 2) == 0 ? SIDE_QUERY_IS : -1;
+            if (kind >= 0) s_side_query_us[kind][c[2] - '0'] = now;
+        }
+        c = end + 1;
+    }
+}
+
+/** Whether an SH / IS answer for this receiver answers our own read (always on a one-receiver radio). Caller holds s_lock. */
+static bool side_answer_expected_locked(int kind, unsigned side)
+{
+    if (!s_rig->dual_rx) return true;
+    const int64_t asked = s_side_query_us[kind][side & 1];
+    if (!asked || esp_timer_get_time() - asked > SIDE_QUERY_WINDOW_US) return false;
+    s_side_query_us[kind][side & 1] = 0;
+    return true;
+}
+
 static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_kind_t kind, bool keyed_poll)
 {
     if (!cat_cmds_allowed(cmds, CAT_TX_MAX_CMDS)) {
@@ -925,6 +955,7 @@ static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_ki
     if (s_wire_lock) xSemaphoreGive(s_wire_lock);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     capture_write_timing(&s_write_stats.all, elapsed, err, budget_ms);
+    if (err == ESP_OK) note_side_queries_locked(cmds, start);
     if (keyed) {
         capture_write_timing(&s_write_stats.keyed, elapsed, err, budget_ms);
     }
@@ -1282,6 +1313,7 @@ static bool parse_frontend_locked(const char *a)
         isdigit((unsigned char)a[8])) {
         const int v = (a[5] - '0') * 1000 + (a[6] - '0') * 100 + (a[7] - '0') * 10 + (a[8] - '0');
         if (v > 1200) return false;
+        if (!side_answer_expected_locked(SIDE_QUERY_IS, p1)) return true;   // a report of its own: see s_side_query_us
         s_state.if_shift[p1] = (int16_t)(a[4] == '-' ? -v : v);
         s_state.if_shift_known[p1] = true;
         return true;
@@ -1578,7 +1610,8 @@ static void handle_cat_packet(const char *pkt)
         is_rx_side(s_rig, pkt[2]) && pkt[3] == '0' && all_digits(pkt + 4, 2) &&
         digits_value(pkt + 4, 2) <= 23 &&
         xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
-        if (s_rig->dual_rx || s_state.rx_vfo_known) {
+        if (s_rig->dual_rx ? side_answer_expected_locked(SIDE_QUERY_SH, (unsigned)(pkt[2] - '0'))
+                           : s_state.rx_vfo_known) {
             const bool sub = s_rig->dual_rx ? pkt[2] == '1' : s_state.rx_vfo_sub;
             s_state.width_code[sub] = (int8_t)digits_value(pkt + 4, 2);
         }

@@ -780,6 +780,31 @@ int main(void) {
     CHECK(cat_set_width(false, 0) == ESP_OK && strcmp(queued_rigctl.cmd, "SH0000;") == 0, "ftx1 default width");
     CHECK(cat_set_width(false, 24) == ESP_ERR_INVALID_ARG, "width code max 23");
     CHECK(cat_set_roofing(2) == ESP_ERR_NOT_SUPPORTED && !ok("RF0;") && !ok("RF02;"), "ftx1 has no roofing command");
+    {
+        // FTX-1: only answers to our own SH / IS reads count; a report the radio sends on its own after a
+        // SUB change can name MAIN and must not move MAIN's width or IF shift
+        cat_state_t w;
+        cat_get_state(&w);
+        const int8_t main_width = w.width_code[0];
+        handle_cat_packet("SH0005;");
+        handle_cat_packet("IS00+0300;");
+        cat_get_state(&w);
+        CHECK(w.width_code[0] == main_width && !(w.if_shift_known[0] && w.if_shift[0] == 300),
+              "ftx1 ignores SH / IS reports it did not ask for");
+        CHECK(cat_tx((void *)1, "SH0;SH1;IS0;IS1;") == ESP_OK, "send the reads");
+        handle_cat_packet("SH0007;");
+        handle_cat_packet("SH1003;");
+        handle_cat_packet("IS00-0100;");
+        handle_cat_packet("IS10+0040;");
+        cat_get_state(&w);
+        CHECK(w.width_code[0] == 7 && w.width_code[1] == 3 && w.if_shift[0] == -100 && w.if_shift[1] == 40,
+              "ftx1 takes the answers to its reads");
+        handle_cat_packet("SH0012;");
+        handle_cat_packet("IS00+0500;");
+        cat_get_state(&w);
+        CHECK(w.width_code[0] == 7 && w.if_shift[0] == -100, "one answer per read: a later report is ignored");
+        frontend_unread();   // the front-end tests below start from nothing read
+    }
     use("0761");
     CHECK(cat_set_width(false, 23) == ESP_OK && strcmp(queued_rigctl.cmd, "SH0023;") == 0, "ftdx10 width");
     CHECK(cat_set_width(true, 5) == ESP_ERR_NOT_SUPPORTED, "ftdx10 has one receiver");
@@ -826,6 +851,7 @@ int main(void) {
         handle_cat_packet("NL1003;");
         handle_cat_packet("RL000;");
         handle_cat_packet("BC01;");
+        CHECK(cat_tx((void *)1, "IS1;") == ESP_OK, "FTX-1 IF shift read (only answers to a read count)");
         handle_cat_packet("IS10-0340;");
         cat_get_state(&fe);
         CHECK(fe.preamp[0] == 2 && fe.preamp[2] == 1 && fe.att == 1 && fe.rf_gain[1] == 100 && fe.agc[0] == 6 &&
