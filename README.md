@@ -789,10 +789,42 @@ Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
   is sent. At most 8 commands and 64 characters per line.
 - Frequency settings are range-checked against the radio's profile (FTX-1 30 kHz – 470 MHz, FTDX10 30 kHz – 75 MHz); anything outside it is rejected.
 - The allow list and the answer parsers are covered by a host test that runs without the board: `test/host_cat/run.sh`.
-- As a second safeguard, consider also setting `RPTT SELECT` / `TX INHIBIT` on the radio itself.
+- Set `RPTT SELECT` / `PC KEYING` on the radio so that RTS / DTR cannot key it (see "Radio settings: no PTT on RTS / DTR" under Transmit). As a further safeguard, consider `TX INHIBIT` on the radio itself.
 - Transmission that does not go through the ESP32 (microphone PTT, front-panel operation) cannot be prevented.
 
 ## Transmit
+
+### Radio settings: no PTT on RTS / DTR (do this first)
+
+Both radios have two USB serial ports: the **Enhanced COM Port** (CAT; this board uses it) and the
+**Standard COM Port** (PTT, CW keying and digital modes through its **RTS / DTR** lines). This board never
+uses RTS / DTR for PTT: it keys with the CAT command `TX1;` and keeps RTS / DTR low while it runs. While
+the board restarts or boots (a few seconds, including a reset caused by opening or closing a serial terminal
+on its USB-UART port), it is not running, and the radio's USB serial chip can pulse RTS / DTR. Yaesu notes
+that a radio connected over USB can transmit briefly when the computer starts; the board is that computer
+here. On an FTDX10 with RPTT SELECT on RTS / DTR, an owner saw a short transmission when a closed terminal
+reset the board, and **also when the USB cable between the board and the radio was unplugged and when it
+was plugged back in**. The pulse comes from the radio's own USB interface while it attaches or detaches,
+before (or without) any software on the other end, so no firmware can prevent it: only the radio setting can.
+An FTX-1 tested the same way, with RTS / DTR keying on in CW, DATA and RTTY, did **not** transmit, so this
+is needed above all on the FTDX10; on the FTX-1 the settings below are a precaution.
+
+Set the radio so that RTS / DTR cannot key it:
+
+| Radio | Menu | Setting |
+| --- | --- | --- |
+| FTDX10 | **RPTT SELECT** (SSB, AM, FM, DATA, …) | **DAKY** (PTT from the rear DATA jack only; the menu has no OFF) |
+| FTDX10 | **PC KEYING** (CW SETTING) | **OFF** |
+| FTX-1 (precaution) | **RPTT SELECT** (SSB, AM, FM, DATA, RTTY, PRESET 1–5) | **OFF** (factory default) |
+| FTX-1 (precaution) | **PC KEYING** | **OFF** (factory default) |
+
+Remote PTT from this page keeps working: it does not use RTS / DTR.
+
+**If you key the radio through RTS / DTR from a PC** (for example FSK RTTY, or CW through PC KEYING),
+the setting is per mode: keep RTS / DTR only where you need it and use DAKY (FTDX10) or OFF (FTX-1) in the
+other modes, e.g. RTS / DTR in RTTY only and DAKY in SSB, AM, FM and DATA (FT8). A USB pulse can then
+key the radio only while it is in that mode, so do not plug, unplug or restart the board, or the PC, while
+the radio is in RTTY (or in CW with PC KEYING on).
 
 Remote PTT is off by default. At the serial menu, use `p` to set a TX password of at least 6
 characters, `t` to enable TX, and `m` to set the 10–600 second time limit (default 120). Save with
