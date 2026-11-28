@@ -600,11 +600,25 @@
   /* One-receiver radios (FTDX10): the SUB receiver controls are hidden, "SUB" is only VFO-B */
   body.single-rx .dual-rx-only { display: none !important; }
   body.single-rx .sub-card { display: none; }
-  body.single-rx .rig-body-grid { grid-template-columns: 270px minmax(420px, 1fr); }
   .main-card.focus-b { border-color: #10b981; box-shadow: 0 0 0 1px #10b981 inset; }
   .main-card.focus-b .card-title { color: #10b981; }
   .vfd-bezel.vfo-active { box-shadow: 0 0 0 2px #22c55e inset; }
-  @media (max-width: 1020px) { body.single-rx .rig-body-grid { grid-template-columns: 1fr; } }
+  /* FTDX10: the right column holds TX and the receiver settings (layoutRightColumn) */
+  .tx-card .card-title { color: #f59e0b; }
+  .tx-card #txPanel { display: flex; flex-direction: column; gap: .45rem; margin: 0 0 .6rem; font-size: .7rem; color: #cbd5e1; }
+  .tx-card #txPanel[hidden] { display: none; }
+  .tx-card #txPanel label { display: flex; align-items: center; justify-content: space-between; gap: .4rem; flex-wrap: wrap; }
+  .tx-card #txPanel input, .tx-card #txPanel select { background: #0f172a; color: #e2e8f0; border: 1px solid #334155;
+                                                      border-radius: 3px; font: inherit; padding: .15rem .3rem; min-width: 0; }
+  .tx-card #txPanel input[type="password"] { flex: 1 1 8rem; }
+  .tx-card #txPanel input[type="number"] { width: 4.5rem; }
+  .tx-card #txPanel button { background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155;
+                             color: #e2e8f0; border-radius: 4px; padding: .3rem .5rem; font: inherit; font-weight: 700; cursor: pointer; }
+  .tx-card #txPanel button:disabled { opacity: .45; cursor: default; }
+  .tx-card #txPtt { padding: .7rem .5rem; font-size: .85rem; border-color: #b45309; }
+  .tx-card #txPtt.is-transmitting { background: #b91c1c; border-color: #ef4444; color: #fff; }
+  .tx-card #txMicControls:not([hidden]) { display: flex; flex-direction: column; gap: .35rem; }
+  .tx-card #txInfo, .tx-card #txMeters { color: #94a3b8; }
   body.single-rx .scope-pair, body.single-rx .screen-meters { grid-template-columns: 1fr; }
   .ft8-panel {
     background: #0b1120;
@@ -4464,6 +4478,34 @@ window.addEventListener('keyup', e => {
   }
 });
 
+// FTDX10 (one receiver): the right column, where the FTX-1 has its SUB card, holds the TX panel and the
+// receiver settings rows (FRONT END, NOISE / IF) moved from the MAIN panel. The elements themselves are
+// moved, so their handlers keep working; on another radio they go back to where they were.
+const rightColumn = { card: null, moved: [] };
+function layoutRightColumn(single) {
+  if (single && !rightColumn.card) {
+    const card = document.createElement('div');
+    card.className = 'control-card tx-card';
+    card.innerHTML = '<div class="card-title"><span>TX &amp; RX SETTINGS</span></div>';
+    document.querySelector('.sub-card').after(card);
+    const items = [document.getElementById('txPanel'),
+                   ...document.querySelectorAll('.main-card .fe-only, .main-card .nr-only')];
+    for (const el of items) {
+      if (!el) continue;
+      const mark = document.createComment('moved to the right column');
+      el.before(mark);
+      rightColumn.moved.push([el, mark]);
+      card.appendChild(el);
+    }
+    rightColumn.card = card;
+  } else if (!single && rightColumn.card) {
+    for (const [el, mark] of rightColumn.moved) mark.replaceWith(el);
+    rightColumn.moved = [];
+    rightColumn.card.remove();
+    rightColumn.card = null;
+  }
+}
+
 function applyRigProfile(d) {
   voiceSource = d.connected ? d.tx_voice_source : 0;
   micSource.textContent = voiceSource === 2 ? '' : voiceSource !== 1 ? 'Waiting for SSB modulation source'
@@ -4482,6 +4524,7 @@ function applyRigProfile(d) {
 
   const single = d.dual_rx === false;
   document.body.classList.toggle('single-rx', single);
+  layoutRightColumn(single);
   document.body.classList.toggle('has-acc', d.rig === 'FTDX10');   // the radio's own scope on its ACC socket
   accManage();
   document.getElementById('vfoLabelSub').textContent = single ? 'VFO-B' : 'SUB (VFO-B)';
