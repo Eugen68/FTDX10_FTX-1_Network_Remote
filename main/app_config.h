@@ -63,6 +63,7 @@ typedef struct {
     bool yaesu_debug;
     uint16_t yaesu_port;
     bool tx_enabled;
+    bool cat_console;        /* the page's CAT console (typed commands); off by default */
     unsigned tx_max_seconds;
     unsigned swr_max; // tenths of the SWR ratio
     char tx_pass[APP_CONFIG_PASS_MAX_LEN + 1];
@@ -98,6 +99,7 @@ void app_config_get(app_config_t *cfg);
 bool app_config_tx_enabled(void);
 bool app_config_rigctl_enabled(void);
 bool app_config_yaesu_enabled(void);
+bool app_config_cat_console_enabled(void);
 
 /**
  * @brief Check if the configuration has a valid Wi-Fi SSID configured.

@@ -489,6 +489,16 @@ static void capture_cat_item(const void *item)
     queued_rigctl = *(const cat_cmd_item_t *)item;
 }
 
+static char console_cmds[CAT_CONSOLE_MAX_CMDS + 2][32];
+static unsigned console_count;
+
+static void capture_console(const void *item)
+{
+    if (console_count < CAT_CONSOLE_MAX_CMDS + 2) {
+        strlcpy(console_cmds[console_count++], ((const cat_cmd_item_t *)item)->cmd, sizeof(console_cmds[0]));
+    }
+}
+
 static void rigctl_readback(const char *cmd, size_t len)
 {
     const char *answer = NULL;
@@ -766,6 +776,45 @@ int main(void) {
         cat_get_state(&fe);
         CHECK(fe.nb_on[0] == 1 && fe.dnr_on[0] == 1 && fe.dnr_level[0] == 12 && fe.preamp[0] == 1,
               "FTDX10 NB / NR switches and levels");
+        use("0840");
+    }
+
+    // CAT LOG console: allow-list for every command, never transmit, all-or-nothing
+    {
+        char why[96];
+        g_queue_send_hook = capture_console;
+        use("0761");
+        console_count = 0;
+        CHECK(cat_send_console("FA014074000;", why, sizeof(why)) == ESP_OK && console_count == 1 &&
+              strcmp(console_cmds[0], "FA014074000;") == 0, "console sends an allowed write");
+        console_count = 0;
+        CHECK(cat_send_console("FA;MD0;SV;", why, sizeof(why)) == ESP_OK && console_count == 3 &&
+              strcmp(console_cmds[2], "SV;") == 0, "console sends several commands");
+        const char *never[] = {"TX1;", "TX2;", "PC050;", "MX1;", "KY0;", "EX010411050;", "AC001;", "fa;", NULL};
+        for (int k = 0; never[k]; k++) {
+            console_count = 0;
+            CHECK(cat_send_console(never[k], why, sizeof(why)) != ESP_OK && console_count == 0,
+                  "console refuses %s (%s)", never[k], why);
+        }
+        console_count = 0;
+        CHECK(cat_send_console("TX1;", why, sizeof(why)) == ESP_ERR_NOT_SUPPORTED &&
+              strstr(why, "transmit only from the TX panel"), "TX1 refused for TX (%s)", why);
+        console_count = 0;
+        CHECK(cat_send_console("PC050;", why, sizeof(why)) != ESP_OK && strstr(why, "from the TX panel") &&
+              console_count == 0, "TX power is not set from the console (%s)", why);
+        console_count = 0;
+        CHECK(cat_send_console("FA;TX1;", why, sizeof(why)) != ESP_OK && console_count == 0,
+              "one refused command sends nothing of the line");
+        console_count = 0;
+        CHECK(cat_send_console("TX;", why, sizeof(why)) == ESP_OK && cat_send_console("TX0;", why, sizeof(why)) == ESP_OK &&
+              console_count == 2, "TX read and TX0 (unkey) are allowed");
+        CHECK(cat_send_console("FA", why, sizeof(why)) == ESP_ERR_INVALID_ARG &&
+              cat_send_console("", why, sizeof(why)) == ESP_ERR_INVALID_ARG &&
+              cat_send_console("FA0140740000000;", why, sizeof(why)) != ESP_OK, "console syntax");
+        console_count = 0;
+        CHECK(cat_send_console("FA;FA;FA;FA;FA;FA;FA;FA;FA;", why, sizeof(why)) != ESP_OK && console_count == 0,
+              "at most 8 commands per line");
+        g_queue_send_hook = NULL;
         use("0840");
     }
 
