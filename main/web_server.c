@@ -973,13 +973,17 @@ static esp_err_t cat_handler(httpd_req_t *req)
         }
         char level[8] = "null";
         if (st.connected && st.scope_level_known) snprintf(level, sizeof(level), "%d", st.scope_level_x10);
+        // CW pitch in Hz (KP code 0-75 = 300-1050 Hz in 10 Hz steps), for the CW decoder's RIG button
+        char pitch[8] = "null";
+        if (st.connected && st.key_pitch >= 0 && st.key_pitch <= 75) snprintf(pitch, sizeof(pitch), "%d", 300 + 10 * st.key_pitch);
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"cat_console\":%s,\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,"
                       "\"rx_vfo\":%s,\"tx_vfo\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\","
                       "\"pa_bands\":%u,\"att_max\":%u,\"preamp\":[%d,%d,%d],\"att\":%d,\"rfg\":[%d,%d],\"agc\":[%d,%d],"
                       "\"nb_switch\":%s,\"dnr_max\":%u,\"nb\":[%d,%d],\"nb_level\":[%d,%d],\"dnr\":[%d,%d],"
-                      "\"dnr_level\":[%d,%d],\"dnf\":[%d,%d],\"ifs\":[%s,%s],\"scope_level_x10\":%s,\"tx_power\":%s,\"tx_power_max\":%u}",
+                      "\"dnr_level\":[%d,%d],\"dnf\":[%d,%d],\"ifs\":[%s,%s],\"scope_level_x10\":%s,\"tx_power\":%s,\"tx_power_max\":%u,"
+                      "\"key_pitch_hz\":%s}",
                       app_config_cat_console_enabled() ? "true" : "false",
                       (unsigned)st.voice_source, app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
@@ -988,7 +992,8 @@ static esp_err_t cat_handler(httpd_req_t *req)
                       st.rf_gain[0], st.rf_gain[1], st.agc[0], st.agc[1],
                       st.nb_switch ? "true" : "false", st.connected ? st.dnr_max : 0u,
                       st.nb_on[0], st.nb_on[1], st.nb_level[0], st.nb_level[1], st.dnr_on[0], st.dnr_on[1],
-                      st.dnr_level[0], st.dnr_level[1], st.dnf[0], st.dnf[1], ifs[0], ifs[1], level, power, power_max);
+                      st.dnr_level[0], st.dnr_level[1], st.dnf[0], st.dnf[1], ifs[0], ifs[1], level, power, power_max,
+                      pitch);
     }
     return send_json(req, json, n, sizeof(json));
 }
