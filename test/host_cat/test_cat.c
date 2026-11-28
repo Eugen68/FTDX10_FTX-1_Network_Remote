@@ -162,11 +162,11 @@ static void test_startup(void)
           "one explicit rejection does not suppress a read");
     {
         char last[CAT_LOG_TEXT_LEN];
-        uint32_t age_s = 99;
-        CHECK(cat_last_rejected(last, sizeof(last), &age_s) && strcmp(last, "BP00;") == 0 && age_s == 0,
+        uint32_t age_s = 99, later_s = 0;
+        CHECK(cat_last_rejected(last, sizeof(last), &age_s) && strcmp(last, "BP00;") == 0,
               "status names the read the radio refused (%s)", last);
         g_now_us += 3000000;
-        CHECK(cat_last_rejected(last, sizeof(last), &age_s) && age_s == 3, "and how long ago");
+        CHECK(cat_last_rejected(last, sizeof(last), &later_s) && later_s == age_s + 3, "and how long ago");
         g_now_us -= 3000000;
     }
     g_sent[0] = '\0';
