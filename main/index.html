@@ -6570,6 +6570,8 @@ const CW_QUIET = 3 * CW_RATE;
 // Automatic pitch: the strongest keyed tone between these, with hysteresis (pure noise ~5 dB)
 const CW_AUTO_MIN_HZ = 300, CW_AUTO_MAX_HZ = 1200;
 const CW_LOCK_DB = 12, CW_RELEASE_DB = 9, CW_DETECT_SEC = 6;
+// A keyed tone is off part of the time; a steady carrier (a birdie) is not and is never followed
+const CW_KEYED_DB = 8;
 
 let CW_CDN = 'https://cdn.jsdelivr.net';
 const CW_ASSETS = {
@@ -6724,7 +6726,8 @@ function cwNarrowInput(audio, hz) {
 }
 
 // The strongest keyed tone: per bin, the keyed-on power (90th percentile over time) against the
-// median power of the band. Bins far weaker than a strong neighbour are its keying sidebands.
+// median power of the band. Bins far weaker than a strong neighbour are its keying sidebands, and
+// bins that are never off (keyed-on vs 20th percentile below CW_KEYED_DB) are steady carriers.
 function cwStrongestTone(audio, lockedHz) {
   const T = cwDetectStft.frames(audio.length);
   if (!T) return null;
@@ -6737,7 +6740,8 @@ function cwStrongestTone(audio, lockedHz) {
   const db = new Float32Array(nb);
   for (let i = 0; i < nb; i++) {
     const s = pw.slice(i * T, (i + 1) * T).sort();
-    db[i] = 10 * Math.log10(Math.max(s[Math.floor(0.9 * (T - 1))], 1e-12) / noise);
+    const on = Math.max(s[Math.floor(0.9 * (T - 1))], 1e-12), off = Math.max(s[Math.floor(0.2 * (T - 1))], 1e-12);
+    db[i] = 10 * Math.log10(on / off) < CW_KEYED_DB ? 0 : 10 * Math.log10(on / noise);
   }
   const mask = Math.round(150 / CW_BIN_HZ);
   let best = -1;
