@@ -173,7 +173,7 @@ const char *cat_data_mode_error(void);
 /*
  * There is deliberately no function that sends a free-form CAT string. Every command is built here from
  * typed arguments, and cat.c only lets an allow-list of commands (frequency, mode, AF gain, squelch,
- * notch, VFO swap/copy, power) reach the radio. Nothing in this firmware can make the radio transmit.
+ * notch, VFO swap/copy, split, power) reach the radio. Nothing in this firmware can make the radio transmit.
  */
 
 /** @brief Swap the MAIN and SUB VFOs (CAT "SV") */
@@ -184,6 +184,9 @@ esp_err_t cat_copy_main_to_sub(void);
 
 /** @brief Copy SUB to MAIN (CAT "BA") */
 esp_err_t cat_copy_sub_to_main(void);
+
+/** @brief Split: select the transmitter VFO (CAT "FT"). It never keys the radio; refused while TX is requested. */
+esp_err_t cat_set_split(bool tx_sub);
 
 /**
  * @brief Set frequency in Hz

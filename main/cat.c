@@ -1666,6 +1666,9 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
                 const char readback[] = {'M', 'D', item.cmd[2], ';', '\0'};
                 send_poll(dev, readback);
             }
+            if (strncmp(item.cmd, "FT", 2) == 0) {
+                send_poll(dev, "FT;");   // show the new split state at once
+            }
             // SV (swap) / AB / BA (copy) change both VFOs: re-read them so the UI does not
             // show stale values until the next periodic sync
             if (strcmp(item.cmd, "SV;") == 0 || strcmp(item.cmd, "AB;") == 0 || strcmp(item.cmd, "BA;") == 0) {
@@ -1704,7 +1707,8 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             send_poll(dev, rig->poll_status);
             if (rig->can_tx && app_config_tx_enabled()) {
                 send_poll(dev, rig->dual_rx ? "FT;MD0;MD1;" : "FT;MD0;");
-            } else if (net_rigctl) {
+            } else if (rig->can_tx) {
+                // The page's SPLIT button and NET rigctl both follow the transmitter selection.
                 send_poll(dev, "FT;");
             }
         }
@@ -2456,6 +2460,15 @@ esp_err_t cat_copy_main_to_sub(void)
 esp_err_t cat_copy_sub_to_main(void)
 {
     return cat_enqueue("BA;");
+}
+
+esp_err_t cat_set_split(bool tx_sub)
+{
+    if (!s_rig->can_control || !s_rig->can_tx) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    // FTX-1 selects the transmitter with FT0/FT1, FTDX10 with FT2/FT3; both answer FT0/FT1.
+    return cat_enqueue(s_rig->dual_rx ? (tx_sub ? "FT1;" : "FT0;") : (tx_sub ? "FT3;" : "FT2;"));
 }
 
 esp_err_t cat_set_freq(bool sub, uint32_t freq_hz)

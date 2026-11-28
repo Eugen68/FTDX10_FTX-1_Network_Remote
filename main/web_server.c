@@ -1543,6 +1543,8 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
         if (strcmp(r.action, "swap") == 0) APPLY(cat_swap_vfo());
         else if (strcmp(r.action, "copy_main_to_sub") == 0) APPLY(cat_copy_main_to_sub());
         else if (strcmp(r.action, "copy_sub_to_main") == 0) APPLY(cat_copy_sub_to_main());
+        else if (strcmp(r.action, "split_on") == 0) APPLY(cat_set_split(true));
+        else if (strcmp(r.action, "split_off") == 0) APPLY(cat_set_split(false));
         else err = ESP_ERR_INVALID_ARG, ops++;
     }
     if (r.has_freq) APPLY(cat_set_freq(r.sub, r.freq));
