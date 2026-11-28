@@ -928,8 +928,9 @@ static esp_err_t cat_handler(httpd_req_t *req)
                              st.connected && st.tx_vfo == CAT_TX_VFO_SUB ? "\"sub\"" : "null";
         n--;
         n += snprintf(json + n, sizeof(json) - n,
-                      ",\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,"
+                      ",\"cat_console\":%s,\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,"
                       "\"rx_vfo\":%s,\"tx_vfo\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\"}",
+                      app_config_cat_console_enabled() ? "true" : "false",
                       (unsigned)st.voice_source, app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
                       st.tx_radio_known ? "true" : "false", rx_vfo, tx_vfo, (unsigned long)st.write_error_seq, write_error);
@@ -1548,9 +1549,10 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     if (r.has_raw) {
         // The CAT LOG console: a line of commands, alone in the request (see cat_send_console)
         char why[96] = "", why_json[2 * sizeof(why) + 1], json[sizeof(why_json) + 48];
-        const bool alone = r.keys == 1;
-        const esp_err_t err = alone ? cat_send_console(r.raw, why, sizeof(why)) : ESP_ERR_INVALID_ARG;
-        if (!alone) strlcpy(why, "raw must be the only key", sizeof(why));
+        const bool alone = r.keys == 1, enabled = app_config_cat_console_enabled();
+        const esp_err_t err = enabled && alone ? cat_send_console(r.raw, why, sizeof(why)) : ESP_ERR_INVALID_ARG;
+        if (!enabled) strlcpy(why, "The CAT console is off (serial menu, k)", sizeof(why));
+        else if (!alone) strlcpy(why, "raw must be the only key", sizeof(why));
         json_escape(why, why_json, sizeof(why_json));
         httpd_resp_set_type(req, "application/json");
         if (err == ESP_OK) return httpd_resp_sendstr(req, "{\"status\":\"ok\"}");

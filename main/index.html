@@ -647,6 +647,7 @@
   .latency-text { color: #fbbf24; margin-right: .4rem; }
   #streamRateSel { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .58rem; padding: 0 .2rem; margin-right: .4rem; }
   .catlog-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem; padding: .4rem .6rem; font-size: .7rem; color: #94a3b8; }
+  .catlog-console[hidden] { display: none; }
   .catlog-console { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; padding: 0 .6rem .4rem; font-size: .7rem; }
   .catlog-console input { flex: 1 1 16rem; min-width: 0; background: #0f172a; color: #e2e8f0; border: 1px solid #334155;
                           border-radius: 3px; font-family: monospace; font-size: .75rem; padding: .2rem .35rem; text-transform: uppercase; }
@@ -1613,7 +1614,7 @@
       <span class="catlog-legend"><span class="k0">&#8594; sent</span> <span class="k2">&#8592; received</span> <span class="k3">blocked (not sent)</span> <span class="k4">write error</span></span>
       <span id="catLogInfo"></span>
     </div>
-    <form class="catlog-console" id="catConsoleForm" onsubmit="return false;"
+    <form class="catlog-console" id="catConsoleForm" onsubmit="return false;" hidden
           title="Commands go through the same allow-list as the page (others are logged as BLOCKED). Transmit (TX1 / TX2) is refused here: use the TX panel. If one command is refused, none is sent.">
       <input id="catConsoleInput" maxlength="64" autocomplete="off" spellcheck="false"
              placeholder="CAT command, e.g. FA014074000;  or several: FA;MD0;" aria-label="CAT command">
@@ -4504,6 +4505,7 @@ async function smPoll() {
     }
     const now = Date.now();
     applyRigProfile(d);
+    document.getElementById('catConsoleForm').hidden = d.cat_console !== true;   // serial menu, k
     catTxVfo = d.connected ? (d.tx_vfo || null) : null;
     catRxVfo = d.connected ? (d.rx_vfo || null) : null;
     const recovery = document.getElementById('catRecoveryStatus');

@@ -729,7 +729,8 @@ Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
   For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
   Supported radios also allow modulation menu queries and transmit VFO status (`FT;`). NET rigctl can set the active VFO, transmit VFO selection and filter width through radio-specific allow-listed commands. These commands cannot key the radio. `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.
   The ordinary CAT endpoint has no PTT operation.
-- **CAT console.** The CAT LOG panel has a field to type commands and **SEND** them (several per line, e.g. `FA;MD0;`;
+- **CAT console** (off by default: enable it with **k** in the serial menu, then save with 6). The CAT LOG
+  panel then has a field to type commands and **SEND** them (several per line, e.g. `FA;MD0;`;
   Up / Down recall earlier lines; the radio's answers appear in the log). Each command must pass the same allow-list
   as everything else (refused ones are logged as BLOCKED), **transmit (`TX1` / `TX2`) is always refused there** so
   keying stays with the TX panel (TX password, time limit, heartbeat), and if one command of a line is refused none
