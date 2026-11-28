@@ -525,7 +525,8 @@ static bool cat_usb_ready(void)
 // ---- Transmit allow-list ----------------------------------------------------------------------------
 // Every byte sent to the radio goes through cat_tx(), and cat_tx() only lets the commands below pass,
 // checked against the profile of the radio that is connected. Anything else (TX with a parameter, MX, KY,
-// PB, VX, PC, FT, GP, ...) is dropped, so this firmware has no way to make the radio transmit. EX (menu) is
+// PB, VX, FT, GP, ...) is dropped. TX1 and PC (TX power) pass only with remote TX enabled, and are queued
+// only from the authenticated TX panel (PTT / FT8, and cat_set_tx_power()). EX (menu) is
 // allowed for exactly one item per radio (the audio level sent to the PC in DATA mode), and nothing else
 // in the radio's menu.
 #define CAT_TX_MAX_BYTES    64      // matches out_buffer_size of the CDC port
@@ -637,6 +638,22 @@ static bool cat_cmd_allowed(const char *c, size_t len)
     case CAT_TWO('R', 'M'):         // meter (read): the S meter item of this radio only
         return pl == 1 && ((rig->meter_side && p[0] == rig->meter_side) ||
                            (rig->can_tx && p[0] >= '4' && p[0] <= '6'));
+    case CAT_TWO('P', 'C'):         // TX power: read; set only with remote TX enabled (and only from the TX panel)
+        if (!rig->can_tx) {
+            return false;
+        }
+        if (pl == 0) {
+            return true;
+        }
+        if (!app_config_tx_enabled()) {
+            return false;
+        }
+        if (!rig->dual_rx) {        // FTDX10: 5 - 100 W
+            return pl == 3 && all_digits(p, 3) && digits_value(p, 3) >= 5 && digits_value(p, 3) <= 100;
+        }
+        // FTX-1: P1 1 = the field head alone (5 - 10 W), 2 = with the SPA-1 (5 - 100 W)
+        return pl == 4 && (p[0] == '1' || p[0] == '2') && all_digits(p + 1, 3) && digits_value(p + 1, 3) >= 5 &&
+               digits_value(p + 1, 3) <= (p[0] == '1' ? 10u : 100u);
     case CAT_TWO('P', 'S'):         // power
         return ctl && pl == 1 && is_side(p[0]);
     case CAT_TWO('F', 'A'):         // frequency, read or set within the radio's range
@@ -1056,6 +1073,8 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_state.key_pitch = -1;
         frontend_unread();
         s_state.scope_level_known = false;
+        s_state.tx_power_w = -1;
+        s_state.tx_power_head = 0;
         s_last_ptt_status_us = 0;
         s_ptt_mode = 0;
         s_state.tx_cat = false;
@@ -1515,6 +1534,19 @@ static void handle_cat_packet(const char *pkt)
         xSemaphoreGive(s_lock);
         return;
     }
+    if (pkt[0] == 'P' && s_rig->can_tx && strncmp(pkt, "PC", 2) == 0) {
+        // FTDX10 "PC050;", FTX-1 "PC2050;" (P1 1 = field head, 2 = SPA-1)
+        const size_t len = strlen(pkt);
+        const bool head = len == 7 && (pkt[2] == '1' || pkt[2] == '2');
+        if ((len == 6 || head) && pkt[len - 1] == ';' && all_digits(pkt + len - 4, 3) &&
+            xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+            s_state.tx_power_w = (int16_t)digits_value(pkt + len - 4, 3);
+            s_state.tx_power_head = head ? (uint8_t)(pkt[2] - '0') : 0;
+            s_last_answer_us = now_pkt_us;
+            xSemaphoreGive(s_lock);
+            return;
+        }
+    }
     if (pkt[0] == 'K' && s_rig->can_control && strncmp(pkt, "KP", 2) == 0 && strlen(pkt) == 5 &&
         all_digits(pkt + 2, 2) && digits_value(pkt + 2, 2) <= 75 &&
         xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -1886,6 +1918,9 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             if (strncmp(item.cmd, "SS04", 4) == 0) {
                 send_poll(dev, "SS04;");   // the radio's own LEVEL
             }
+            if (strncmp(item.cmd, "PC", 2) == 0) {
+                send_poll(dev, "PC;");
+            }
             if (strncmp(item.cmd, "MD", 2) == 0 && strlen(item.cmd) == 5) {
                 const char readback[] = {'M', 'D', item.cmd[2], ';', '\0'};
                 send_poll(dev, readback);
@@ -1956,6 +1991,7 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
                          (long long)((esp_timer_get_time() - sync_start) / 1000));
             }
             if (net_rigctl) send_poll(dev, rig->dual_rx ? "VS;SH0;SH1;" : "VS;SH0;");
+            if (rig->can_tx) send_poll(dev, "PC;");      // TX power, shown in the TX panel
             // OmniRig reads the CW pitch in every cycle; the board answers from this value.
             if (rig->can_control && app_config_yaesu_enabled()) send_poll(dev, "KP;");
             if (rig->can_tx && app_config_tx_enabled()) {
@@ -2356,6 +2392,7 @@ esp_err_t cat_init(void)
     s_state.width_code[0] = s_state.width_code[1] = -1;
     s_state.key_pitch = -1;
     frontend_unread();
+    s_state.tx_power_w = -1;
     s_cmd_queue = xQueueCreate(10, sizeof(cat_cmd_item_t));
     ESP_RETURN_ON_FALSE(s_cmd_queue, ESP_ERR_NO_MEM, TAG, "no queue memory");
     const usb_host_client_config_t observer = {
@@ -2618,8 +2655,16 @@ const char *cat_ptt_mode_error(int64_t keyed_at)
 }
 
 /** Queue a typed, allow-listed write. NET rigctl can add a second command for bandwidth. */
+// Set only inside cat_set_tx_power(): a TX power write is queued from the TX panel alone. All callers of
+// cat_enqueue_item() run in the HTTP server task or the network CAT tasks, none of which writes PC.
+static bool s_power_write;
+
 static esp_err_t cat_enqueue_item(const char *cmd, unsigned ticket, bool sub, bool require_active)
 {
+    if (strncmp(cmd, "PC", 2) == 0 && cmd[2] != ';' && !s_power_write) {
+        ESP_LOGE(TAG, "Refused a TX power write outside the TX panel");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
     if (!cat_cmds_allowed(cmd, ticket ? 2 : 1)) {
         ESP_LOGE(TAG, "Refused a CAT command that is not on the allow-list");
         return ESP_ERR_INVALID_ARG;
@@ -2740,6 +2785,28 @@ esp_err_t cat_send_console(const char *line, char *why, size_t why_size)
         }
     }
     return ESP_OK;
+}
+
+esp_err_t cat_set_tx_power(unsigned watts)
+{
+    if (!s_rig->can_tx || !app_config_tx_enabled()) return ESP_ERR_INVALID_STATE;
+    char cmd[16];
+    if (!s_rig->dual_rx) {
+        if (watts < 5 || watts > 100) return ESP_ERR_INVALID_ARG;
+        snprintf(cmd, sizeof(cmd), "PC%03u;", watts);
+    } else {
+        // FTX-1: the same source (field head or SPA-1) as the radio reports
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        const unsigned head = s_state.tx_power_head;
+        xSemaphoreGive(s_lock);
+        if (head != 1 && head != 2) return ESP_ERR_INVALID_STATE;
+        if (watts < 5 || watts > (head == 1 ? 10u : 100u)) return ESP_ERR_INVALID_ARG;
+        snprintf(cmd, sizeof(cmd), "PC%u%03u;", head, watts);
+    }
+    s_power_write = true;
+    const esp_err_t err = cat_enqueue(cmd);
+    s_power_write = false;
+    return err;
 }
 
 esp_err_t cat_swap_vfo(void)

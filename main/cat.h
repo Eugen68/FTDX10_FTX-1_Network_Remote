@@ -74,6 +74,8 @@ typedef struct {
     bool if_shift_known[2];
     int16_t scope_level_x10;  /*!< FTDX10 scope LEVEL in tenths of a dB (-300 .. 300) */
     bool scope_level_known;
+    int16_t tx_power_w;       /*!< TX power setting (PC), watts; -1 if unread */
+    uint8_t tx_power_head;    /*!< FTX-1 PC P1: 1 field head (5-10 W), 2 SPA-1 (5-100 W); 0 = FTDX10 or unread */
     bool tx_cat;
     bool tx_radio;
     bool tx_radio_known;
@@ -202,6 +204,12 @@ const char *cat_data_mode_error(void);
  * refused, and if any command is refused nothing is sent. why gets the reason on failure.
  */
 esp_err_t cat_send_console(const char *line, char *why, size_t why_size);
+
+/**
+ * @brief Set the TX power (CAT "PC"): FTDX10 5-100 W; FTX-1 5-10 W (field head) or 5-100 W (SPA-1), as the radio
+ * reports. Only with remote TX enabled, and called only from the authenticated TX panel. It never keys the radio.
+ */
+esp_err_t cat_set_tx_power(unsigned watts);
 
 /** @brief Swap the MAIN and SUB VFOs (CAT "SV") */
 esp_err_t cat_swap_vfo(void);

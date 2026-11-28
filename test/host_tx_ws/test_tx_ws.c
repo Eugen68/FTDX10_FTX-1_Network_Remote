@@ -101,6 +101,13 @@ tx_state_t tx_get_state(void)
 bool usb_audio_rx_paused(void) { return false; }
 void cat_get_state(cat_state_t *state) { *state = (cat_state_t){0}; }
 
+static unsigned power_calls, power_watts;
+esp_err_t cat_set_tx_power(unsigned watts)
+{
+    ++power_calls;
+    power_watts = watts;
+    return watts >= 5 && watts <= 100 ? ESP_OK : ESP_ERR_INVALID_ARG;
+}
 static unsigned ft8_arms, ft8_levels;
 void ft8_tx_set_level(uint32_t owner, int dbfs)
 {
@@ -178,6 +185,9 @@ int main(void)
     req.free_ctx(req.sess_ctx);
     assert(released_owner == acquired_owner);
     httpd_req_t ft8_req = {0};
+    // TX power only over an authorized TX connection
+    message = "{\"t\":\"power\",\"w\":50}";
+    assert(tx_ws_handler(&ft8_req) == ESP_FAIL && power_calls == 0);
     message = "{\"t\":\"ft8_arm\",\"msg\":\"CQ K1ABC FN42\",\"hz\":1500,\"odd\":true}";
     assert(tx_ws_handler(&ft8_req) == ESP_FAIL && ft8_arms == 0);
     message = "{\"t\":\"tx_auth\",\"pass\":\"good-password\"}";
@@ -192,6 +202,14 @@ int main(void)
     assert(tx_ws_handler(&ft8_req) == ESP_OK && ft8_levels == 1);
     message = "{\"t\":\"ft8_halt\"}";
     assert(tx_ws_handler(&ft8_req) == ESP_OK && !ft8_owner);
+    message = "{\"t\":\"power\",\"w\":50}";
+    assert(tx_ws_handler(&ft8_req) == ESP_OK && power_calls == 1 && power_watts == 50 && !strstr(reply, "Power"));
+    message = "{\"t\":\"power\",\"w\":3}";
+    assert(tx_ws_handler(&ft8_req) == ESP_OK && power_calls == 2 && strstr(reply, "Power out of range"));
+    message = "{\"t\":\"power\",\"w\":101}";
+    assert(tx_ws_handler(&ft8_req) == ESP_FAIL && power_calls == 2);
+    message = "{\"t\":\"power\",\"w\":50,\"on\":true}";
+    assert(tx_ws_handler(&ft8_req) == ESP_FAIL && power_calls == 2);
     ft8_req.free_ctx(ft8_req.sess_ctx);
     puts("WebSocket session and PTT refusal tests passed");
 }
