@@ -648,6 +648,18 @@ int main(void) {
     use("0840");
     CHECK(cat_set_squelch(true, 255) == ESP_OK && cat_set_freq(true, 433000000) == ESP_OK, "ftx1 setters");
 
+    // split from the page: transmitter selection only, with each radio's own FT codes
+    g_queue_send_hook = capture_cat_item;
+    CHECK(cat_set_split(true) == ESP_OK && strcmp(queued_rigctl.cmd, "FT1;") == 0, "ftx1 split on");
+    CHECK(cat_set_split(false) == ESP_OK && strcmp(queued_rigctl.cmd, "FT0;") == 0, "ftx1 split off");
+    use("0761");
+    CHECK(cat_set_split(true) == ESP_OK && strcmp(queued_rigctl.cmd, "FT3;") == 0, "ftdx10 split on");
+    CHECK(cat_set_split(false) == ESP_OK && strcmp(queued_rigctl.cmd, "FT2;") == 0, "ftdx10 split off");
+    use("9999");
+    CHECK(cat_set_split(true) == ESP_ERR_INVALID_STATE, "unknown radio: no split");
+    g_queue_send_hook = NULL;
+    use("0840");
+
     // parsers
     int m, sb; bool b;
     CHECK(parse_rm("RM0120060;", &m, &sb) && m == 120 && sb == 60, "rm0");

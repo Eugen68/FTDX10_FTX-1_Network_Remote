@@ -490,6 +490,12 @@
     border-color: #38bdf8;
     color: #38bdf8;
   }
+  .vfo-op-btn:disabled { opacity: .45; cursor: default; }
+  .split-btn[aria-pressed="true"] {
+    background: linear-gradient(180deg, #b45309 0%, #92400e 100%);
+    border-color: #f59e0b;
+    color: #fff;
+  }
   .vfo-op-btn:active {
     transform: translateY(1px);
     background: #0284c7;
@@ -1212,6 +1218,14 @@
         </button>
         <button type="button" class="vfo-op-btn" id="btnCopyBtoA" title="Copy SUB to MAIN (BA;)">
           <span class="vfo-op-icon">&#8592;</span> A &#8592; B (B=A)
+        </button>
+        <button type="button" class="vfo-op-btn split-btn" id="btnSplit" aria-pressed="false" disabled
+                title="Split: receive on MAIN, transmit on SUB (FT). Follows the radio's own SPLIT key. Selecting the transmitter never keys the radio">
+          SPLIT
+        </button>
+        <button type="button" class="vfo-op-btn" id="btnSplitUp" disabled
+                title="Split up 1 kHz: SUB = MAIN + 1 kHz in the same mode, and transmit on SUB">
+          SPLIT +1k
         </button>
         <div class="vfo-font-select-wrap" title="VFO frequency display font (saved in this browser)">
           <label for="vfoFontSelect" class="vfo-font-label">FONT</label>
@@ -3844,6 +3858,39 @@ document.getElementById('btnCopyBtoA').addEventListener('click', () => {
   sendCatCommand({ action: 'copy_sub_to_main' });
 });
 
+// Split: the radio's transmitter selection (FT), read back every 500 ms, so the button also follows
+// the radio's own SPLIT key. Unknown (no CAT yet) leaves both buttons disabled.
+const btnSplit = document.getElementById('btnSplit');
+const btnSplitUp = document.getElementById('btnSplitUp');
+
+function updateSplitButtons() {
+  const known = catTxVfo === 'main' || catTxVfo === 'sub';
+  btnSplit.disabled = btnSplitUp.disabled = !known;
+  btnSplit.setAttribute('aria-pressed', catTxVfo === 'sub' ? 'true' : 'false');
+  btnSplit.textContent = catTxVfo === 'sub' ? 'SPLIT ON' : 'SPLIT';
+  btnSplit.title = (catTxVfo === 'sub' ? 'Split ON: transmitting on SUB. ' : 'Split OFF: transmitting on MAIN. ') +
+    'Click to toggle (FT). Follows the radio\'s own SPLIT key. Selecting the transmitter never keys the radio';
+}
+
+btnSplit.addEventListener('click', () => {
+  if (btnSplit.disabled) return;
+  const on = catTxVfo !== 'sub';
+  catTxVfo = on ? 'sub' : 'main';   // shown at once; the next CAT poll confirms it
+  updateSplitButtons();
+  sendCatCommand({ action: on ? 'split_on' : 'split_off' });
+});
+
+btnSplitUp.addEventListener('click', () => {
+  if (btnSplitUp.disabled || !(curFreqMain > 0)) return;
+  document.getElementById('btnCopyAtoB').click();   // SUB = MAIN, same mode
+  curFreqSub = curFreqMain + 1000;
+  updateFreqDisplay(true, curFreqSub);
+  sendCatCommand({ target: 'sub', freq: curFreqSub });
+  catTxVfo = 'sub';
+  updateSplitButtons();
+  sendCatCommand({ action: 'split_on' });
+});
+
 // VFO Display Font Persistence & Selector
 const vfoFontSelect = document.getElementById('vfoFontSelect');
 const vfdBezelMain = document.getElementById('vfdBezelMain');
@@ -4453,6 +4500,7 @@ async function smPoll() {
     applyRigProfile(d);
     catTxVfo = d.connected ? (d.tx_vfo || null) : null;
     catRxVfo = d.connected ? (d.rx_vfo || null) : null;
+    updateSplitButtons();
     const recovery = document.getElementById('catRecoveryStatus');
     const resetCount = Number.isInteger(d.cat_usb_resets) ? d.cat_usb_resets : 0;
     const recoveryText = !d.connected && d.waiting_for_cat
