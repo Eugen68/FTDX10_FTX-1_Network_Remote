@@ -2004,7 +2004,7 @@ let accSpanChanged = 0;
 // The radio's scope LEVEL (CAT SS04): shown from /cat, sent after a short pause while dragging
 const accLevel = document.getElementById('accLevel');
 const accLevelVal = document.getElementById('accLevelVal');
-let accLevelChanged = 0, accLevelTimer = null;
+let accLevelChanged = 0, accLevelTimer = null, accLevelHeld = false;
 const fmtLevel = (db) => (db > 0 ? '+' : '') + db.toFixed(1) + ' dB';
 accLevel.addEventListener('input', () => {
   accLevelChanged = Date.now();
@@ -2012,14 +2012,19 @@ accLevel.addEventListener('input', () => {
   clearTimeout(accLevelTimer);
   accLevelTimer = setTimeout(() => sendCatCommand({ target: 'main', scope_level: Math.round(Number(accLevel.value) * 10) }), 200);
 });
+// Not "while focused": the slider keeps focus after a drag, which hid the radio's own LEVEL changes.
+accLevel.addEventListener('pointerdown', () => { accLevelHeld = true; });
+window.addEventListener('pointerup', () => { accLevelHeld = false; });
+window.addEventListener('pointercancel', () => { accLevelHeld = false; });
 function accLevelApply(d) {
-  if (!Number.isInteger(d.scope_level_x10) || document.activeElement === accLevel || Date.now() - accLevelChanged < 3000) return;
+  if (!Number.isInteger(d.scope_level_x10) || accLevelHeld || Date.now() - accLevelChanged < 3000) return;
   accLevel.value = d.scope_level_x10 / 10;
   accLevelVal.textContent = fmtLevel(d.scope_level_x10 / 10);
 }
 
 accSpanSel.addEventListener('change', () => {
   accSpanChanged = Date.now();
+  accSpanSel.blur();   // a focused select is not updated, so it would stop following the radio's SPAN key
   sendCatCommand({ target: 'main', scope_span: Number(accSpanSel.value) });
 });
 
