@@ -784,6 +784,9 @@
     white-space: pre-wrap; word-break: break-word; letter-spacing: .03em;
   }
   .cw-pending { color: #64748b; }
+  .cw-info { color: #94a3b8; font-style: italic; font-size: .7rem; letter-spacing: 0; }
+  .cw-info.err { color: #f87171; font-style: normal; font-weight: bold; }
+  .cw-info[hidden] { display: none; }
 
   /* Control Card (Left / Right Column Hardware Panels) */
   .control-card {
@@ -5702,9 +5705,14 @@ const cwChans = ['Main', 'Sub'].map((name, idx) => {
     toneEl: document.getElementById('cwTone' + name),
     enableBtn: document.getElementById('cwEnableBtn' + name),
     clearBtn: document.getElementById('cwClearBtn' + name),
-    rate: 0, lp: null, t: 0, prev: 0
+    rate: 0, lp: null, t: 0, prev: 0,
+    infoEl: box.insertBefore(Object.assign(document.createElement('div'), { className: 'cw-info', hidden: true }), box.firstChild),
+    lastAudio: 0,   // performance.now() of the last audio fed to the decoder
+    hz: null        // tone being decoded, from the last result
   };
 });
+// What the decoder is doing, shown inside the panels (the status word in the header is easy to miss)
+const cwState = { kind: 'off', progress: 0, error: '' };
 
 let cwWorker = null;
 function cwGetWorker() {
@@ -5719,9 +5727,11 @@ function cwGetWorker() {
 function cwOnMessage(m) {
   if (m.type === 'status') {
     if (m.model !== cwSettings.model) return;
+    Object.assign(cwState, { kind: m.state, progress: m.progress || 0, error: m.error || '' });
     if (m.state === 'loading') cwStatusEl.textContent = 'LOADING ' + Math.round(m.progress * 100) + '%';
     else if (m.state === 'ready') cwStatusEl.textContent = 'READY';
     else { cwStatusEl.textContent = 'ERROR'; cwStatusEl.title = m.error; console.warn('CW decoder:', m.error); }
+    cwShowInfo();
   } else if (m.type === 'text') {
     const c = cwChans[m.ch];
     if (!c || !cwSettings.on[c.idx]) return;
@@ -5733,11 +5743,39 @@ function cwOnMessage(m) {
     if (done !== c.doneEl.textContent) c.doneEl.textContent = done;
     c.pendingEl.textContent = m.pending ? (done && !/\s$/.test(done) ? ' ' : '') + m.pending : '';
     c.toneEl.textContent = m.hz ? Math.round(m.hz) + ' Hz' : (cwSettings.model === 'wide' ? '400-1200' : '—');
+    c.hz = m.hz || null;
+    cwShowInfo();
     if (nearBottom) c.box.scrollTop = c.box.scrollHeight;
   } else if (m.type === 'perf') {
     cwChans[m.ch].toneEl.title = 'Tone being decoded. Last decode took ' + m.ms + ' ms';
   }
 }
+
+function cwShowInfo() {
+  const now = performance.now();
+  cwChans.forEach((c) => {
+    let msg = '', err = false;
+    const hasText = !!(c.doneEl.textContent || c.pendingEl.textContent);
+    if (!cwSettings.on[c.idx]) msg = '';
+    else if (cwState.kind === 'error') {
+      msg = 'CW decoder error: ' + cwState.error + '. The decoder is downloaded from cdn.jsdelivr.net: check that this computer reaches it.';
+      err = true;
+    } else if (cwState.kind !== 'ready') {
+      msg = 'Downloading the CW decoder (first time only, about ' + (cwSettings.model === 'wide' ? 27 : 13) + ' MB)… ' +
+            Math.round(cwState.progress * 100) + '%';
+    } else if (now - c.lastAudio > 3000) {
+      msg = 'Decoder ready. Start the audio: it decodes the audio this page plays.';
+    } else if (!hasText) {
+      msg = cwSettings.model === 'narrow' && cwSettings.auto && !c.hz
+        ? 'Listening for a CW signal between 300 and 1200 Hz…'
+        : 'Listening… the text appears word by word.';
+    }
+    if (c.infoEl.textContent !== msg) c.infoEl.textContent = msg;
+    c.infoEl.hidden = !msg;
+    c.infoEl.classList.toggle('err', err);
+  });
+}
+setInterval(cwShowInfo, 1000);
 
 function cwApply() {
   cwModelSel.value = cwSettings.model;
@@ -5752,9 +5790,10 @@ function cwApply() {
     c.enableBtn.textContent = on ? 'DECODER ON' : 'DECODER OFF';
     if (!on) { c.pendingEl.textContent = ''; c.toneEl.textContent = '—'; }
   });
+  cwShowInfo();
   if (!cwSettings.on.some(Boolean) && !cwWorker) { cwStatusEl.textContent = 'OFF'; return; }
   if (!cwSettings.on.some(Boolean)) cwStatusEl.textContent = 'OFF';
-  else if (cwStatusEl.textContent === 'OFF') cwStatusEl.textContent = 'LOADING';
+  else if (cwStatusEl.textContent === 'OFF') { cwStatusEl.textContent = 'LOADING'; Object.assign(cwState, { kind: 'loading', progress: 0 }); }
   cwGetWorker().postMessage({ type: 'config', model: cwSettings.model, auto: cwSettings.auto,
                               pitch: cwSettings.pitch, enabled: cwSettings.on.slice() });
 }
@@ -5766,7 +5805,7 @@ function cwSave() {
 cwModelSel.addEventListener('change', () => {
   cwSettings.model = cwModelSel.value === 'wide' ? 'wide' : 'narrow';
   cwStatusEl.title = '';
-  if (cwSettings.on.some(Boolean)) cwStatusEl.textContent = 'LOADING';
+  if (cwSettings.on.some(Boolean)) { cwStatusEl.textContent = 'LOADING'; Object.assign(cwState, { kind: 'loading', progress: 0 }); }
   cwSave(); cwApply();
 });
 cwAutoBtn.addEventListener('click', () => { cwSettings.auto = !cwSettings.auto; cwSave(); cwApply(); });
@@ -5777,7 +5816,7 @@ cwPitchInput.addEventListener('change', () => {
 });
 cwChans.forEach((c) => {
   c.enableBtn.addEventListener('click', () => { cwSettings.on[c.idx] = !cwSettings.on[c.idx]; cwSave(); cwApply(); });
-  c.clearBtn.addEventListener('click', () => { c.doneEl.textContent = ''; c.pendingEl.textContent = ''; });
+  c.clearBtn.addEventListener('click', () => { c.doneEl.textContent = ''; c.pendingEl.textContent = ''; cwShowInfo(); });
 });
 
 // 4th-order Butterworth low-pass (two biquads) against aliasing, then linear interpolation to 9600 Hz
@@ -5795,6 +5834,7 @@ function cwFeedAudio(channels, rate) {
   cwChans.forEach((c) => {
     if (!cwSettings.on[c.idx]) return;
     const samples = channels[Math.min(c.idx, channels.length - 1)];
+    c.lastAudio = performance.now();
     if (c.rate !== rate) { c.rate = rate; c.lp = cwMakeLowpass(rate); c.t = 0; c.prev = 0; }
     const step = rate / CW_SAMPLE_RATE;
     const out = new Float32Array(Math.ceil(samples.length / step) + 2);
