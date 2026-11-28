@@ -28,6 +28,7 @@ Firmware for the ESP32-S3, a small Wi-Fi-capable microcontroller board. You conn
 - **Audio**: the ESP32-S3 takes the receive audio from the FTX-1's USB audio and streams it to your browser over Wi-Fi. The FTX-1 appears to a computer like a "USB microphone", using the standard USB audio class (UAC 1.0).
 - **Control and status**: through the FTX-1's USB serial port, the browser changes frequency and mode and reads the S-meter and other values. This way of controlling and monitoring a radio from a computer is called **CAT** (Computer Aided Transceiver).
 - **FT8**: the received audio is decoded inside the browser.
+- **CW**: Morse is decoded inside the browser by the DeepCW neural decoder (see "CW decoder").
 
 All the PC / Mac needs is a browser on the same LAN. No dedicated software is required.
 
@@ -36,6 +37,7 @@ FTX-1
  ├─ USB Audio (UAC 1.0) ──────────> ESP32-S3 ──Wi-Fi / HTTPS──> browser / ffplay / VLC
  └─ USB Serial (CP210x / CAT) ────>            ├─ Audio streaming (PCM / WAV)
                                                ├─ Real-time FT8 decoder in the browser
+                                               ├─ CW decoder (DeepCW) in the browser
                                                ├─ CAT control (frequency, mode, squelch, ...)
                                                └─ OTA firmware update
 ```
@@ -149,7 +151,7 @@ The copyright of this project belongs to the author. The code is released under 
 Because commercial use is excluded, this license is not an "open source" license in the sense of the Open Source Initiative's definition. It is "source-available".
 
 Part of this project follows the structure of the example code of Espressif's `usb_host_uac` component (Apache License 2.0, the USB Host task in [`main/usb_audio.c`](main/usb_audio.c)), and that part remains under the Apache License 2.0. Details are in [`NOTICE`](NOTICE).
-Third-party components fetched at build time (the ESP-IDF and the components under `managed_components`) keep their own licenses. For the projects the FT8 decoder refers to, see "About the FT8 decoder".
+Third-party components fetched at build time (the ESP-IDF and the components under `managed_components`) keep their own licenses. For the projects the FT8 decoder refers to, see "About the FT8 decoder". The CW decoder is a port of DeepCW (MIT License), see "CW decoder".
 
 ---
 
@@ -689,6 +691,33 @@ Pressing `DECODER ON` opens a world map in a separate window (`/map`) and plots 
 - Old spots fade and disappear after 15 minutes. Closing and reopening the map window restores the spots so far.
 - The coastline is the [Natural Earth](https://www.naturalearthdata.com/) (public domain) 50m land data, thinned at 0.02 degrees and embedded as vectors in [`main/map.html`](main/map.html) (about 220 KB). The outline stays smooth when zoomed in, and it works without an Internet connection.
 - If the pop-up is blocked, allow pop-ups for this site from the blocked indicator in the address bar.
+
+## CW decoder
+
+Under the FT8 panels there is a CW decoder for MAIN and SUB (SUB only on the FTX-1). It is a port of
+[DeepCW](https://github.com/e04/web-deep-cw-decoder) by e04 (MIT License): a neural network trained on
+weak, fading and noisy CW, which copies well below the level where classic decoders give up. It only
+listens: it never keys the radio and sends no CAT command.
+
+- Press `DECODER ON` on a panel. Text appears word by word; the last word, still uncertain, is shown in grey
+  until it is confirmed. A new station or the end of a transmission starts a new line. `CLEAR` empties the panel.
+- **Model**: `Narrow` (default) decodes one signal, the tone at the pitch; `Wide` decodes the strongest
+  signal between 400 and 1200 Hz, is heavier and needs more CPU (a phone may struggle).
+- **AUTO** (narrow model): follows the strongest CW tone between 300 and 1200 Hz and shows it next to the title.
+  With AUTO off, the tone in **Hz** is decoded, normally the radio's CW pitch (700 Hz by default). Narrow the
+  radio's filter around the station for the best copy.
+- The settings and the ON/OFF state are kept in this browser (`localStorage`).
+- Like FT8, it works on the audio the page is playing: on a phone, when the page goes to the background, it pauses.
+
+**Download from the Internet.** The decoder needs the ONNX runtime (12 MB, about 3 MB compressed on the wire)
+and a model (narrow 1.2 MB, wide 15 MB): too large for the firmware. On first use the browser downloads them
+from `cdn.jsdelivr.net`, at fixed versions (onnxruntime-web 1.24.3 and the models of
+[e04/deepcw-engine](https://github.com/e04/deepcw-engine) at a fixed commit), checks each file against its
+SHA-256 written in the page, and refuses a file that does not match (the panel shows `ERROR`, the reason is in
+the tooltip). The files are kept in the browser's cache storage, so later visits work without downloading
+them again. Only the browser goes to the Internet; the board opens nothing. For this the page's CSP allows
+connections to `https://cdn.jsdelivr.net`, `blob:` scripts (the checked runtime is imported from memory) and
+`'wasm-unsafe-eval'` (compiling the runtime's WebAssembly).
 
 ### Future improvement ideas
 

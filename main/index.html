@@ -2,8 +2,9 @@
 <!--
   Main page of the FTDX10 / FTX-1 Network Remote, served by the device at https://<host name>.local/.
   Shows the radio's state (frequency, mode, S meter, ...), sends CAT controls through POST /cat,
-  plays the radio's audio from /stream.pcm, and decodes FT8 from that audio in the browser.
-  All scripts are inline; the only external resource is the Google Fonts stylesheet.
+  plays the radio's audio from /stream.pcm, and decodes FT8 and CW from that audio in the browser.
+  All scripts are inline; the external resources are the Google Fonts stylesheet and, only when the
+  CW decoder is turned on, its ONNX runtime and model from cdn.jsdelivr.net (checked by SHA-256).
 -->
 <html lang="ja">
 <head>
@@ -774,6 +775,18 @@
     text-align: center;
     font-style: italic;
   }
+  /* CW decoder panel (shares the FT8 panel look) */
+  .cw-select { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .6rem; padding: 0 .2rem; }
+  .cw-pitch { width: 4.4em; }
+  .cw-text {
+    height: 72px; overflow-y: auto; padding: .25rem .45rem;
+    font-size: .78rem; line-height: 1.35; color: #e2e8f0;
+    white-space: pre-wrap; word-break: break-word; letter-spacing: .03em;
+  }
+  .cw-pending { color: #64748b; }
+  .cw-info { color: #94a3b8; font-style: italic; font-size: .7rem; letter-spacing: 0; }
+  .cw-info.err { color: #f87171; font-style: normal; font-weight: bold; }
+  .cw-info[hidden] { display: none; }
 
   /* Control Card (Left / Right Column Hardware Panels) */
   .control-card {
@@ -1491,6 +1504,42 @@
             </tbody>
           </table>
         </div>
+      </div>
+      <!-- CW Decoder Panels (MAIN / SUB): the DeepCW neural decoder, see <script id="cw-worker-src"> -->
+      <div class="ft8-panel cw-panel">
+        <div class="ft8-header">
+          <div class="ft8-title">
+            <span class="ft8-icon">🔑</span>
+            <span>CW DECODER <span class="main-tag">MAIN</span></span>
+            <span class="ft8-sync-badge" id="cwToneMain" title="Tone being decoded">—</span>
+          </div>
+          <div class="ft8-ctrls">
+            <label class="ft8-dtcorr-label" title="Narrow: decodes one signal, the tone at the pitch (1.2 MB download). Wide: decodes the strongest signal between 400 and 1200 Hz (15 MB download)">Model
+              <select class="cw-select" id="cwModel"><option value="narrow">Narrow</option><option value="wide">Wide</option></select></label>
+            <button type="button" class="ft8-btn" id="cwAutoBtn" title="Narrow model: follow the strongest CW tone between 300 and 1200 Hz automatically">AUTO</button>
+            <label class="ft8-dtcorr-label" title="Narrow model with AUTO off: the audio tone to decode, normally the radio's CW pitch">Hz
+              <input type="number" class="ft8-dtcorr cw-pitch" id="cwPitch" min="300" max="1200" step="10" value="700"></label>
+            <span class="ft8-dtcorr-label" id="cwStatus" role="status" title="The decoder runtime and model are downloaded from cdn.jsdelivr.net on first use, checked and kept by the browser">OFF</span>
+            <button type="button" class="ft8-btn" id="cwEnableBtnMain">DECODER OFF</button>
+            <button type="button" class="ft8-btn" id="cwClearBtnMain">CLEAR</button>
+          </div>
+        </div>
+        <div class="cw-text" id="cwTextMain"><span class="cw-done"></span><span class="cw-pending"></span></div>
+      </div>
+
+      <div class="ft8-panel cw-panel dual-rx-only">
+        <div class="ft8-header">
+          <div class="ft8-title">
+            <span class="ft8-icon">🔑</span>
+            <span>CW DECODER <span class="sub-tag">SUB</span></span>
+            <span class="ft8-sync-badge" id="cwToneSub" title="Tone being decoded">—</span>
+          </div>
+          <div class="ft8-ctrls">
+            <button type="button" class="ft8-btn" id="cwEnableBtnSub">DECODER OFF</button>
+            <button type="button" class="ft8-btn" id="cwClearBtnSub">CLEAR</button>
+          </div>
+        </div>
+        <div class="cw-text" id="cwTextSub"><span class="cw-done"></span><span class="cw-pending"></span></div>
       </div>
     </div>
 
@@ -2900,6 +2949,7 @@ async function start() {
           ft8FeedAudio(f, d.channels[Math.min(i, d.channels.length - 1)], rate);
         }
       });
+      cwFeedAudio(d.channels, rate);
 
       const now = ctx.currentTime;
       target = Math.min(LAT.max, Math.max(LAT.min, target));   // the LATENCY selector may have changed
@@ -5625,6 +5675,189 @@ ft8MapChannel.onmessage = (e) => {
     ft8MapChannel.postMessage({ type: 'snapshot', spots: [...ft8Spots.values()], links: [...ft8Links.values()] });
   }
 };
+
+// ============================================================================
+// CW decoder: the DeepCW neural decoder (see <script id="cw-worker-src"> at the end of the page).
+// The page feeds it the receiver audio at 9600 Hz and shows the text it returns. Receive only.
+// ============================================================================
+const CW_SAMPLE_RATE = 9600;
+const CW_PREFS_KEY = 'ftx1.cw';
+const CW_MAX_TEXT = 6000;   // characters kept per panel
+const cwSettings = { model: 'narrow', auto: true, pitch: 700, on: [false, false] };
+try {
+  const saved = JSON.parse(localStorage.getItem(CW_PREFS_KEY) || '{}');
+  if (saved.model === 'narrow' || saved.model === 'wide') cwSettings.model = saved.model;
+  if (typeof saved.auto === 'boolean') cwSettings.auto = saved.auto;
+  if (saved.pitch >= 300 && saved.pitch <= 1200) cwSettings.pitch = Math.round(saved.pitch);
+  if (Array.isArray(saved.on)) cwSettings.on = [saved.on[0] === true, saved.on[1] === true];
+} catch (e) {}
+
+const cwModelSel = document.getElementById('cwModel');
+const cwAutoBtn = document.getElementById('cwAutoBtn');
+const cwPitchInput = document.getElementById('cwPitch');
+const cwStatusEl = document.getElementById('cwStatus');
+const cwChans = ['Main', 'Sub'].map((name, idx) => {
+  const box = document.getElementById('cwText' + name);
+  return {
+    name, idx, box,
+    doneEl: box.querySelector('.cw-done'),
+    pendingEl: box.querySelector('.cw-pending'),
+    toneEl: document.getElementById('cwTone' + name),
+    enableBtn: document.getElementById('cwEnableBtn' + name),
+    clearBtn: document.getElementById('cwClearBtn' + name),
+    rate: 0, lp: null, t: 0, prev: 0,
+    infoEl: box.insertBefore(Object.assign(document.createElement('div'), { className: 'cw-info', hidden: true }), box.firstChild),
+    lastAudio: 0,   // performance.now() of the last audio fed to the decoder
+    hz: null        // tone being decoded, from the last result
+  };
+});
+// What the decoder is doing, shown inside the panels (the status word in the header is easy to miss)
+const cwState = { kind: 'off', progress: 0, error: '' };
+
+let cwWorker = null;
+function cwGetWorker() {
+  if (cwWorker) return cwWorker;
+  const src = document.getElementById('cw-worker-src').textContent;
+  cwWorker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+  cwWorker.onmessage = (e) => cwOnMessage(e.data);
+  cwWorker.onerror = (e) => { console.error('CW worker error:', e.message); cwStatusEl.textContent = 'ERROR'; };
+  return cwWorker;
+}
+
+function cwOnMessage(m) {
+  if (m.type === 'status') {
+    if (m.model !== cwSettings.model) return;
+    Object.assign(cwState, { kind: m.state, progress: m.progress || 0, error: m.error || '' });
+    if (m.state === 'loading') cwStatusEl.textContent = 'LOADING ' + Math.round(m.progress * 100) + '%';
+    else if (m.state === 'ready') cwStatusEl.textContent = 'READY';
+    else { cwStatusEl.textContent = 'ERROR'; cwStatusEl.title = m.error; console.warn('CW decoder:', m.error); }
+    cwShowInfo();
+  } else if (m.type === 'text') {
+    const c = cwChans[m.ch];
+    if (!c || !cwSettings.on[c.idx]) return;
+    const nearBottom = c.box.scrollHeight - c.box.scrollTop - c.box.clientHeight < 24;
+    let done = c.doneEl.textContent;
+    if (m.brk && done && !done.endsWith('\n')) done = done.trimEnd() + '\n';
+    if (m.commit) done += (done && !/\s$/.test(done) ? ' ' : '') + m.commit;
+    if (done.length > CW_MAX_TEXT) done = done.slice(done.length - CW_MAX_TEXT);
+    if (done !== c.doneEl.textContent) c.doneEl.textContent = done;
+    c.pendingEl.textContent = m.pending ? (done && !/\s$/.test(done) ? ' ' : '') + m.pending : '';
+    c.toneEl.textContent = m.hz ? Math.round(m.hz) + ' Hz' : (cwSettings.model === 'wide' ? '400-1200' : '—');
+    c.hz = m.hz || null;
+    cwShowInfo();
+    if (nearBottom) c.box.scrollTop = c.box.scrollHeight;
+  } else if (m.type === 'perf') {
+    cwChans[m.ch].toneEl.title = 'Tone being decoded. Last decode took ' + m.ms + ' ms';
+  }
+}
+
+function cwShowInfo() {
+  const now = performance.now();
+  cwChans.forEach((c) => {
+    let msg = '', err = false;
+    const hasText = !!(c.doneEl.textContent || c.pendingEl.textContent);
+    if (!cwSettings.on[c.idx]) msg = '';
+    else if (cwState.kind === 'error') {
+      msg = 'CW decoder error: ' + cwState.error + '. The decoder is downloaded from cdn.jsdelivr.net: check that this computer reaches it.';
+      err = true;
+    } else if (cwState.kind !== 'ready') {
+      msg = 'Downloading the CW decoder (first time only, about ' + (cwSettings.model === 'wide' ? 27 : 13) + ' MB)… ' +
+            Math.round(cwState.progress * 100) + '%';
+    } else if (now - c.lastAudio > 3000) {
+      msg = 'Decoder ready. Start the audio: it decodes the audio this page plays.';
+    } else if (!hasText) {
+      msg = cwSettings.model === 'narrow' && cwSettings.auto && !c.hz
+        ? 'Listening for a CW signal between 300 and 1200 Hz…'
+        : 'Listening… the text appears word by word.';
+    }
+    if (c.infoEl.textContent !== msg) c.infoEl.textContent = msg;
+    c.infoEl.hidden = !msg;
+    c.infoEl.classList.toggle('err', err);
+  });
+}
+setInterval(cwShowInfo, 1000);
+
+function cwApply() {
+  cwModelSel.value = cwSettings.model;
+  cwAutoBtn.classList.toggle('active', cwSettings.auto);
+  cwPitchInput.value = cwSettings.pitch;
+  const narrow = cwSettings.model === 'narrow';
+  cwAutoBtn.disabled = !narrow;
+  cwPitchInput.disabled = !narrow || cwSettings.auto;
+  cwChans.forEach((c) => {
+    const on = cwSettings.on[c.idx];
+    c.enableBtn.classList.toggle('active', on);
+    c.enableBtn.textContent = on ? 'DECODER ON' : 'DECODER OFF';
+    if (!on) { c.pendingEl.textContent = ''; c.toneEl.textContent = '—'; }
+  });
+  cwShowInfo();
+  if (!cwSettings.on.some(Boolean) && !cwWorker) { cwStatusEl.textContent = 'OFF'; return; }
+  if (!cwSettings.on.some(Boolean)) cwStatusEl.textContent = 'OFF';
+  else if (cwStatusEl.textContent === 'OFF') { cwStatusEl.textContent = 'LOADING'; Object.assign(cwState, { kind: 'loading', progress: 0 }); }
+  cwGetWorker().postMessage({ type: 'config', model: cwSettings.model, auto: cwSettings.auto,
+                              pitch: cwSettings.pitch, enabled: cwSettings.on.slice() });
+}
+
+function cwSave() {
+  try { localStorage.setItem(CW_PREFS_KEY, JSON.stringify(cwSettings)); } catch (e) {}
+}
+
+cwModelSel.addEventListener('change', () => {
+  cwSettings.model = cwModelSel.value === 'wide' ? 'wide' : 'narrow';
+  cwStatusEl.title = '';
+  if (cwSettings.on.some(Boolean)) { cwStatusEl.textContent = 'LOADING'; Object.assign(cwState, { kind: 'loading', progress: 0 }); }
+  cwSave(); cwApply();
+});
+cwAutoBtn.addEventListener('click', () => { cwSettings.auto = !cwSettings.auto; cwSave(); cwApply(); });
+cwPitchInput.addEventListener('change', () => {
+  const v = Math.round(Number(cwPitchInput.value) / 10) * 10;
+  if (v >= 300 && v <= 1200) cwSettings.pitch = v;
+  cwSave(); cwApply();
+});
+cwChans.forEach((c) => {
+  c.enableBtn.addEventListener('click', () => { cwSettings.on[c.idx] = !cwSettings.on[c.idx]; cwSave(); cwApply(); });
+  c.clearBtn.addEventListener('click', () => { c.doneEl.textContent = ''; c.pendingEl.textContent = ''; cwShowInfo(); });
+});
+
+// 4th-order Butterworth low-pass (two biquads) against aliasing, then linear interpolation to 9600 Hz
+function cwMakeLowpass(rate) {
+  const fc = Math.min(3600, 0.45 * rate), w = 2 * Math.PI * fc / rate, cs = Math.cos(w);
+  return [0.5412, 1.3066].map((q) => {
+    const al = Math.sin(w) / (2 * q), a0 = 1 + al;
+    return { b0: (1 - cs) / 2 / a0, b1: (1 - cs) / a0, b2: (1 - cs) / 2 / a0, a1: -2 * cs / a0, a2: (1 - al) / a0,
+             x1: 0, x2: 0, y1: 0, y2: 0 };
+  });
+}
+
+function cwFeedAudio(channels, rate) {
+  if (!cwWorker || channels.length === 0) return;
+  cwChans.forEach((c) => {
+    if (!cwSettings.on[c.idx]) return;
+    const samples = channels[Math.min(c.idx, channels.length - 1)];
+    c.lastAudio = performance.now();
+    if (c.rate !== rate) { c.rate = rate; c.lp = cwMakeLowpass(rate); c.t = 0; c.prev = 0; }
+    const step = rate / CW_SAMPLE_RATE;
+    const out = new Float32Array(Math.ceil(samples.length / step) + 2);
+    let n = 0;
+    for (let i = 0; i < samples.length; i++) {
+      let x = samples[i];
+      for (const f of c.lp) {
+        const y = f.b0 * x + f.b1 * f.x1 + f.b2 * f.x2 - f.a1 * f.y1 - f.a2 * f.y2;
+        f.x2 = f.x1; f.x1 = x; f.y2 = f.y1; f.y1 = y; x = y;
+      }
+      // Output samples falling between the previous input sample (t = 0) and this one (t = 1)
+      while (c.t <= 1 && n < out.length) { out[n++] = c.prev + (x - c.prev) * c.t; c.t += step; }
+      c.t -= 1;
+      c.prev = x;
+    }
+    const chunk = out.slice(0, n);
+    cwWorker.postMessage({ type: 'audio', ch: c.idx, samples: chunk }, [chunk.buffer]);
+  });
+}
+
+// The worker's source is at the end of the page: restart a saved decoder only once the page is parsed
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', cwApply);
+else cwApply();
 </script>
 <script type="text/plain" id="ft8-worker-src">
 // ---- FT8 decoder: runs in a Web Worker so that the 1-2 s of heavy computation per slot does not
@@ -6343,6 +6576,497 @@ if (typeof self !== 'undefined' && typeof self.postMessage === 'function') {
     self.postMessage({ idx: job.idx, utc: job.utc, dialHz: job.dialHz, ms: Date.now() - t0, results });
   };
 }
+</script>
+<script type="text/plain" id="cw-worker-src">
+// ---- CW decoder: the DeepCW neural Morse decoder, run in a Web Worker on the receiver audio.
+// Signal processing, model input and CTC decoding are a port of e04/web-deep-cw-decoder
+// (https://github.com/e04/web-deep-cw-decoder) and its models from e04/deepcw-engine,
+// MIT License, Copyright (c) 2026 e04. See NOTICE.
+//
+// The ONNX runtime and the models are too large for the firmware, so they are fetched from jsDelivr
+// at pinned versions and checked against the SHA-256 below before use: a changed file is refused.
+// They are kept in the browser's Cache Storage, so later visits do not download them again.
+
+const CW_RATE = 9600;               // input rate: the models' STFT (256/48 @ 3200 Hz) scaled by 3
+const CW_FFT = 768, CW_HOP = 144, CW_DETECT_HOP = 192;
+const CW_OUT_HOP = CW_HOP * 2;      // the model halves the time resolution
+const CW_BIN_HZ = CW_RATE / CW_FFT; // 12.5 Hz
+const CW_TOTAL_BINS = CW_FFT / 2 + 1;
+const CW_START_BIN = 32, CW_END_BIN = 97;            // 400-1200 Hz: the wide model's 65 input bins
+const CW_CROPPED_BINS = CW_END_BIN - CW_START_BIN;
+const CW_NARROW_BINS = 3;
+const CW_PAD = CW_FFT / 2;
+const CW_VOCAB = ',./0123456789?ABCDEFGHIJKLMNOPQRSTUVWXYZ ';
+const CW_BLANK = 41;
+const CW_SPACE = CW_VOCAB.indexOf(' ');
+
+// Streaming: decode the pending audio at most once a second and commit the text up to the last
+// word space that is not too close to the end, as the original does.
+const CW_MAX_SEG = 30 * CW_RATE;
+const CW_TAIL_GUARD = 1.25 * CW_RATE;
+const CW_MIN_PENDING = 2 * CW_RATE;
+const CW_MIN_CONFIRMED = 2 * CW_RATE;
+const CW_INTERVAL_MS = 1000;
+// The last word of an over has no word space after it: commit it once the tail has been quiet this long
+const CW_QUIET = 3 * CW_RATE;
+// Automatic pitch: the strongest keyed tone between these, with hysteresis (pure noise ~5 dB)
+const CW_AUTO_MIN_HZ = 300, CW_AUTO_MAX_HZ = 1200;
+const CW_LOCK_DB = 12, CW_RELEASE_DB = 9, CW_DETECT_SEC = 6;
+// A keyed tone is off part of the time; a steady carrier (a birdie) is not and is never followed
+const CW_KEYED_DB = 8;
+
+let CW_CDN = 'https://cdn.jsdelivr.net';
+const CW_ASSETS = {
+  ort:    { path: '/npm/onnxruntime-web@1.24.3/dist/ort.wasm.bundle.min.mjs',
+            sha: '9f716d6e3c4280dcced6f0fcb9814c1d7630de83d8177880a2ef445fe48ca913' },
+  wasm:   { path: '/npm/onnxruntime-web@1.24.3/dist/ort-wasm-simd-threaded.wasm',
+            sha: 'be0e129949062ad50290ef94683fac8be5bb6156f709e030b7a5f1661a2f6c17' },
+  narrow: { path: '/gh/e04/deepcw-engine@79104fbe1ea0abd09eb27c6ebf9c6bab364d0d7f/model_narrow.onnx',
+            sha: 'fc80c4baec72d756af1dbce9b70357a731b0b1a6b8306815bcfc61b6403c46e5' },
+  wide:   { path: '/gh/e04/deepcw-engine@79104fbe1ea0abd09eb27c6ebf9c6bab364d0d7f/model.onnx',
+            sha: 'cd5ee38106348ad86a8f2d40ef1ce7dccea0d7f7fbfd0f2dee0fd1a8a28773ae' }
+};
+const CW_CACHE = 'deepcw-v1';
+
+// ---- FFT (radix-2, and Bluestein for the 768-point size) ----
+class CwFFT {
+  constructor(n) {
+    this.n = n;
+    if ((n & (n - 1)) === 0) {
+      this.rev = new Uint32Array(n); this.sin = new Float32Array(n); this.cos = new Float32Array(n);
+      for (let limit = 1, bit = n >> 1; limit < n; limit <<= 1, bit >>= 1) {
+        for (let i = 0; i < limit; i++) this.rev[i + limit] = this.rev[i] + bit;
+      }
+      for (let i = 0; i < n; i++) { const a = -2 * Math.PI * i / n; this.sin[i] = Math.sin(a); this.cos[i] = Math.cos(a); }
+      return;
+    }
+    let m = 1; while (m < 2 * n - 1) m <<= 1;
+    this.m = m; this.inner = new CwFFT(m);
+    this.chirp = new Float32Array(2 * n);
+    this.kernel = new Float32Array(2 * m);
+    for (let i = 0; i < n; i++) {
+      const a = Math.PI * ((i * i) % (2 * n)) / n, c = Math.cos(a), s = Math.sin(a);
+      this.chirp[2 * i] = c; this.chirp[2 * i + 1] = s;
+      this.kernel[2 * i] = c; this.kernel[2 * i + 1] = s;
+      if (i) { this.kernel[2 * (m - i)] = c; this.kernel[2 * (m - i) + 1] = s; }
+    }
+    this.inner.transform(this.kernel);
+    this.work = new Float32Array(2 * m);
+  }
+  transform(x) {
+    if (this.rev) { this.radix2(x); return; }
+    const n = this.n, m = this.m, w = this.work, ch = this.chirp, k = this.kernel;
+    w.fill(0);
+    for (let i = 0; i < n; i++) {
+      const re = x[2 * i], im = x[2 * i + 1], cr = ch[2 * i], ci = ch[2 * i + 1];
+      w[2 * i] = re * cr + im * ci; w[2 * i + 1] = im * cr - re * ci;
+    }
+    this.inner.transform(w);
+    for (let i = 0; i < m; i++) {
+      const wr = w[2 * i], wi = w[2 * i + 1], kr = k[2 * i], ki = k[2 * i + 1];
+      w[2 * i] = wr * kr - wi * ki; w[2 * i + 1] = wr * ki + wi * kr;
+    }
+    for (let i = 0; i < m; i++) w[2 * i + 1] = -w[2 * i + 1];      // inverse FFT by conjugation
+    this.inner.transform(w);
+    for (let i = 0; i < m; i++) { w[2 * i] /= m; w[2 * i + 1] = -w[2 * i + 1] / m; }
+    for (let i = 0; i < n; i++) {
+      const wr = w[2 * i], wi = w[2 * i + 1], cr = ch[2 * i], ci = ch[2 * i + 1];
+      x[2 * i] = wr * cr + wi * ci; x[2 * i + 1] = wi * cr - wr * ci;
+    }
+  }
+  radix2(x) {
+    const n = this.n, rev = this.rev, sin = this.sin, cos = this.cos;
+    for (let i = 0; i < n; i++) {
+      const r = rev[i];
+      if (i < r) {
+        let t = x[2 * i]; x[2 * i] = x[2 * r]; x[2 * r] = t;
+        t = x[2 * i + 1]; x[2 * i + 1] = x[2 * r + 1]; x[2 * r + 1] = t;
+      }
+    }
+    for (let half = 1; half < n; half *= 2) {
+      const step = 2 * half, aStep = n / step;
+      for (let i = 0; i < n; i += step) {
+        for (let j = 0; j < half; j++) {
+          const wr = cos[j * aStep], wi = sin[j * aStep];
+          const a = 2 * (i + j), b = 2 * (i + j + half);
+          const tr = wr * x[b] - wi * x[b + 1], ti = wr * x[b + 1] + wi * x[b];
+          const ur = x[a], ui = x[a + 1];
+          x[a] = ur + tr; x[a + 1] = ui + ti; x[b] = ur - tr; x[b + 1] = ui - ti;
+        }
+      }
+    }
+  }
+}
+
+class CwSTFT {
+  constructor(size, hop) {
+    this.size = size; this.hop = hop; this.fft = new CwFFT(size);
+    this.win = new Float32Array(size);
+    for (let i = 0; i < size; i++) this.win[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / size));
+    this.frame = new Float32Array(2 * size);
+  }
+  frames(len) { return len < this.size ? 0 : Math.floor((len - this.size) / this.hop) + 1; }
+  forEach(sig, fn) {
+    const n = this.size, f = this.frame, win = this.win;
+    let t = 0;
+    for (let i = 0; i + n <= sig.length; i += this.hop) {
+      for (let j = 0; j < n; j++) { f[2 * j] = sig[i + j] * win[j]; f[2 * j + 1] = 0; }
+      this.fft.transform(f);
+      fn(f, t++);
+    }
+  }
+}
+const cwStft = new CwSTFT(CW_FFT, CW_HOP);
+const cwDetectStft = new CwSTFT(CW_FFT, CW_DETECT_HOP);
+
+// The models' "noise_q90_log1p" normalization; `source` leaves zero-filled bins out of the estimate
+function cwNormalize(spec, source) {
+  const s = Float32Array.from(source || spec).sort();
+  if (!s.length) return;
+  const rayleigh = Math.sqrt(-2 * Math.log(1 - 0.9));
+  const noise = Math.max(s[Math.floor(0.9 * (s.length - 1))] / rayleigh, s[s.length - 1] * 1e-3, 1e-5);
+  for (let i = 0; i < spec.length; i++) spec[i] = Math.log1p(spec[i] / noise);
+}
+
+// Reflect padding, like a centered STFT: frame t is centered on sample t * CW_HOP
+function cwCenterPad(a) {
+  if (a.length <= CW_PAD + 1) return null;
+  const p = new Float32Array(a.length + 2 * CW_PAD);
+  for (let i = 0; i < CW_PAD; i++) { p[i] = a[CW_PAD - i]; p[CW_PAD + a.length + i] = a[a.length - 2 - i]; }
+  p.set(a, CW_PAD);
+  return p;
+}
+
+const cwMag = (f, bin) => Math.hypot(f[2 * bin], f[2 * bin + 1]);
+
+// Wide model: the whole 400-1200 Hz band
+function cwWideInput(audio) {
+  const p = cwCenterPad(audio);
+  if (!p) return null;
+  const T = cwStft.frames(p.length), spec = new Float32Array(T * CW_CROPPED_BINS);
+  cwStft.forEach(p, (f, t) => {
+    for (let b = CW_START_BIN; b < CW_END_BIN; b++) spec[t * CW_CROPPED_BINS + b - CW_START_BIN] = cwMag(f, b);
+  });
+  cwNormalize(spec);
+  return { data: spec, dims: [1, 1, T, CW_CROPPED_BINS] };
+}
+
+// Narrow model: the three bins around the tone
+function cwNarrowInput(audio, hz) {
+  const p = cwCenterPad(audio);
+  if (!p) return null;
+  const T = cwStft.frames(p.length), spec = new Float32Array(T * CW_NARROW_BINS);
+  const center = Math.round(hz / CW_BIN_HZ), half = CW_NARROW_BINS >> 1;
+  cwStft.forEach(p, (f, t) => {
+    for (let d = -half; d <= half; d++) {
+      const b = center + d;
+      if (b >= 0 && b < CW_TOTAL_BINS) spec[t * CW_NARROW_BINS + half + d] = cwMag(f, b);
+    }
+  });
+  cwNormalize(spec);
+  return { data: spec, dims: [1, 1, T, CW_NARROW_BINS] };
+}
+
+// The strongest keyed tone: per bin, the keyed-on power (90th percentile over time) against the
+// median power of the band. Bins far weaker than a strong neighbour are its keying sidebands, and
+// bins that are never off (keyed-on vs 20th percentile below CW_KEYED_DB) are steady carriers.
+function cwStrongestTone(audio, lockedHz) {
+  const T = cwDetectStft.frames(audio.length);
+  if (!T) return null;
+  const lo = Math.ceil(CW_AUTO_MIN_HZ / CW_BIN_HZ), hi = Math.floor(CW_AUTO_MAX_HZ / CW_BIN_HZ);
+  const nb = hi - lo + 1, pw = new Float32Array(nb * T);
+  cwDetectStft.forEach(audio, (f, t) => {
+    for (let b = lo; b <= hi; b++) pw[(b - lo) * T + t] = f[2 * b] * f[2 * b] + f[2 * b + 1] * f[2 * b + 1];
+  });
+  const noise = Math.max(Float32Array.from(pw).sort()[pw.length >> 1], 1e-12);
+  const db = new Float32Array(nb);
+  for (let i = 0; i < nb; i++) {
+    const s = pw.slice(i * T, (i + 1) * T).sort();
+    const on = Math.max(s[Math.floor(0.9 * (T - 1))], 1e-12), off = Math.max(s[Math.floor(0.2 * (T - 1))], 1e-12);
+    db[i] = 10 * Math.log10(on / off) < CW_KEYED_DB ? 0 : 10 * Math.log10(on / noise);
+  }
+  const mask = Math.round(150 / CW_BIN_HZ);
+  let best = -1;
+  for (let i = 0; i < nb; i++) {
+    let sideband = false;
+    for (let o = Math.max(0, i - mask); o <= Math.min(nb - 1, i + mask) && !sideband; o++) sideband = db[o] - db[i] > 18;
+    if (!sideband && (best < 0 || db[i] > db[best])) best = i;
+  }
+  if (lockedHz != null) {
+    const li = Math.round(lockedHz / CW_BIN_HZ) - lo;
+    if (li >= 0 && li < nb) {
+      // Stay on the locked tone while it is still there, unless another is clearly stronger
+      let near = li;
+      for (let o = Math.max(0, li - 1); o <= Math.min(nb - 1, li + 1); o++) if (db[o] > db[near]) near = o;
+      if (db[near] >= CW_RELEASE_DB && !(best >= 0 && db[best] - db[near] > 6)) return { hz: (near + lo) * CW_BIN_HZ, db: db[near] };
+    }
+  }
+  return best >= 0 && db[best] >= CW_LOCK_DB ? { hz: (best + lo) * CW_BIN_HZ, db: db[best] } : null;
+}
+
+// Greedy CTC decoding with the frame span of every character (for the word-space split points)
+function cwCtc(data, dims) {
+  const T = dims[1], C = dims[2], chars = [], spaces = [];
+  let prev = -1, spaceStart = -1;
+  for (let t = 0; t < T; t++) {
+    let best = 0, bestP = -Infinity;
+    for (let c = 0; c < C; c++) { const p = data[t * C + c]; if (p > bestP) { bestP = p; best = c; } }
+    if (best === CW_SPACE) { if (spaceStart < 0) spaceStart = t; }
+    else if (spaceStart >= 0) { spaces.push([spaceStart, t - 1]); spaceStart = -1; }
+    if (best === CW_BLANK) { prev = -1; continue; }
+    if (best === prev) { chars[chars.length - 1].end = t; continue; }
+    prev = best;
+    chars.push({ ch: CW_VOCAB[best], start: t, end: t });
+  }
+  if (spaceStart >= 0) spaces.push([spaceStart, T - 1]);
+  return { chars, spaces };
+}
+
+function cwText(chars, endFrame) {
+  let s = '';
+  for (const c of chars) { if (endFrame != null && c.end > endFrame) break; s += c.ch; }
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+// ---- Runtime and models ----
+async function cwSha256(buf) {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
+  return Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function cwFetchAsset(key, onProgress) {
+  const a = CW_ASSETS[key], url = CW_CDN + a.path;
+  let cache = null;
+  try { cache = await caches.open(CW_CACHE); } catch (e) { /* no Cache Storage: download every time */ }
+  if (cache) {
+    try {
+      const hit = await cache.match(url);
+      if (hit) {
+        const buf = await hit.arrayBuffer();
+        if (await cwSha256(buf) === a.sha) { onProgress(1); return buf; }
+        await cache.delete(url);
+      }
+    } catch (e) { /* fall back to the network */ }
+  }
+  const r = await fetch(url, { mode: 'cors', credentials: 'omit' });
+  if (!r.ok) throw new Error('download failed (' + r.status + ')');
+  const total = Number(r.headers.get('content-length') || 0);
+  const reader = r.body.getReader(), parts = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value); got += value.byteLength;
+    if (total) onProgress(Math.min(1, got / total));
+  }
+  const bytes = new Uint8Array(got);
+  let o = 0;
+  for (const p of parts) { bytes.set(p, o); o += p.byteLength; }
+  if (await cwSha256(bytes.buffer) !== a.sha) throw new Error(key + ': checksum mismatch, file refused');
+  if (cache) {
+    try { await cache.put(url, new Response(bytes.slice().buffer, { headers: { 'Content-Type': 'application/octet-stream' } })); }
+    catch (e) { /* cache full: still usable now */ }
+  }
+  onProgress(1);
+  return bytes.buffer;
+}
+
+let cwOrtPromise = null;
+const cwSessions = {};
+const cwLoadState = {};   // model -> 'loading' | 'ready' | 'error'
+
+function cwStatus(model, state, progress, error) {
+  self.postMessage({ type: 'status', model, state, progress, error: error || '' });
+}
+
+function cwGetOrt(progress) {
+  if (!cwOrtPromise) {
+    cwOrtPromise = (async () => {
+      const [js, wasm] = await Promise.all([
+        cwFetchAsset('ort', (p) => progress('ort', p)),
+        cwFetchAsset('wasm', (p) => progress('wasm', p))
+      ]);
+      // The verified bytes are imported from a blob: URL, never straight from the CDN
+      const url = URL.createObjectURL(new Blob([js], { type: 'text/javascript' }));
+      const ort = await import(url);
+      URL.revokeObjectURL(url);
+      ort.env.wasm.wasmBinary = new Uint8Array(wasm);
+      ort.env.wasm.numThreads = 1;    // threads need a cross-origin isolated page
+      ort.env.wasm.proxy = false;
+      return ort;
+    })();
+    cwOrtPromise.catch(() => { cwOrtPromise = null; });
+  }
+  return cwOrtPromise;
+}
+
+async function cwLoadModel(model) {
+  if (cwSessions[model] || cwLoadState[model] === 'loading') return;
+  cwLoadState[model] = 'loading';
+  const parts = { ort: 0, wasm: 0, model: 0 };
+  const weight = { ort: 0.01, wasm: model === 'wide' ? 0.45 : 0.9, model: model === 'wide' ? 0.54 : 0.09 };
+  const progress = (k, p) => {
+    if (cwLoadState[model] !== 'loading') return;   // a late download after a failure
+    parts[k] = p;
+    cwStatus(model, 'loading', parts.ort * weight.ort + parts.wasm * weight.wasm + parts.model * weight.model);
+  };
+  try {
+    progress('ort', 0);
+    const [ort, bytes] = await Promise.all([cwGetOrt(progress), cwFetchAsset(model, (p) => progress('model', p))]);
+    cwSessions[model] = await ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: ['wasm'] });
+    cwSessions[model].ort = ort;
+    cwLoadState[model] = 'ready';
+    cwStatus(model, 'ready', 1);
+    cwPump();
+  } catch (e) {
+    cwLoadState[model] = 'error';
+    cwStatus(model, 'error', 0, String(e && e.message || e));
+  }
+}
+
+async function cwInfer(model, input) {
+  const s = cwSessions[model];
+  const out = await s.run({ [s.inputNames[0]]: new s.ort.Tensor('float32', input.data, input.dims) });
+  const t = out[s.outputNames[0]];
+  return cwCtc(t.data, t.dims);
+}
+
+// ---- Streaming, one state per receiver ----
+const cwCfg = { model: 'narrow', auto: true, pitch: 700 };
+const cwChans = [0, 1].map((idx) => ({
+  idx, enabled: false, buf: new Float32Array(CW_MAX_SEG + 2 * CW_RATE), len: 0,
+  lastRun: 0, lockHz: null, gen: 0, pending: ''
+}));
+let cwBusy = false;
+
+function cwReset(c) { c.len = 0; c.lockHz = null; c.gen++; c.pending = ''; }
+
+// The signal went away or another station took over: keep what was still pending, start a new line
+function cwBreak(c, hz) {
+  self.postMessage({ type: 'text', ch: c.idx, commit: c.pending, pending: '', hz, brk: true });
+  c.pending = '';
+  cwDrop(c, Math.max(0, c.len - CW_DETECT_SEC * CW_RATE));
+}
+
+function cwAppend(c, s) {
+  const cap = c.buf.length;
+  if (s.length >= cap) { c.buf.set(s.subarray(s.length - cap)); c.len = cap; return; }
+  if (c.len + s.length > cap) cwDrop(c, c.len + s.length - cap);   // decoding fell behind: keep the newest
+  c.buf.set(s, c.len);
+  c.len += s.length;
+}
+
+function cwDrop(c, n) {
+  n = Math.min(n, c.len);
+  c.buf.copyWithin(0, n, c.len); c.len -= n;
+}
+
+function cwSplit(spaces, len, nearEnd) {
+  const maxSample = nearEnd ? len : Math.max(CW_MIN_CONFIRMED, len - CW_TAIL_GUARD);
+  for (let i = spaces.length - 1; i >= 0; i--) {
+    const sample = Math.round((spaces[i][0] + spaces[i][1]) / 2 * CW_OUT_HOP);
+    if (sample >= CW_MIN_CONFIRMED && sample <= maxSample) return { sample, endFrame: spaces[i][1] };
+  }
+  return null;
+}
+
+async function cwProcess(c) {
+  const model = cwCfg.model, gen = c.gen;
+  const len = Math.min(c.len, CW_MAX_SEG), audio = c.buf.slice(0, len);
+  let hz = null;
+  if (model === 'narrow') {
+    if (cwCfg.auto) {
+      const det = cwStrongestTone(audio.subarray(Math.max(0, len - CW_DETECT_SEC * CW_RATE)), c.lockHz);
+      if (!det) {
+        // Nothing keyed: keep only the last seconds so a new signal is decoded from its start
+        if (c.lockHz != null) { c.lockHz = null; cwBreak(c, null); return; }
+        cwDrop(c, Math.max(0, c.len - CW_DETECT_SEC * CW_RATE));
+        self.postMessage({ type: 'text', ch: c.idx, commit: null, pending: '', hz: null });
+        return;
+      }
+      if (c.lockHz != null && Math.abs(det.hz - c.lockHz) > 2 * CW_BIN_HZ) {
+        // A different station: decode it from the detection window only
+        c.lockHz = det.hz;
+        cwBreak(c, det.hz);
+        return;
+      }
+      c.lockHz = det.hz;
+      hz = det.hz;
+    } else {
+      hz = cwCfg.pitch;
+    }
+  }
+  const input = model === 'narrow' ? cwNarrowInput(audio, hz) : cwWideInput(audio);
+  if (!input) return;
+  const res = await cwInfer(model, input);
+  if (gen !== c.gen || model !== cwCfg.model) return;   // reset or reconfigured meanwhile
+
+  let split = cwSplit(res.spaces, len, false);
+  if (!split && c.len >= CW_MAX_SEG) split = cwSplit(res.spaces, len, true);
+  let last = res.chars.length - 1;
+  while (last >= 0 && res.chars[last].ch === ' ') last--;
+  const lastSample = last >= 0 ? (res.chars[last].end + 1) * CW_OUT_HOP : 0;
+  if (last < 0 && len > 2 * CW_DETECT_SEC * CW_RATE) {
+    cwDrop(c, len - CW_DETECT_SEC * CW_RATE);   // only noise: do not decode ever longer windows of it
+    c.pending = '';
+    self.postMessage({ type: 'text', ch: c.idx, commit: null, pending: '', hz });
+    return;
+  }
+  if (last >= 0 && len - lastSample >= CW_QUIET) {
+    split = { sample: Math.min(len, lastSample + Math.round(0.5 * CW_RATE)), endFrame: Infinity };
+  }
+  const confirmed = split ? split.sample : (c.len >= CW_MAX_SEG ? CW_MAX_SEG : null);
+  if (confirmed == null || confirmed < CW_MIN_CONFIRMED) {
+    c.pending = cwText(res.chars);
+    self.postMessage({ type: 'text', ch: c.idx, commit: null, pending: c.pending, hz });
+    return;
+  }
+  let commit;
+  if (split) commit = cwText(res.chars, split.endFrame);
+  else {
+    const part = audio.subarray(0, confirmed);
+    const inp = model === 'narrow' ? cwNarrowInput(part, hz) : cwWideInput(part);
+    commit = inp ? cwText((await cwInfer(model, inp)).chars) : '';
+    if (gen !== c.gen || model !== cwCfg.model) return;
+  }
+  cwDrop(c, confirmed);
+  c.pending = '';
+  self.postMessage({ type: 'text', ch: c.idx, commit, pending: '', hz });
+}
+
+async function cwPump() {
+  if (cwBusy || !cwSessions[cwCfg.model]) return;
+  const now = Date.now();
+  const due = cwChans.filter((c) => c.enabled && c.len >= CW_MIN_PENDING && now - c.lastRun >= CW_INTERVAL_MS)
+                     .sort((a, b) => a.lastRun - b.lastRun)[0];
+  if (!due) return;
+  cwBusy = true;
+  due.lastRun = now;
+  const t0 = Date.now();
+  try { await cwProcess(due); }
+  catch (e) { self.postMessage({ type: 'status', model: cwCfg.model, state: 'error', progress: 0, error: String(e && e.message || e) }); }
+  cwBusy = false;
+  self.postMessage({ type: 'perf', ch: due.idx, ms: Date.now() - t0 });
+  setTimeout(cwPump, 0);
+}
+setInterval(cwPump, 250);
+
+self.onmessage = (e) => {
+  const m = e.data;
+  if (m.type === 'audio') {
+    const c = cwChans[m.ch];
+    if (c && c.enabled) cwAppend(c, m.samples);
+  } else if (m.type === 'config') {
+    if (m.cdn) CW_CDN = m.cdn;
+    const changed = m.model !== cwCfg.model || m.auto !== cwCfg.auto || (!m.auto && m.pitch !== cwCfg.pitch);
+    cwCfg.model = m.model; cwCfg.auto = m.auto; cwCfg.pitch = m.pitch;
+    m.enabled.forEach((on, i) => { if (cwChans[i].enabled !== on) { cwChans[i].enabled = on; cwReset(cwChans[i]); } });
+    if (changed) cwChans.forEach(cwReset);
+    if (m.enabled.some(Boolean)) cwLoadModel(cwCfg.model);
+  } else if (m.type === 'reset') {
+    cwReset(cwChans[m.ch]);
+  }
+};
 </script>
 </body>
 </html>
