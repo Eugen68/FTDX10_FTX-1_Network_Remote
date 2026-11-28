@@ -963,13 +963,15 @@ static esp_err_t cat_handler(httpd_req_t *req)
         }
         const char *tx_vfo = st.connected && st.tx_vfo == CAT_TX_VFO_MAIN ? "\"main\"" :
                              st.connected && st.tx_vfo == CAT_TX_VFO_SUB ? "\"sub\"" : "null";
+        char level[8] = "null";
+        if (st.connected && st.scope_level_known) snprintf(level, sizeof(level), "%d", st.scope_level_x10);
         n--;
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"cat_console\":%s,\"tx_voice_source\":%u,\"tx_enabled\":%s,\"tx_cat\":%s,\"tx_radio\":%s,\"tx_radio_known\":%s,"
                       "\"rx_vfo\":%s,\"tx_vfo\":%s,\"write_error_seq\":%lu,\"write_error\":\"%s\","
                       "\"pa_bands\":%u,\"att_max\":%u,\"preamp\":[%d,%d,%d],\"att\":%d,\"rfg\":[%d,%d],\"agc\":[%d,%d],"
                       "\"nb_switch\":%s,\"dnr_max\":%u,\"nb\":[%d,%d],\"nb_level\":[%d,%d],\"dnr\":[%d,%d],"
-                      "\"dnr_level\":[%d,%d],\"dnf\":[%d,%d],\"ifs\":[%s,%s]}",
+                      "\"dnr_level\":[%d,%d],\"dnf\":[%d,%d],\"ifs\":[%s,%s],\"scope_level_x10\":%s}",
                       app_config_cat_console_enabled() ? "true" : "false",
                       (unsigned)st.voice_source, app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
@@ -978,7 +980,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
                       st.rf_gain[0], st.rf_gain[1], st.agc[0], st.agc[1],
                       st.nb_switch ? "true" : "false", st.connected ? st.dnr_max : 0u,
                       st.nb_on[0], st.nb_on[1], st.nb_level[0], st.nb_level[1], st.dnr_on[0], st.dnr_on[1],
-                      st.dnr_level[0], st.dnr_level[1], st.dnf[0], st.dnf[1], ifs[0], ifs[1]);
+                      st.dnr_level[0], st.dnr_level[1], st.dnf[0], st.dnf[1], ifs[0], ifs[1], level);
     }
     return send_json(req, json, n, sizeof(json));
 }
@@ -993,7 +995,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
 //   power   0 | 1 | false | true
 //   preamp  0-2 (with pa_band 0-2 on the FTX-1)   att 0-3   rfg 0-255   agc 0-4   (range checked again in cat.c)
 //   nb, dnr, dnf  0 | 1 | false | true   nb_level 0-10   dnr_level 0-15 (with nb / dnr)   ifs -1200..1200
-//   scope_span 0-9 (FTDX10 scope span, 1 kHz - 1 MHz)
+//   scope_span 0-9 (FTDX10 scope span, 1 kHz - 1 MHz)   scope_level -300..300 (tenths of a dB, steps of 5)
 //   action  "swap" | "copy_main_to_sub" | "copy_sub_to_main"
 //   raw     the CAT LOG console line, e.g. "FA014074000;" (alone; allow-list checked, never transmit)
 // Unknown or repeated keys, escapes, nesting and trailing data are rejected. There is no way to send a
@@ -1022,6 +1024,8 @@ typedef struct {
     int16_t ifs;
     bool has_scope_span;
     uint8_t scope_span;
+    bool has_scope_level;
+    int16_t scope_level;
     bool has_action;
     char action[24];
     bool has_raw;
@@ -1499,6 +1503,12 @@ static bool parse_cat_request(const char *s, cat_req_t *r)
             if (is_text || r->has_scope_span || !token_to_uint(token, 9, &num)) return false;
             r->scope_span = (uint8_t)num;
             r->has_scope_span = true;
+        } else if (strcmp(key, "scope_level") == 0) {
+            // signed tenths of a dB; the range and the 0.5 dB step are checked in cat.c
+            const bool neg = token[0] == '-';
+            if (is_text || r->has_scope_level || !token_to_uint(token + neg, 300, &num)) return false;
+            r->scope_level = (int16_t)(neg ? -(int)num : (int)num);
+            r->has_scope_level = true;
         } else if (strcmp(key, "raw") == 0) {
             if (!is_text || r->has_raw || text[0] == '\0') return false;
             strlcpy(r->raw, text, sizeof(r->raw));
@@ -1702,6 +1712,7 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     if (r.has_dnf) APPLY(cat_set_dnf(r.sub, r.dnf));
     if (r.has_ifs) APPLY(cat_set_if_shift(r.sub, r.ifs));
     if (r.has_scope_span) APPLY(cat_set_scope_span(r.scope_span));
+    if (r.has_scope_level) APPLY(cat_set_scope_level(r.scope_level));
 #undef APPLY
 
     httpd_resp_set_type(req, "application/json");
