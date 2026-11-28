@@ -1995,8 +1995,9 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             }
             if (net_rigctl) send_poll(dev, rig->dual_rx ? "VS;SH0;SH1;" : "VS;SH0;");
             if (rig->can_tx) send_poll(dev, "PC;");      // TX power, shown in the TX panel
-            // OmniRig reads the CW pitch in every cycle; the board answers from this value.
-            if (rig->can_control && app_config_yaesu_enabled()) send_poll(dev, "KP;");
+            // CW pitch (read only): the page's CW decoder decodes this tone (RIG), and OmniRig reads it in
+            // every cycle from the Yaesu CAT server, which answers from this value.
+            if (rig->can_control) send_poll(dev, "KP;");
             if (rig->can_tx && app_config_tx_enabled()) {
                 if (rig->rig == CAT_RIG_FTDX10) {
                     send_poll(dev, "EX010113;EX010114;EX010415;EX010416;");

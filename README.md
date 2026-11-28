@@ -533,8 +533,8 @@ How the board answers:
 - Reads (`ID;`, `FA;`, `FB;`, `IF;`, `OI;`, `MD0;`, `MD1;`, `FT;`, `ST;`, `VS;`, `TX;`, `KP;`, `AI;`, `PS;`,
   `SM0;`, `SH0;` …) are answered from the CAT state the board already keeps, in the connected
   radio's exact format (`IF;` is 28 bytes on the FTDX10 and 30 on the FTX-1). They add no traffic
-  on the radio's CAT port; while the server is enabled the board also reads the CW pitch (`KP;`)
-  every 5 s. Unknown reads get `?;`, as from the radio.
+  on the radio's CAT port. The CW pitch (`KP;`) is read by the board every 5 s anyway (the page's CW
+  decoder uses it, see RIG), whether the server is enabled or not. Unknown reads get `?;`, as from the radio.
 - OmniRig's FTDX10 profile polls `VS;`, `FT;`, `TX;`, `MD0;`, `IF;`, `FA;`, `FB;` and `KP;` in
   every cycle. A wrong reply length there makes OmniRig (and CW Skimmer) flip between on-line
   and off-line.
@@ -716,6 +716,11 @@ listens: it never keys the radio and sends no CAT command.
 - **AUTO** (narrow model): follows the strongest CW tone between 300 and 1200 Hz and shows it next to the title.
   With AUTO off, the tone in **Hz** is decoded, normally the radio's CW pitch (700 Hz by default). Narrow the
   radio's filter around the station for the best copy.
+- **RIG** (on by default, narrow model with AUTO off): the Hz field follows the radio's own CW pitch, which the
+  board reads from the radio (`KP`) every 5 s, so a correctly tuned station is decoded without typing its tone.
+  The field then shows the radio's pitch, greyed out; a pitch change on the radio reaches the decoder within
+  about 5 s, and the text still pending is kept. Until the pitch has been read, or with RIG off, the manual Hz
+  value is used. A tone chosen on the scope still wins over RIG.
 - **Click a signal on the audio scope** of a receiver that uses CW: that receiver decodes the CW signal at that
   audio frequency (with the narrow model), whatever AUTO or Hz say. A cyan band marked `CW 720Hz` shows on the
   scope where the decoder listens (dashed while AUTO follows a tone, solid when chosen by a click), and the tone

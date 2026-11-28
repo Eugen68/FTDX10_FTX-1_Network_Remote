@@ -1457,6 +1457,7 @@
             <button type="button" class="ft8-btn dec-any-cw" id="cwAutoBtn" title="CW, narrow model: follow the strongest CW tone between 300 and 1200 Hz automatically">AUTO</button>
             <label class="ft8-dtcorr-label dec-any-cw" title="CW, narrow model with AUTO off: the audio tone to decode, normally the radio's CW pitch">Hz
               <input type="number" class="ft8-dtcorr cw-pitch" id="cwPitch" min="300" max="1200" step="10" value="700"></label>
+            <button type="button" class="ft8-btn dec-any-cw" id="cwRigBtn" title="CW, narrow model with AUTO off: decode the radio's CW pitch (read from the radio)">RIG</button>
             <span class="ft8-dtcorr-label dec-any-cw" id="cwStatus" role="status" title="The CW decoder runtime and model are downloaded from cdn.jsdelivr.net on first use, checked and kept by the browser">OFF</span>
             <button type="button" class="ft8-btn dec-ft8" id="ft8ClearBtnMain">CLEAR</button>
             <button type="button" class="ft8-btn dec-cw" id="cwClearBtnMain">CLEAR</button>
@@ -5106,6 +5107,7 @@ async function smPoll() {
     catTxVfo = d.connected ? (d.tx_vfo || null) : null;
     const prevRxVfo = catRxVfo;
     catRxVfo = d.connected ? (d.rx_vfo || null) : null;
+    if (cwReady) cwSetRadioPitch(d.connected ? d.key_pitch_hz : null);
     updateSplitButtons();
     if (prevRxVfo !== catRxVfo && singleRx() && prevRxVfo && catRxVfo) panelVfoChanged();
     const recovery = document.getElementById('catRecoveryStatus');
@@ -5727,18 +5729,20 @@ var cwReady = false;
 const CW_SAMPLE_RATE = 9600;
 const CW_PREFS_KEY = 'ftx1.cw';
 const CW_MAX_TEXT = 6000;   // characters kept per panel
-const cwSettings = { model: 'narrow', auto: true, pitch: 700, on: [false, false] };
+const cwSettings = { model: 'narrow', auto: true, pitch: 700, rig: true, on: [false, false] };
 try {
   const saved = JSON.parse(localStorage.getItem(CW_PREFS_KEY) || '{}');
   if (saved.model === 'narrow' || saved.model === 'wide') cwSettings.model = saved.model;
   if (typeof saved.auto === 'boolean') cwSettings.auto = saved.auto;
   if (saved.pitch >= 300 && saved.pitch <= 1200) cwSettings.pitch = Math.round(saved.pitch);
+  if (typeof saved.rig === 'boolean') cwSettings.rig = saved.rig;
   if (Array.isArray(saved.on)) cwSettings.on = [saved.on[0] === true, saved.on[1] === true];
 } catch (e) {}
 
 const cwModelSel = document.getElementById('cwModel');
 const cwAutoBtn = document.getElementById('cwAutoBtn');
 const cwPitchInput = document.getElementById('cwPitch');
+const cwRigBtn = document.getElementById('cwRigBtn');
 const cwStatusEl = document.getElementById('cwStatus');
 const cwChans = ['Main', 'Sub'].map((name, idx) => {
   const box = document.getElementById('cwText' + name);
@@ -5885,13 +5889,36 @@ function cwTrackRx() {
 }
 // ---- end of the QSY tracking
 
+// ---- RIG: the Hz field follows the radio's CW pitch (KP, read by the board every 5 s, GET /cat key_pitch_hz).
+// The manual value in cwSettings.pitch stays for RIG off.
+var cwRadioPitch = null;   // var: smPoll may call cwSetRadioPitch at any time
+
+function cwEffectivePitch() {
+  return cwSettings.rig && cwRadioPitch ? cwRadioPitch : cwSettings.pitch;
+}
+
+function cwSetRadioPitch(hz) {
+  hz = Number.isInteger(hz) && hz >= 300 && hz <= 1200 ? hz : null;
+  if (hz === cwRadioPitch) return;
+  const before = cwEffectivePitch();
+  cwRadioPitch = hz;
+  if (cwEffectivePitch() !== before) cwApply();
+}
+// ---- end of RIG
+
 function cwApply() {
   cwModelSel.value = cwSettings.model;
   cwAutoBtn.classList.toggle('active', cwSettings.auto);
-  cwPitchInput.value = cwSettings.pitch;
+  const fromRig = cwSettings.rig && cwRadioPitch;
+  cwPitchInput.value = cwEffectivePitch();
+  cwPitchInput.title = fromRig ? 'From the radio (KP)'
+    : cwSettings.rig ? 'Radio pitch not read yet: this manual value is used'
+    : "CW, narrow model with AUTO off: the audio tone to decode, normally the radio's CW pitch";
+  cwRigBtn.classList.toggle('active', cwSettings.rig);
   const narrow = cwSettings.model === 'narrow';
   cwAutoBtn.disabled = !narrow;
-  cwPitchInput.disabled = !narrow || cwSettings.auto;
+  cwRigBtn.disabled = !narrow;
+  cwPitchInput.disabled = !narrow || cwSettings.auto || !!fromRig;
   cwChans.forEach((c) => {
     if (!cwSettings.on[c.idx]) {
       c.pendingEl.textContent = '';
@@ -5906,7 +5933,7 @@ function cwApply() {
   if (!cwSettings.on.some(Boolean)) cwStatusEl.textContent = 'OFF';
   else if (cwStatusEl.textContent === 'OFF') { cwStatusEl.textContent = 'LOADING'; Object.assign(cwState, { kind: 'loading', progress: 0 }); }
   cwGetWorker().postMessage({ type: 'config', model: cwSettings.model, auto: cwSettings.auto,
-                              pitch: cwSettings.pitch, enabled: cwSettings.on.slice() });
+                              pitch: cwEffectivePitch(), enabled: cwSettings.on.slice() });
 }
 
 function cwSave() {
@@ -5926,6 +5953,7 @@ cwAutoBtn.addEventListener('click', () => {
   cwChans.forEach((c) => cwSetTone(c.idx, null));
   cwSave(); cwApply();
 });
+cwRigBtn.addEventListener('click', () => { cwSettings.rig = !cwSettings.rig; cwSave(); cwApply(); });
 cwPitchInput.addEventListener('change', () => {
   const v = Math.round(Number(cwPitchInput.value) / 10) * 10;
   if (v >= 300 && v <= 1200) cwSettings.pitch = v;
@@ -7119,6 +7147,16 @@ let cwBusy = false;
 
 function cwReset(c) { c.len = 0; c.lockHz = null; c.gen++; c.pending = ''; }
 
+// Start the receiver over without losing text: confirm what was pending (on a new line), then drop the
+// audio and any decode running on it. QSY always starts a new line; a settings change only when text was
+// pending (the pitch can change from the radio during a reception).
+function cwRestart(c, newLine) {
+  if (newLine || c.pending) {
+    self.postMessage({ type: 'text', ch: c.idx, commit: c.pending, pending: '', hz: null, brk: true });
+  }
+  cwReset(c);
+}
+
 // The signal went away or another station took over: keep what was still pending, start a new line
 function cwBreak(c, hz) {
   self.postMessage({ type: 'text', ch: c.idx, commit: c.pending, pending: '', hz, brk: true });
@@ -7241,7 +7279,7 @@ self.onmessage = (e) => {
     const changed = m.model !== cwCfg.model || m.auto !== cwCfg.auto || (!m.auto && m.pitch !== cwCfg.pitch);
     cwCfg.model = m.model; cwCfg.auto = m.auto; cwCfg.pitch = m.pitch;
     m.enabled.forEach((on, i) => { if (cwChans[i].enabled !== on) { cwChans[i].enabled = on; cwReset(cwChans[i]); } });
-    if (changed) cwChans.forEach(cwReset);
+    if (changed) cwChans.forEach((c) => cwRestart(c, false));
     if (m.enabled.some(Boolean)) cwLoadModel(cwCfg.model);
   } else if (m.type === 'reset') {
     cwReset(cwChans[m.ch]);
@@ -7252,8 +7290,7 @@ self.onmessage = (e) => {
     const c = cwChans[m.ch];
     if (!c) return;
     c.fixedHz = null;
-    self.postMessage({ type: 'text', ch: c.idx, commit: c.pending, pending: '', hz: null, brk: true });
-    cwReset(c);
+    cwRestart(c, true);
   } else if (m.type === 'tone') {
     // A tone chosen on the scope (or null: back to AUTO / Hz): keep what was pending, start a new line
     const c = cwChans[m.ch];
