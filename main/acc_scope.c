@@ -141,7 +141,9 @@ static void acc_task(void *arg)
             const size_t len = done->trans_len / 8;
             cat_state_t st;
             cat_get_state(&st);
-            const uint32_t cat_hz = (st.connected && st.rig == CAT_RIG_FTDX10) ? st.freq_main : 0;
+            // The radio's scope follows the active VFO (A/B), so compare with that one
+            const uint32_t cat_hz = !(st.connected && st.rig == CAT_RIG_FTDX10) ? 0
+                                  : st.rx_vfo_known && st.rx_vfo_sub ? st.freq_sub : st.freq_main;
             const acc_reject_t why = acc_parse_frame(s_bufs[i], len, cat_hz, now_ms, &s_last_cat_match_ms, &row);
             queue_buf(i);                    // hand the buffer back before the slower bookkeeping
             xSemaphoreTake(s_lock, portMAX_DELAY);

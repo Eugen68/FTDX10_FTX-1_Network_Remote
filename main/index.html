@@ -615,6 +615,12 @@
   .fe-select { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit;
                font-size: .62rem; padding: .1rem .15rem; min-width: 4.2rem; }
   .fe-select:disabled { opacity: .45; }
+  body.single-rx .sub-card { display: none; }
+  body.single-rx .rig-body-grid { grid-template-columns: 270px minmax(420px, 1fr); }
+  .main-card.focus-b { border-color: #10b981; box-shadow: 0 0 0 1px #10b981 inset; }
+  .main-card.focus-b .card-title { color: #10b981; }
+  .vfd-bezel.vfo-active { box-shadow: 0 0 0 2px #22c55e inset; }
+  @media (max-width: 1020px) { body.single-rx .rig-body-grid { grid-template-columns: 1fr; } }
   body.single-rx .scope-pair, body.single-rx .screen-meters { grid-template-columns: 1fr; }
   .ft8-panel {
     background: #0b1120;
@@ -1079,7 +1085,7 @@
     <!-- LEFT: MAIN Controls Card -->
     <div class="control-card main-card">
       <div class="card-title">
-        <span>MAIN VFO-A</span>
+        <span id="cardTitleMain">MAIN VFO-A</span>
         <select id="modeSelectMain" title="MAIN mode">
           <option value="LSB">LSB</option>
           <option value="USB">USB</option>
@@ -1104,42 +1110,42 @@
       <!-- Band Buttons (wavelength labels) -->
       <div class="button-group-label">BAND:</div>
       <div class="band-grid" id="bandBtnsMain">
-        <button type="button" class="rig-btn" onclick="setBand(false, 1910000, 'LSB')">160m</button>
-        <button type="button" class="rig-btn" onclick="setBand(false, 3500000, 'LSB')">80m</button>
-        <button type="button" class="rig-btn" onclick="setBand(false, 7074000, 'LSB')">40m</button>
-        <button type="button" class="rig-btn" onclick="setBand(false, 10136000, 'USB')">30m</button>
-        <button type="button" class="rig-btn" onclick="setBand(false, 14074000, 'USB')">20m</button>
-        <button type="button" class="rig-btn" onclick="setBand(false, 18100000, 'USB')">17m</button>
-        <button type="button" class="rig-btn" onclick="setBand(false, 21074000, 'USB')">15m</button>
-        <button type="button" class="rig-btn" onclick="setBand(false, 24915000, 'USB')">12m</button>
-        <button type="button" class="rig-btn" onclick="setBand(false, 28074000, 'USB')">10m</button>
-        <button type="button" class="rig-btn" onclick="setBand(false, 50313000, 'USB')">6m</button>
-        <button type="button" class="rig-btn" onclick="setBand(false, 145000000, 'FM')">2m</button>
-        <button type="button" class="rig-btn" onclick="setBand(false, 433000000, 'FM')">70cm</button>
+        <button type="button" class="rig-btn" onclick="setBand(panelB(), 1910000, 'LSB')">160m</button>
+        <button type="button" class="rig-btn" onclick="setBand(panelB(), 3500000, 'LSB')">80m</button>
+        <button type="button" class="rig-btn" onclick="setBand(panelB(), 7074000, 'LSB')">40m</button>
+        <button type="button" class="rig-btn" onclick="setBand(panelB(), 10136000, 'USB')">30m</button>
+        <button type="button" class="rig-btn" onclick="setBand(panelB(), 14074000, 'USB')">20m</button>
+        <button type="button" class="rig-btn" onclick="setBand(panelB(), 18100000, 'USB')">17m</button>
+        <button type="button" class="rig-btn" onclick="setBand(panelB(), 21074000, 'USB')">15m</button>
+        <button type="button" class="rig-btn" onclick="setBand(panelB(), 24915000, 'USB')">12m</button>
+        <button type="button" class="rig-btn" onclick="setBand(panelB(), 28074000, 'USB')">10m</button>
+        <button type="button" class="rig-btn" onclick="setBand(panelB(), 50313000, 'USB')">6m</button>
+        <button type="button" class="rig-btn" onclick="setBand(panelB(), 145000000, 'FM')">2m</button>
+        <button type="button" class="rig-btn" onclick="setBand(panelB(), 433000000, 'FM')">70cm</button>
       </div>
 
       <!-- Quick Mode Buttons -->
       <div class="button-group-label">MODE:</div>
       <div class="mode-grid" id="modeBtnsMain">
-        <button type="button" class="rig-btn" data-mode="LSB" onclick="setMode(false, 'LSB')">LSB</button>
-        <button type="button" class="rig-btn" data-mode="USB" onclick="setMode(false, 'USB')">USB</button>
-        <button type="button" class="rig-btn" data-mode="CW-U CW-L" onclick="setCwMode(false)">CW</button>
-        <button type="button" class="rig-btn" data-mode="AM" onclick="setMode(false, 'AM')">AM</button>
-        <button type="button" class="rig-btn" data-mode="FM" onclick="setMode(false, 'FM')">FM</button>
-        <button type="button" class="rig-btn" data-mode="DATA-LSB" onclick="setMode(false, 'DATA-LSB')">DATA-L</button>
-        <button type="button" class="rig-btn" data-mode="DATA-USB" onclick="setMode(false, 'DATA-USB')">DATA-U</button>
-        <button type="button" class="rig-btn" data-mode="DATA-FM" onclick="setMode(false, 'DATA-FM')">DATA-F</button>
-        <button type="button" class="rig-btn" data-mode="RTTY-USB" onclick="setMode(false, 'RTTY-USB')">RTTY</button>
-        <button type="button" class="rig-btn" data-mode="PSK" onclick="setMode(false, 'PSK')">PSK</button>
-        <button type="button" class="rig-btn" data-mode="C4FM-DN" onclick="setMode(false, 'C4FM-DN')">C4FM-DN</button>
-        <button type="button" class="rig-btn" data-mode="C4FM-VW" onclick="setMode(false, 'C4FM-VW')">C4FM-VW</button>
+        <button type="button" class="rig-btn" data-mode="LSB" onclick="setMode(panelB(), 'LSB')">LSB</button>
+        <button type="button" class="rig-btn" data-mode="USB" onclick="setMode(panelB(), 'USB')">USB</button>
+        <button type="button" class="rig-btn" data-mode="CW-U CW-L" onclick="setCwMode(panelB())">CW</button>
+        <button type="button" class="rig-btn" data-mode="AM" onclick="setMode(panelB(), 'AM')">AM</button>
+        <button type="button" class="rig-btn" data-mode="FM" onclick="setMode(panelB(), 'FM')">FM</button>
+        <button type="button" class="rig-btn" data-mode="DATA-LSB" onclick="setMode(panelB(), 'DATA-LSB')">DATA-L</button>
+        <button type="button" class="rig-btn" data-mode="DATA-USB" onclick="setMode(panelB(), 'DATA-USB')">DATA-U</button>
+        <button type="button" class="rig-btn" data-mode="DATA-FM" onclick="setMode(panelB(), 'DATA-FM')">DATA-F</button>
+        <button type="button" class="rig-btn" data-mode="RTTY-USB" onclick="setMode(panelB(), 'RTTY-USB')">RTTY</button>
+        <button type="button" class="rig-btn" data-mode="PSK" onclick="setMode(panelB(), 'PSK')">PSK</button>
+        <button type="button" class="rig-btn" data-mode="C4FM-DN" onclick="setMode(panelB(), 'C4FM-DN')">C4FM-DN</button>
+        <button type="button" class="rig-btn" data-mode="C4FM-VW" onclick="setMode(panelB(), 'C4FM-VW')">C4FM-VW</button>
       </div>
 
       <!-- Rotary Dial Knob -->
       <div class="dial-section">
-        <button class="dial-btn" type="button" title="Frequency down" onclick="stepFreq(false, -getStep(false))">◀</button>
+        <button class="dial-btn" type="button" title="Frequency down" onclick="stepFreq(panelB(), -getStep(panelB()))">◀</button>
         <svg class="dial-svg" id="dialMain" viewBox="0 0 100 100" role="slider" aria-label="MAIN Dial"></svg>
-        <button class="dial-btn" type="button" title="Frequency up" onclick="stepFreq(false, +getStep(false))">▶</button>
+        <button class="dial-btn" type="button" title="Frequency up" onclick="stepFreq(panelB(), +getStep(panelB()))">▶</button>
       </div>
 
       <!-- Step Selection -->
@@ -2438,7 +2444,7 @@ function makeScope(name, idx) {
     }
     freqLines(0, specH, 'rgba(71, 85, 105, 0.8)');
     drawPeak(fData, maxBin, w, specH, 0, 255,
-             `audio:${currentAudioRate}:${sc.spanHz}:${sc.lastMode}:${idx ? curFreqSub : curFreqMain}`, now);
+             `audio:${currentAudioRate}:${sc.spanHz}:${sc.lastMode}:${rxFreq(idx)}`, now);
 
     sctx.beginPath();
     sctx.moveTo(0, specH);
@@ -3239,8 +3245,8 @@ function recSave(idx) {
   if (!samples) { btn.title = 'Audio stream has not started yet'; return; }
   const t = new Date(), z = (n) => String(n).padStart(2, '0');
   const stamp = t.getFullYear() + z(t.getMonth() + 1) + z(t.getDate()) + '_' + z(t.getHours()) + z(t.getMinutes()) + z(t.getSeconds());
-  const hz = idx ? curFreqSub : curFreqMain;
-  const mode = (idx ? modeBadgeSub : modeBadgeMain).textContent;
+  const hz = rxFreq(idx);
+  const mode = rxMode(idx);
   const name = 'ftx1_' + (idx ? 'sub' : 'main') + '_' + stamp + (hz > 0 ? '_' + (hz / 1e6).toFixed(3) + 'MHz' : '') + '_' + mode + '.wav';
   const url = URL.createObjectURL(encodeWav16(samples, recRate));
   const a = document.createElement('a');
@@ -3273,8 +3279,8 @@ function defaultSpanForMode(mode) {
   return 3500;
 }
 function followModeSpan() {
-  [modeBadgeMain, modeBadgeSub].forEach((badge, i) => {
-    const mode = badge.textContent;
+  [0, 1].forEach((i) => {
+    const mode = rxMode(i);
     if (mode === scopes[i].lastMode) return;
     scopes[i].lastMode = mode;
     const key = i ? 'spanSub' : 'spanMain';
@@ -3310,9 +3316,12 @@ function refreshStep(sub, mode = (sub ? modeBadgeSub : modeBadgeMain).textConten
 function initStepSelect(sub) {
   const side = sub ? 'Sub' : 'Main';
   document.getElementById('stepSel' + side).addEventListener('change', (e) => {
-    const mode = (sub ? modeBadgeSub : modeBadgeMain).textContent;
-    queueUiPref('step' + side + stepGroup(mode), Number(e.target.value));
-    refreshStep(sub);
+    // FTDX10 with VFO-B active: the MAIN panel works on VFO-B (panelVfo is not defined in the host test)
+    const vfo = typeof panelVfo === 'function' ? panelVfo(sub) : sub;
+    const mode = (vfo ? modeBadgeSub : modeBadgeMain).textContent;
+    queueUiPref('step' + (vfo ? 'Sub' : 'Main') + stepGroup(mode), Number(e.target.value));
+    refreshStep(vfo);
+    if (typeof renderPanel === 'function') renderPanel();
   });
   refreshStep(sub);
 }
@@ -3513,6 +3522,7 @@ function updateModeButtons(sub, mode) {
   btns.forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.mode.split(' ').includes(mode));
   });
+  if (typeof renderPanel === 'function') renderPanel();
 }
 
 async function setMode(sub, mode) {
@@ -3610,7 +3620,8 @@ function makeVfoDial(svgId, sub) {
     const steps = Math.trunc(angleAcc / DEG_PER_STEP);
     if (steps !== 0) {
       angleAcc -= steps * DEG_PER_STEP;
-      stepFreq(sub, steps * getStep(sub));
+      const target = typeof sub === 'function' ? sub() : sub;   // MAIN dial: the active VFO (FTDX10 A/B)
+      stepFreq(target, steps * getStep(target));
     }
   }
 
@@ -3636,7 +3647,7 @@ function makeVfoDial(svgId, sub) {
   }, { passive: false });
 }
 
-makeVfoDial('dialMain', false);
+makeVfoDial('dialMain', () => panelB());
 makeVfoDial('dialSub', true);
 
 // Mini Knob Component for AF GAIN (Volume) and Squelch
@@ -4106,6 +4117,64 @@ function resetChannelAudio(idx) {
   scopes[idx].clearWaterfall();
 }
 
+// FTDX10 (one receiver): the A/B key (VS) selects the VFO the radio receives and transmits on. The MAIN panel
+// then shows and changes that VFO; the VFO-B card is hidden. The FTX-1 keeps its MAIN and SUB cards.
+// Function declarations (hoisted): updateModeButtons may call renderPanel while the page script still loads.
+function singleRx() { return document.body.classList.contains('single-rx'); }
+function panelB() { return singleRx() && catRxVfo === 'sub'; }
+function panelVfo(sub) { return sub || panelB(); }
+// The receiver's frequency and mode for channel idx (0 = what the radio plays on MAIN)
+function rxFreq(idx) { return (idx || panelB()) ? curFreqSub : curFreqMain; }
+function rxMode(idx) { return ((idx || panelB()) ? modeBadgeSub : modeBadgeMain).textContent; }
+var panelShownB = null;
+
+function renderPanel() {
+  try {
+    renderPanelNow();
+  } catch (e) {
+    if (!(e instanceof ReferenceError)) throw e;   // called before the page script finished loading
+  }
+}
+
+function renderPanelNow() {
+  const single = singleRx(), b = panelB();
+  const card = document.querySelector('.main-card');
+  card.classList.toggle('focus-b', b);
+  document.getElementById('cardTitleMain').textContent = single ? (b ? 'VFO-B (A/B)' : 'VFO-A') : 'MAIN VFO-A';
+  document.getElementById('vfdBezelMain').classList.toggle('vfo-active', single && !b && catRxVfo === 'main');
+  document.getElementById('vfdBezelSub').classList.toggle('vfo-active', b);
+  const swap = document.getElementById('btnSwapVfo');
+  swap.innerHTML = single ? '<span class="vfo-op-icon">&#8645;</span> A / B' : '<span class="vfo-op-icon">&#8596;</span> SWAP (A &#8596; B)';
+  // FTDX10: CAT VS moved the display but left the receiver on the old frequency, so A / B swaps the VFOs (SV)
+  swap.title = single ? 'A / B: swap VFO-A and VFO-B (SV). You hear the other frequency, and VFO-A, which remote PTT uses, takes it'
+                      : 'Swap frequency and mode between MAIN and SUB (SV;)';
+  if (!b) {
+    if (panelShownB) {                 // back to VFO-A: repaint the panel with A's mode and step
+      panelShownB = false;
+      updateModeButtons(false, modeBadgeMain.textContent);
+      if (document.activeElement !== modeSelectMain) modeSelectMain.value = modeBadgeMain.textContent;
+    }
+    panelShownB = false;
+    return;
+  }
+  panelShownB = true;
+  // VFO-B active: paint the MAIN panel with B's mode and step
+  const mode = modeBadgeSub.textContent;
+  document.querySelectorAll('#modeBtnsMain .rig-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.mode.split(' ').includes(mode));
+  });
+  if (document.activeElement !== modeSelectMain) modeSelectMain.value = mode;
+  document.getElementById('stepGroupMain').textContent = stepGroup(mode);
+  document.getElementById('stepSelMain').value = String(getStep(true, mode));
+  if (!isUserEditingMain && !freqMainInput.value && curFreqSub > 0) freqMainInput.placeholder = (curFreqSub / 1e6).toFixed(3);
+}
+
+// The receiver moved to the other VFO: what MAIN plays (audio, FT8, scope) changes, so start them over
+function panelVfoChanged() {
+  resetChannelAudio(0);
+  renderPanel();
+}
+
 document.getElementById('btnSwapVfo').addEventListener('click', () => {
   resetChannelAudio(0);
   resetChannelAudio(1);
@@ -4202,7 +4271,7 @@ vfoFontSelect.addEventListener('change', () => {
   queueUiPref('font', selected);
 });
 
-modeSelectMain.addEventListener('change', () => setMode(false, modeSelectMain.value));
+modeSelectMain.addEventListener('change', () => setMode(panelB(), modeSelectMain.value));
 modeSelectSub.addEventListener('change', () => setMode(true, modeSelectSub.value));
 
 function handleFreqWheel(e, sub) {
@@ -4222,7 +4291,7 @@ document.getElementById('formFreqMain').addEventListener('submit', (e) => {
   e.preventDefault();
   const hz = parseFreqInput(freqMainInput.value);
   if (hz > 0) {
-    setFreq(false, hz);
+    setFreq(panelB(), hz);
     freqMainInput.value = '';
     freqMainInput.blur();
   }
@@ -4787,8 +4856,10 @@ async function smPoll() {
     const now = Date.now();
     applyRigProfile(d);
     catTxVfo = d.connected ? (d.tx_vfo || null) : null;
+    const prevRxVfo = catRxVfo;
     catRxVfo = d.connected ? (d.rx_vfo || null) : null;
     updateSplitButtons();
+    if (prevRxVfo !== catRxVfo && singleRx() && prevRxVfo && catRxVfo) panelVfoChanged();
     const recovery = document.getElementById('catRecoveryStatus');
     const resetCount = Number.isInteger(d.cat_usb_resets) ? d.cat_usb_resets : 0;
     const recoveryText = !d.connected && d.waiting_for_cat
@@ -4870,6 +4941,7 @@ async function smPoll() {
       notchSub.apply(d.notch_sub, d.notch_hz_sub);
       feApply(d);
       nrApply(d);
+      renderPanel();
     } else {
       radioBusy = false;
       ledCat.classList.remove('on-green');
@@ -5066,7 +5138,7 @@ function runFt8Decode(f, utcDate, periodSec) {
 
   const slotStartMs = Math.floor(utcDate.getTime() / (FT8_PERIOD_SEC * 1000)) * (FT8_PERIOD_SEC * 1000);
   const utc = new Date(slotStartMs).toISOString().substr(11, 8);
-  ft8GetWorker().postMessage({ idx: f.idx, utc, dialHz: f.idx === 0 ? curFreqMain : curFreqSub, audio }, [audio.buffer]);
+  ft8GetWorker().postMessage({ idx: f.idx, utc, dialHz: rxFreq(f.idx), audio }, [audio.buffer]);
 }
 
 // FT8 messages come off the air, so they are untrusted: escape everything that is put into markup

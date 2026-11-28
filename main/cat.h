@@ -234,6 +234,18 @@ esp_err_t cat_set_if_shift(bool sub, int hz);
 esp_err_t cat_set_scope_span(uint8_t code);
 
 /**
+ * FTDX10 (one receiver): MD0 / MD1 answer for the active VFO and the other one, so mode_main / mode_sub hold
+ * the active VFO's mode first. True when VFO-B is active, i.e. mode_main is B's mode and mode_sub is A's.
+ */
+static inline bool cat_modes_swapped(const cat_state_t *s)
+{
+    return !s->dual_rx && s->rx_vfo_known && s->rx_vfo_sub;
+}
+
+/** @brief Set the mode of VFO-A or VFO-B, whichever is active (the FTDX10's MD0 / MD1 are relative) */
+esp_err_t cat_set_vfo_mode(bool vfo_b, const char *mode_name);
+
+/**
  * @brief Set frequency in Hz
  * @param sub true for SUB (VFO-B), false for MAIN (VFO-A)
  * @param freq_hz Frequency in Hz within the radio's range (FTX-1 30 kHz - 470 MHz, FTDX10 30 kHz - 75 MHz);
