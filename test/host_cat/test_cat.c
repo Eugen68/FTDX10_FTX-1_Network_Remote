@@ -652,6 +652,8 @@ int main(void) {
     use("0761");
     CHECK(ok("SS0500000;") && ok("SS0590000;") && !ok("SS05A0000;") && !ok("SS0560001;"), "FTDX10 scope span");
     CHECK(!ok("SS05;") && !ok("SS0000000;") && !ok("SS0630000;") && !ok("SS1560000;"), "FTDX10 other SS items refused");
+    CHECK(ok("SS04;") && ok("SS04+20.0;") && ok("SS04-30.0;") && ok("SS04+00.5;") && !ok("SS04+30.5;") &&
+          !ok("SS04+20.3;") && !ok("SS04 20.0;") && !ok("SS04+2.00;") && !ok("SS14+20.0;"), "FTDX10 scope LEVEL");
     use("0840");
     CHECK(!ok("SS0560000;"), "FTX-1: no scope span command here");
 
@@ -707,6 +709,18 @@ int main(void) {
     g_queue_send_hook = capture_cat_item;
     CHECK(cat_set_scope_span(6) == ESP_OK && strcmp(queued_rigctl.cmd, "SS0560000;") == 0, "ftdx10 100 kHz span");
     CHECK(cat_set_scope_span(10) == ESP_ERR_INVALID_ARG, "span code range");
+    CHECK(cat_set_scope_level(-55) == ESP_OK && strcmp(queued_rigctl.cmd, "SS04-05.5;") == 0, "level -5.5 dB");
+    CHECK(cat_set_scope_level(300) == ESP_OK && strcmp(queued_rigctl.cmd, "SS04+30.0;") == 0, "level +30 dB");
+    CHECK(cat_set_scope_level(301) == ESP_ERR_INVALID_ARG && cat_set_scope_level(-12) == ESP_ERR_INVALID_ARG, "level range/step");
+    {
+        cat_state_t lv;
+        handle_cat_packet("SS04+20.0;");
+        cat_get_state(&lv);
+        CHECK(lv.scope_level_known && lv.scope_level_x10 == 200, "level answer +20.0");
+        handle_cat_packet("SS04-07.5;");
+        cat_get_state(&lv);
+        CHECK(lv.scope_level_x10 == -75, "level answer -7.5");
+    }
     g_queue_send_hook = NULL;
     use("0840");
 

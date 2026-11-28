@@ -72,6 +72,8 @@ typedef struct {
     int8_t dnf[2];            /*!< Auto notch (DNF) per receiver; -1 unread */
     int16_t if_shift[2];      /*!< IF shift in Hz, -1200..+1200 */
     bool if_shift_known[2];
+    int16_t scope_level_x10;  /*!< FTDX10 scope LEVEL in tenths of a dB (-300 .. 300) */
+    bool scope_level_known;
     bool tx_cat;
     bool tx_radio;
     bool tx_radio_known;
@@ -244,6 +246,9 @@ esp_err_t cat_set_if_shift(bool sub, int hz);
 /** @brief FTDX10 scope span (CAT "SS05"): 0 1 kHz, 1 2k, 2 5k, 3 10k, 4 20k, 5 50k, 6 100k, 7 200k, 8 500k, 9 1 MHz.
  *  The ACC scope frames report the span the radio uses. */
 esp_err_t cat_set_scope_span(uint8_t code);
+
+/** @brief FTDX10 scope LEVEL (CAT "SS04"), in tenths of a dB: -300 .. +300 in steps of 5 (0.5 dB) */
+esp_err_t cat_set_scope_level(int tenths);
 
 /**
  * FTDX10 (one receiver): MD0 / MD1 answer for the active VFO and the other one, so mode_main / mode_sub hold

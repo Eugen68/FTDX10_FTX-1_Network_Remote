@@ -267,7 +267,7 @@ static const rig_profile_t s_profiles[] = {
         .ex_data_out = "010413",      // RADIO SETTING / MODE PSK/DATA / DATA OUT LEVEL
         .poll_fast = "RM1;",
         .poll_status = "BY;TX;",
-        .sync_all = "FA;FB;MD0;MD1;AG0;SQ0;BP00;BP01;",
+        .sync_all = "FA;FB;MD0;MD1;AG0;SQ0;BP00;BP01;SS04;",
         .sync_frontend = "PA0;RA0;RG0;GT0;",
         .pa_bands = 1, .att_max = 3,
         .sync_noise = "NB0;NL0;NR0;RL0;BC0;IS0;",
@@ -583,6 +583,17 @@ static bool is_mode_code(const rig_profile_t *rig, char c)
     return false;
 }
 
+/** FTDX10 scope LEVEL as P3-P7: sign, two digits, '.', 0 or 5 (-30.0 .. +30.0 dB in 0.5 dB steps) */
+static bool scope_level_valid(const char *s)
+{
+    if ((s[0] != '+' && s[0] != '-') || !isdigit((unsigned char)s[1]) || !isdigit((unsigned char)s[2]) ||
+        s[3] != '.' || (s[4] != '0' && s[4] != '5')) {
+        return false;
+    }
+    const int whole = (s[1] - '0') * 10 + (s[2] - '0');
+    return whole < 30 || (whole == 30 && s[4] == '0');
+}
+
 /** One complete command: two upper-case letters, its parameters and the closing ';' (len includes it) */
 static bool cat_cmd_allowed(const char *c, size_t len)
 {
@@ -706,9 +717,17 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         return ctl && rig->dnr_max && is_rx_side(rig, p[0]) &&
                (pl == 1 || (pl == 7 && p[1] == '0' && (p[2] == '+' || p[2] == '-') && all_digits(p + 3, 4) &&
                             digits_value(p + 3, 4) <= 1200 && digits_value(p + 3, 4) % 20 == 0));
-    case CAT_TWO('S', 'S'):         // spectrum scope: only P2 = 5 (SPAN) 0-9 (1 kHz - 1 MHz), P4-P7 fixed 0
-        return ctl && rig->scope_span && pl == 7 && p[0] == '0' && p[1] == '5' && p[2] >= '0' && p[2] <= '9' &&
-               memcmp(p + 3, "0000", 4) == 0;
+    case CAT_TWO('S', 'S'):         // spectrum scope (FTDX10): only SPAN (P2 = 5) and LEVEL (P2 = 4)
+        if (!ctl || !rig->scope_span || p[0] != '0') {
+            return false;
+        }
+        if (pl == 2) {
+            return p[1] == '4';                      // read the LEVEL
+        }
+        if (pl == 7 && p[1] == '5') {                // SPAN 0-9 (1 kHz - 1 MHz), P4-P7 fixed 0
+            return p[2] >= '0' && p[2] <= '9' && memcmp(p + 3, "0000", 4) == 0;
+        }
+        return pl == 7 && p[1] == '4' && scope_level_valid(p + 2);   // LEVEL -30.0 .. +30.0 dB
     case CAT_TWO('B', 'P'): {       // manual notch: kind 0 = ON/OFF, kind 1 = frequency in 10 Hz steps
         if (!ctl) {
             return false;
@@ -1036,6 +1055,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_state.width_code[0] = s_state.width_code[1] = -1;
         s_state.key_pitch = -1;
         frontend_unread();
+        s_state.scope_level_known = false;
         s_last_ptt_status_us = 0;
         s_ptt_mode = 0;
         s_state.tx_cat = false;
@@ -1486,6 +1506,15 @@ static void handle_cat_packet(const char *pkt)
         xSemaphoreGive(s_lock);
         return;
     }
+    if (pkt[0] == 'S' && s_rig->scope_span && strncmp(pkt, "SS04", 4) == 0 && strlen(pkt) == 10 &&
+        pkt[9] == ';' && scope_level_valid(pkt + 4) && xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+        const int tenths = ((pkt[5] - '0') * 10 + (pkt[6] - '0')) * 10 + (pkt[8] - '0');
+        s_state.scope_level_x10 = (int16_t)(pkt[4] == '-' ? -tenths : tenths);
+        s_state.scope_level_known = true;
+        s_last_answer_us = now_pkt_us;
+        xSemaphoreGive(s_lock);
+        return;
+    }
     if (pkt[0] == 'K' && s_rig->can_control && strncmp(pkt, "KP", 2) == 0 && strlen(pkt) == 5 &&
         all_digits(pkt + 2, 2) && digits_value(pkt + 2, 2) <= 75 &&
         xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -1854,6 +1883,9 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
                 break;
             }
             vTaskDelay(pdMS_TO_TICKS(10));
+            if (strncmp(item.cmd, "SS04", 4) == 0) {
+                send_poll(dev, "SS04;");   // the radio's own LEVEL
+            }
             if (strncmp(item.cmd, "MD", 2) == 0 && strlen(item.cmd) == 5) {
                 const char readback[] = {'M', 'D', item.cmd[2], ';', '\0'};
                 send_poll(dev, readback);
@@ -2944,6 +2976,16 @@ esp_err_t cat_set_scope_span(uint8_t code)
     if (code > 9) return ESP_ERR_INVALID_ARG;
     char cmd[16];
     snprintf(cmd, sizeof(cmd), "SS05%u0000;", (unsigned)code);
+    return cat_enqueue(cmd);
+}
+
+esp_err_t cat_set_scope_level(int tenths)
+{
+    if (!s_rig->can_control || !s_rig->scope_span) return ESP_ERR_NOT_SUPPORTED;
+    if (tenths < -300 || tenths > 300 || tenths % 5 != 0) return ESP_ERR_INVALID_ARG;
+    const int a = tenths < 0 ? -tenths : tenths;
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "SS04%c%02d.%d;", tenths < 0 ? '-' : '+', a / 10, a % 10);
     return cat_enqueue(cmd);
 }
 
