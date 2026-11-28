@@ -2470,6 +2470,8 @@ esp_err_t cat_send_console(const char *line, char *why, size_t why_size)
             refused = n > CAT_CMD_MAX_BYTES ? "too long" : "too many commands in one line";
         } else if (strncmp(cmd, "TX", 2) == 0 && n > 3 && cmd[2] != '0') {
             refused = "transmit only from the TX panel";
+        } else if (strncmp(cmd, "PC", 2) == 0 && n > 3) {
+            refused = "set the TX power from the TX panel";
         } else if (!cat_cmds_allowed(cmd, 1)) {
             refused = "not on the allow-list";
         }

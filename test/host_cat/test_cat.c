@@ -679,6 +679,9 @@ int main(void) {
         CHECK(cat_send_console("TX1;", why, sizeof(why)) == ESP_ERR_NOT_SUPPORTED &&
               strstr(why, "transmit only from the TX panel"), "TX1 refused for TX (%s)", why);
         console_count = 0;
+        CHECK(cat_send_console("PC050;", why, sizeof(why)) != ESP_OK && strstr(why, "from the TX panel") &&
+              console_count == 0, "TX power is not set from the console (%s)", why);
+        console_count = 0;
         CHECK(cat_send_console("FA;TX1;", why, sizeof(why)) != ESP_OK && console_count == 0,
               "one refused command sends nothing of the line");
         console_count = 0;
