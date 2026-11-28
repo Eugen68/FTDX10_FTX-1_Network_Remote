@@ -731,10 +731,33 @@ Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
   The ordinary CAT endpoint has no raw-command or PTT operation.
 - Frequency settings are range-checked against the radio's profile (FTX-1 30 kHz – 470 MHz, FTDX10 30 kHz – 75 MHz); anything outside it is rejected.
 - The allow list and the answer parsers are covered by a host test that runs without the board: `test/host_cat/run.sh`.
-- As a second safeguard, consider also setting `RPTT SELECT` / `TX INHIBIT` on the radio itself.
+- Set `RPTT SELECT` / `PC KEYING` on the radio so that RTS / DTR cannot key it (see "Radio settings: no PTT on RTS / DTR" under Transmit). As a further safeguard, consider `TX INHIBIT` on the radio itself.
 - Transmission that does not go through the ESP32 (microphone PTT, front-panel operation) cannot be prevented.
 
 ## Transmit
+
+### Radio settings: no PTT on RTS / DTR (do this first)
+
+Both radios have two USB serial ports: the **Enhanced COM Port** (CAT; this board uses it) and the
+**Standard COM Port** (PTT, CW keying and digital modes through its **RTS / DTR** lines). This board never
+uses RTS / DTR for PTT: it keys with the CAT command `TX1;` and keeps RTS / DTR low while it runs. While
+the board restarts or boots (a few seconds, including a reset caused by opening or closing a serial terminal
+on its USB-UART port), it is not running, and the radio's USB serial chip can pulse RTS / DTR. Yaesu notes
+that a radio connected over USB can transmit briefly when the computer starts; the board is that computer
+here, and an owner saw such a short transmission when a closed terminal reset the board.
+
+Set the radio so that RTS / DTR cannot key it:
+
+| Radio | Menu | Setting |
+| --- | --- | --- |
+| FTDX10 | **RPTT SELECT** (SSB, AM, FM, DATA, …) | **DAKY** (PTT from the rear DATA jack only; the menu has no OFF) |
+| FTDX10 | **PC KEYING** (CW SETTING) | **OFF** |
+| FTX-1 | **RPTT SELECT** (SSB, AM, FM, DATA, RTTY, PRESET 1–5) | **OFF** (factory default) |
+| FTX-1 | **PC KEYING** | **OFF** (factory default) |
+
+Remote PTT from this page keeps working: it does not use RTS / DTR. Only a program on a PC that keys
+the radio through RTS / DTR of the Standard COM Port would need those settings, and such a program is not
+connected while the radio is on this board.
 
 Remote PTT is off by default. At the serial menu, use `p` to set a TX password of at least 6
 characters, `t` to enable TX, and `m` to set the 10–600 second time limit (default 120). Save with
