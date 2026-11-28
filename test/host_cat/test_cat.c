@@ -930,6 +930,7 @@ int main(void) {
 
     // Exercise a full minute of FTDX10 polling without a single MD1 reply.
     use("0761");
+    handle_cat_packet("VS0;");          // VFO-A active, as confirmed before keying
     s_state.tx_cat = true;
     s_mode_status_us[1] = 0;
     g_now_us += 1000;
@@ -964,6 +965,40 @@ int main(void) {
     CHECK(strcmp(cat_ptt_mode_error(trial_started), "Select MAIN for remote PTT") == 0,
           "FTDX10 remote TX does not use an unmonitored SUB mode");
     s_state.tx_cat = false;
+
+    // FTDX10 A/B (VS): MD0 / MD1 follow the active VFO, and remote PTT is allowed only on VFO-A
+    {
+        use("0761");
+        cat_state_t ab;
+        handle_cat_packet("VS0;");
+        handle_cat_packet("FT0;");
+        handle_cat_packet("MD01;");        // VFO-A (active): LSB
+        handle_cat_packet("MD1C;");        // VFO-B: DATA-USB
+        cat_get_state(&ab);
+        CHECK(!cat_modes_swapped(&ab) && ab.mode_main_raw == '1' && ab.mode_sub_raw == 'C', "A active: MD0 is A");
+        CHECK(cat_ptt_mode_error(0) == NULL, "remote PTT allowed on VFO-A (%s)", cat_ptt_mode_error(0));
+        handle_cat_packet("VS1;");         // A/B pressed: B active
+        cat_get_state(&ab);
+        CHECK(cat_modes_swapped(&ab) && ab.mode_main_raw == 'C' && ab.mode_sub_raw == '1',
+              "after A/B the stored modes follow the VFOs (MD0 is now B)");
+        handle_cat_packet("MD0C;");
+        CHECK(strcmp(cat_ptt_mode_error(0), "Select VFO-A (A/B) for remote PTT") == 0, "no remote PTT on VFO-B");
+        CHECK(strcmp(cat_ptt_mode_error(g_now_us), "Select VFO-A (A/B) for remote PTT") == 0,
+              "VS1 while keyed releases PTT");
+        g_queue_send_hook = capture_cat_item;
+        CHECK(cat_set_vfo_mode(false, "USB") == ESP_OK && strcmp(queued_rigctl.cmd, "MD12;") == 0,
+              "VFO-A's mode with B active goes to MD1 (%s)", queued_rigctl.cmd);
+        CHECK(cat_set_vfo_mode(true, "CW-U") == ESP_OK && strcmp(queued_rigctl.cmd, "MD03;") == 0,
+              "VFO-B's mode with B active goes to MD0 (%s)", queued_rigctl.cmd);
+        CHECK(cat_select_vfo(false) == ESP_OK && strcmp(queued_rigctl.cmd, "VS0;") == 0, "A/B back to VFO-A");
+        handle_cat_packet("VS0;");
+        g_now_us += RADIO_STATUS_MAX_AGE_US + 1;
+        CHECK(strcmp(cat_ptt_mode_error(0), "Waiting for VFO confirmation") == 0, "a stale VS cannot key");
+        use("0840");
+        CHECK(cat_select_vfo(true) == ESP_ERR_NOT_SUPPORTED, "FTX-1 keeps its own MAIN / SUB");
+        CHECK(cat_set_vfo_mode(true, "USB") == ESP_OK && strcmp(queued_rigctl.cmd, "MD12;") == 0, "FTX-1 SUB mode");
+        g_queue_send_hook = NULL;
+    }
 
     // FTDX10 regression: a lost meter pair and then a partial status batch
     // must leave time to collect fresh meters before the 1.1 s watchdog.

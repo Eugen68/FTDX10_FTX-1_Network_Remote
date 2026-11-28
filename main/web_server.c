@@ -888,6 +888,16 @@ static esp_err_t cat_handler(httpd_req_t *req)
     char note[2 * sizeof(st.last_error) + 1], write_error[2 * sizeof(st.write_error) + 1];
     char json[CAT_JSON_BYTES];
     cat_get_state(&st);
+    if (cat_modes_swapped(&st)) {
+        // FTDX10 with VFO-B active: the radio's MD0 / MD1 are B / A; the page wants A / B
+        const char raw = st.mode_main_raw;
+        char name[sizeof(st.mode_main)];
+        strlcpy(name, st.mode_main, sizeof(name));
+        st.mode_main_raw = st.mode_sub_raw;
+        strlcpy(st.mode_main, st.mode_sub, sizeof(st.mode_main));
+        st.mode_sub_raw = raw;
+        strlcpy(st.mode_sub, name, sizeof(st.mode_sub));
+    }
     json_escape(st.write_error, write_error, sizeof(write_error));
     json_escape(st.last_error, note, sizeof(note));   // contains bytes echoed by the radio
     char rig_name[2 * sizeof(st.rig_name) + 1];
@@ -945,7 +955,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
 //   vol, sq integer 0-255
 //   notch   0 | 1 | false | true           notch_hz integer 10-3200
 //   power   0 | 1 | false | true
-//   action  "swap" | "copy_main_to_sub" | "copy_sub_to_main"
+//   action  "swap" | "copy_main_to_sub" | "copy_sub_to_main" | "vfo_a" | "vfo_b" (FTDX10 A/B)
 // Unknown or repeated keys, escapes, nesting and trailing data are rejected. There is no way to send a
 // raw CAT string.
 typedef struct {
@@ -1543,10 +1553,12 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
         if (strcmp(r.action, "swap") == 0) APPLY(cat_swap_vfo());
         else if (strcmp(r.action, "copy_main_to_sub") == 0) APPLY(cat_copy_main_to_sub());
         else if (strcmp(r.action, "copy_sub_to_main") == 0) APPLY(cat_copy_sub_to_main());
+        else if (strcmp(r.action, "vfo_a") == 0) APPLY(cat_select_vfo(false));
+        else if (strcmp(r.action, "vfo_b") == 0) APPLY(cat_select_vfo(true));
         else err = ESP_ERR_INVALID_ARG, ops++;
     }
     if (r.has_freq) APPLY(cat_set_freq(r.sub, r.freq));
-    if (r.has_mode) APPLY(cat_set_mode(r.sub, r.mode));
+    if (r.has_mode) APPLY(cat_set_vfo_mode(r.sub, r.mode));
     if (r.has_vol) APPLY(cat_set_volume(r.sub, r.vol));
     if (r.has_sq) APPLY(cat_set_squelch(r.sub, r.sq));
     if (r.has_notch) APPLY(cat_set_notch(r.sub, r.notch));
