@@ -5815,7 +5815,9 @@ function cwFeedAudio(channels, rate) {
   });
 }
 
-cwApply();
+// The worker's source is at the end of the page: restart a saved decoder only once the page is parsed
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', cwApply);
+else cwApply();
 </script>
 <script type="text/plain" id="ft8-worker-src">
 // ---- FT8 decoder: runs in a Web Worker so that the 1-2 s of heavy computation per slot does not
