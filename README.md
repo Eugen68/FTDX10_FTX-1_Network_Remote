@@ -398,7 +398,7 @@ All of them require Basic authentication (see "Security notes" below).
 | Path | Description |
 | --- | --- |
 | `/` | Browser player |
-| `/status` | Stream state and diagnostics (JSON): firmware version (`version`), build time (`build`), audio format, uptime, heap (`heap_free` / `heap_min` / `heap_block`; these include PSRAM if it is enabled), internal-RAM-only heap (`int_free` / `int_min` / `int_block`), Wi-Fi `rssi`, and stream send statistics (`stream.slow_sends` / `stream.max_send_ms`, and others) |
+| `/status` | Stream state and diagnostics (JSON): firmware version (`version`), build time (`build`), audio format, uptime, heap (`heap_free` / `heap_min` / `heap_block`; these include PSRAM if it is enabled), internal-RAM-only heap (`int_free` / `int_min` / `int_block`), Wi-Fi `rssi`, stream send statistics (`stream.slow_sends` / `stream.max_send_ms`, and others), and the last USB audio problems: `stream.usb_last_loss` (the radio's USB audio input stopped: `device disconnected`, `RX restore failed` or `RX pause failed`) and `stream.usb_last_reset` (the board power-cycled the USB port: `no audio input` or `CAT ID missing`), each with `age_s` and the internal RAM at that moment (`int_free`, `int_min`), `null` if it did not happen since boot |
 | `POST /cat` | Controls the radio (frequency, mode, volume, and so on; JSON, `X-Requested-With: ftx1` required) |
 | `POST /reboot` | Reboot the ESP32-S3 (JSON, `X-Requested-With: ftx1` required) |
 | `/stream.pcm` | Raw PCM (little endian). The format is reported in the `X-Sample-Rate` / `X-Channels` / `X-Bytes-Per-Sample` headers |

@@ -694,7 +694,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     }
     usb_audio_format_t fmt;
     char json[1280 + 11 * CONFIG_UAC_FREQ_NUM_MAX + 832 + 160 + 400 + 2 * RIGCTL_LINE_SIZE + 736 +
-              2 * YAESU_CAT_CMD_MAX + 256];
+              2 * YAESU_CAT_CMD_MAX + 256 + 2 * 112];   // + usb_last_loss / usb_last_reset
     int n;
     if (usb_audio_get_format(&fmt)) {
         n = snprintf(json, sizeof(json),
@@ -712,6 +712,22 @@ static esp_err_t status_handler(httpd_req_t *req)
         const uint64_t usb_in_dhz = usb_input_rate_dhz();
         wifi_ap_record_t ap;
         const int rssi = (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
+        // The last USB audio loss and bus reset: reason, seconds ago and the internal RAM at that moment
+        char usb_loss[112], usb_reset[112];
+        {
+            usb_audio_event_t ev[2];
+            usb_audio_last_events(&ev[0], &ev[1]);
+            char *out[2] = {usb_loss, usb_reset};
+            for (int i = 0; i < 2; i++) {
+                if (!ev[i].reason) {
+                    strcpy(out[i], "null");
+                    continue;
+                }
+                snprintf(out[i], sizeof(usb_loss), "{\"reason\":\"%s\",\"age_s\":%lu,\"int_free\":%lu,\"int_min\":%lu}",
+                         ev[i].reason, (unsigned long)((esp_timer_get_time() - ev[i].at_us) / 1000000),
+                         (unsigned long)ev[i].int_free, (unsigned long)ev[i].int_min);
+            }
+        }
         // heap_* include PSRAM when it is enabled; int_* are the internal RAM only
         n += snprintf(json + n, sizeof(json) - n,
                       ",\"cert_covers_ip\":%s,\"cert_sha256\":\"%s\","
@@ -720,7 +736,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       "\"conn_opened\":%u,\"conn_closed\":%u,\"tls_handshake_errors\":%u,"
                       "\"stream\":{\"active\":%s,\"starts\":%lu,\"chunks\":%lu,\"usb_timeouts\":%lu,\"slow_sends\":%lu,\"max_send_ms\":%lu,"
                       "\"buf_ms\":%lu,\"buf_max_ms\":%lu,\"overflows\":%lu,\"rate\":%lu,\"usb_in_hz\":%lu.%lu,"
-                      "\"usb_bus_resets\":%lu,\"rx_paused\":%s},"
+                      "\"usb_bus_resets\":%lu,\"usb_last_loss\":%s,\"usb_last_reset\":%s,\"rx_paused\":%s},"
                       "\"acc\":{\"enabled\":%s,\"fps\":%lu,\"frames\":%lu,\"accepted\":%lu,\"rejected\":%lu,\"vfo_range_tx\":%lu,"
                       "\"age_ms\":%ld,\"last_len\":%lu,\"last_reject\":\"%s\","
                       "\"rej\":{\"length\":%lu,\"not_ftdx10\":%lu,\"vfo_copies\":%lu,\"vfo_range\":%lu,"
@@ -741,7 +757,7 @@ static esp_err_t status_handler(httpd_req_t *req)
                       (unsigned long)s_st_max_send_ms,
                       (unsigned long)s_st_buf_ms, (unsigned long)s_st_buf_max_ms, (unsigned long)s_st_overflows,
                       (unsigned long)s_st_rate, (unsigned long)(usb_in_dhz / 10), (unsigned long)(usb_in_dhz % 10),
-                      (unsigned long)usb_audio_bus_resets(), usb_audio_rx_paused() ? "true" : "false",
+                      (unsigned long)usb_audio_bus_resets(), usb_loss, usb_reset, usb_audio_rx_paused() ? "true" : "false",
                       acc.enabled ? "true" : "false", (unsigned long)acc.fps, (unsigned long)acc.frames,
                       (unsigned long)acc.accepted, (unsigned long)acc.rejected, (unsigned long)acc.vfo_range_tx,
                       acc.age_ms == UINT32_MAX ? -1L : (long)acc.age_ms, (unsigned long)acc.last_len, acc_reason,
