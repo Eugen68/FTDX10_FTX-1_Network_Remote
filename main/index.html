@@ -1013,6 +1013,8 @@
     border-radius: 5px;
     padding: .4rem .5rem;
   }
+  .hn-box { grid-column: 1 / -1; }
+  body.single-rx .hn-box { grid-column: auto; }
   .sq-row {
     display: flex;
     align-items: center;
@@ -1799,21 +1801,23 @@
         <div class="audio-meter" id="meterSub"><div class="lvl"></div><div class="thr"></div></div>
         <div class="sq-status" id="stateSub">SUB: --</div>
       </div>
-    </div>
-    <div class="sq-box hn-box" style="margin-top:8px;">
-      <strong>AI NOISE REDUCTION (HamNoise, this PC only)</strong>
-      <div class="sq-row">
-        <span>Model:</span>
-        <select id="hnModel" title="AUTO: CW model in CW, voice model in the other modes">
-          <option value="auto">AUTO (by mode)</option><option value="cw">CW</option><option value="voice">VOICE</option>
-        </select>
+
+      <!-- AI noise reduction: beside MAIN SQUELCH on a one-receiver radio (FTDX10), a full row under MAIN / SUB otherwise -->
+      <div class="sq-box hn-box">
+        <strong>AI NOISE REDUCTION (HamNoise, this PC only)</strong>
+        <div class="sq-row">
+          <span>Model:</span>
+          <select id="hnModel" title="AUTO: CW model in CW, voice model in the other modes">
+            <option value="auto">AUTO (by mode)</option><option value="cw">CW</option><option value="voice">VOICE</option>
+          </select>
+        </div>
+        <div class="sq-row">
+          <span>Strength:</span>
+          <input type="range" id="hnStrength" min="0" max="100" step="5" value="100" title="How much of the cleaned audio is heard (the rest is the original)">
+          <span id="hnStrengthVal" style="font-family:monospace; min-width:40px;">100 %</span>
+        </div>
+        <div class="sq-status" id="hnStatus">Off. Turn it on with AI NR next to MUTE.</div>
       </div>
-      <div class="sq-row">
-        <span>Strength:</span>
-        <input type="range" id="hnStrength" min="0" max="100" step="5" value="100" title="How much of the cleaned audio is heard (the rest is the original)">
-        <span id="hnStrengthVal" style="font-family:monospace; min-width:40px;">100 %</span>
-      </div>
-      <div class="sq-status" id="hnStatus">Off. Turn it on with AI NR next to MUTE.</div>
     </div>
     <div class="sq-row" style="margin-top:8px;">
       <label><input type="checkbox" id="sqBusyBypass"> Suspend the DSP squelch while CAT reports BUSY (rig squelch open) (MAIN/SUB)</label>
