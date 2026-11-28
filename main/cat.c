@@ -312,6 +312,10 @@ static size_t s_rejected_count;
 static bool s_split_keyed_polls;
 static unsigned s_keyed_reject_baseline;
 static atomic_uint s_rejects;
+// The command the radio last answered "?;" to, for /status (guarded by s_query_mux)
+static char s_last_sent[CAT_LOG_TEXT_LEN];
+static char s_last_rejected[CAT_LOG_TEXT_LEN];
+static int64_t s_last_rejected_us;
 static atomic_bool s_rx_restart;
 static atomic_bool s_baud_settling;
 static volatile uint32_t s_rx_bytes;     // all bytes received from the open port (diagnostics)
@@ -372,6 +376,11 @@ static void record_query_answer(const char *pkt, size_t length)
         if (!transient) atomic_fetch_add(&s_effective_rejects, 1);
     }
     taskENTER_CRITICAL(&s_query_mux);
+    if (rejected) {
+        // A read waiting for its answer was refused; otherwise it was the last write (e.g. a queued SET).
+        strlcpy(s_last_rejected, s_query.waiting ? s_query.command : s_last_sent, sizeof(s_last_rejected));
+        s_last_rejected_us = esp_timer_get_time();
+    }
     // Keep listening for a valid ID even if the port first returns a rejection.
     if (s_query.waiting && ((rejected && strcmp(s_query.command, "ID;") != 0) ||
                             matches_query(pkt, length, s_query.command))) {
@@ -386,6 +395,16 @@ static void record_query_answer(const char *pkt, size_t length)
 unsigned cat_rejected_commands(void)
 {
     return atomic_load(&s_rejects);
+}
+
+bool cat_last_rejected(char *out, size_t size, uint32_t *age_s)
+{
+    taskENTER_CRITICAL(&s_query_mux);
+    const int64_t at = s_last_rejected_us;
+    strlcpy(out, s_last_rejected, size);
+    taskEXIT_CRITICAL(&s_query_mux);
+    *age_s = at ? (uint32_t)((esp_timer_get_time() - at) / 1000000) : 0;
+    return at != 0;
 }
 
 static bool rx_cb(const uint8_t *data, size_t len, void *arg)
@@ -795,6 +814,11 @@ static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_ki
     const int64_t start = esp_timer_get_time();
     const esp_err_t err = cdc_acm_host_data_tx_blocking(dev, (const uint8_t *)cmds, strlen(cmds), budget_ms);
     const unsigned elapsed = (unsigned)(esp_timer_get_time() - start);
+    if (err == ESP_OK) {
+        taskENTER_CRITICAL(&s_query_mux);
+        strlcpy(s_last_sent, cmds, sizeof(s_last_sent));
+        taskEXIT_CRITICAL(&s_query_mux);
+    }
     if (s_wire_lock) xSemaphoreGive(s_wire_lock);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     capture_write_timing(&s_write_stats.all, elapsed, err, budget_ms);
