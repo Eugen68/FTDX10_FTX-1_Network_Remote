@@ -792,6 +792,9 @@ the scope, the FT8 and CW decoders, recordings, the radio and the board get the 
 - The button is green while it works, amber while the model loads, red on an error (the original audio is
   played then; the reason is in the DSP panel).
 - It adds about 0.1 s of delay to what you hear.
+- A receiver that plays nothing (below −70 dBFS for half a second, e.g. the FTX-1's receiver that is not
+  receiving while MAIN and SUB are both on HF) is not processed: its box says `paused` and it costs no CPU.
+  It resumes with the first audio.
 - **CPU**: the CW model is very light. The voice model is heavy: about half of one CPU core per receiver on a
   PC. Each box shows its load; above 70 % it says the device is too slow (crackling audio): turn it off,
   or use it on one receiver only.

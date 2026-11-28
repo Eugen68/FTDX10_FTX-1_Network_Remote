@@ -6347,13 +6347,13 @@ async function hnRoute(i) {
       if (e.data.type === 'ready') {
         if (gen !== chan.gen || bus !== hnBus) { detach(node, bus); return; }
         const old = chan.node;
-        chan.node = node; chan.target = target; chan.bus = bus; chan.state = 'on'; chan.failed = null; chan.load = NaN;
+        chan.node = node; chan.target = target; chan.bus = bus; chan.state = 'on'; chan.failed = null; chan.load = NaN; chan.idle = false;
         node.connect(speakerGains[i]);
         try { bus.splitter.disconnect(speakerGains[i], out); } catch (err) {}
         if (old && old !== node) detach(old, bus);
         hnParams(chan);
       } else if (e.data.type === 'load') {
-        if (chan.node === node) chan.load = e.data.pct;
+        if (chan.node === node) { chan.load = e.data.pct; chan.idle = e.data.idle === true; }
       } else if (e.data.type === 'error') {
         const wasLive = chan.node === node;
         detach(node, bus);
@@ -6402,6 +6402,7 @@ function hnShow() {
     if (on && !hnBus) text = 'On: starts with the audio.';
     else if (on && c.state === 'loading') text = 'Loading the ' + t + ' model (' + HN_ASSETS[t].mb + ' MB, first time only)…';
     else if (on && c.state === 'error') text = 'ERROR ' + c.error + ' (downloaded from cdn.jsdelivr.net): original audio.';
+    else if (on && c.idle) text = (c.target || t).toUpperCase() + ' model, paused: no audio on this receiver';
     else if (on) text = (c.target || t).toUpperCase() + ' model' +
       (Number.isFinite(c.load) ? ', CPU ' + c.load + ' %' + (c.load > 70 ? ' (too heavy for this device: turn it off)' : '') : '');
     el.status.textContent = text;
@@ -7153,10 +7154,12 @@ if (typeof self !== 'undefined' && typeof self.postMessage === 'function') {
 // ---- AI noise reduction: HamNoise's AudioWorklet, from e04/HamNoise web/public/denoise-worklet.js
 // (https://github.com/e04/HamNoise at commit 67ba309e4fef7e1438bce1a6de246d5907bed4c8), MIT License,
 // Copyright (c) 2026 e04. See NOTICE. Changes here: the processor name, no scope / meter buffers (this
-// page does not draw them), a CPU load report, and the resampler's filter weights are computed once per fractional position
+// page does not draw them), a CPU load report, no denoising while the input is silent, and the resampler's filter weights are computed once per fractional position
 // (the stream rates are rational multiples of 9600 Hz, so a few positions repeat) instead of per sample.
 const hnClock = globalThis.performance && typeof globalThis.performance.now === 'function'
   ? () => globalThis.performance.now() : () => Date.now();
+const HN_SILENT_RMS = 3.2e-4;    // -70 dBFS: a receiver that is not receiving (about -89 dBFS on the FTX-1)
+const HN_IDLE_AFTER_S = 0.5;
 const DOWNSAMPLE_FILTER_RADIUS = 128;
 const UPSAMPLE_FILTER_RADIUS = 16;
 const RENDER_QUANTUM_SAMPLES = 128;
@@ -7628,13 +7631,21 @@ class DenoiseWorklet extends AudioWorkletProcessor {
     }
     this.inputRms = Math.sqrt(inEnergy / input.length);
 
+    // Idle (this page's addition): a receiver that plays nothing (the FTX-1 on HF receives on one of MAIN / SUB
+    // at a time) is not denoised after HN_IDLE_AFTER_S below HN_SILENT_RMS; the first louder block resumes it.
+    this.silentSamples = this.inputRms < HN_SILENT_RMS ? (this.silentSamples || 0) + input.length : 0;
+    const idle = this.silentSamples >= sampleRate * HN_IDLE_AFTER_S;
+
     // Load: the time spent denoising against the audio time, reported every 2 s (this page's addition)
-    const t0 = hnClock();
-    this.downsampler.process(input);
-    this.busyMs = (this.busyMs || 0) + hnClock() - t0;
+    if (!idle) {
+      const t0 = hnClock();
+      this.downsampler.process(input);
+      this.busyMs = (this.busyMs || 0) + hnClock() - t0;
+    }
     this.audioSamples = (this.audioSamples || 0) + input.length;
     if (this.audioSamples >= sampleRate * 2) {
-      this.port.postMessage({ type: 'load', pct: Math.round(this.busyMs / (this.audioSamples / sampleRate * 1000) * 100) });
+      this.port.postMessage({ type: 'load', idle,
+                              pct: Math.round((this.busyMs || 0) / (this.audioSamples / sampleRate * 1000) * 100) });
       this.busyMs = 0;
       this.audioSamples = 0;
     }
