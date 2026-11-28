@@ -629,6 +629,12 @@ int main(void) {
     CHECK(ok("BC01;") && !ok("BC11;") && ok("IS00-1200;") && !ok("IS10+0000;"), "FTDX10 DNF / IF shift, one receiver");
     use("9999");
     CHECK(!ok("NL0;") && !ok("RL0;") && !ok("BC0;") && !ok("IS0;") && !ok("NB0;"), "unknown rig: no noise controls");
+    // scope span: FTDX10 only, and only the SPAN item of SS
+    use("0761");
+    CHECK(ok("SS0500000;") && ok("SS0590000;") && !ok("SS05A0000;") && !ok("SS0560001;"), "FTDX10 scope span");
+    CHECK(!ok("SS05;") && !ok("SS0000000;") && !ok("SS0630000;") && !ok("SS1560000;"), "FTDX10 other SS items refused");
+    use("0840");
+    CHECK(!ok("SS0560000;"), "FTX-1: no scope span command here");
 
     tx_enabled = true;
     use("0840");
@@ -677,6 +683,13 @@ int main(void) {
     CHECK(cat_set_freq(false, 14074000) == ESP_ERR_INVALID_STATE, "unknown set");
     use("0840");
     CHECK(cat_set_squelch(true, 255) == ESP_OK && cat_set_freq(true, 433000000) == ESP_OK, "ftx1 setters");
+    CHECK(cat_set_scope_span(6) == ESP_ERR_NOT_SUPPORTED, "ftx1 scope span");
+    use("0761");
+    g_queue_send_hook = capture_cat_item;
+    CHECK(cat_set_scope_span(6) == ESP_OK && strcmp(queued_rigctl.cmd, "SS0560000;") == 0, "ftdx10 100 kHz span");
+    CHECK(cat_set_scope_span(10) == ESP_ERR_INVALID_ARG, "span code range");
+    g_queue_send_hook = NULL;
+    use("0840");
 
     // split from the page: transmitter selection only, with each radio's own FT codes
     g_queue_send_hook = capture_cat_item;

@@ -232,6 +232,7 @@ typedef struct {
     bool nb_switch;           // NB and NR switch on/off (FTDX10); else level 0 is OFF (FTX-1 NL / RL)
     unsigned dnr_max;         // highest DNR level: 15 (FTDX10 RL 01-15) or 10 (FTX-1 RL 00-10); 0 = none
     const char *resync_vfo;   // after SV / AB / BA
+    bool scope_span;          // SS0 5 <span> 0000: the scope span (FTDX10, whose ACC scope the page shows)
 } rig_profile_t;
 
 // No port open yet: only the identification query may be sent
@@ -270,6 +271,7 @@ static const rig_profile_t s_profiles[] = {
         .pa_bands = 1, .att_max = 3,
         .sync_noise = "NB0;NL0;NR0;RL0;BC0;IS0;",
         .nb_switch = true, .dnr_max = 15,
+        .scope_span = true,
         .resync_vfo = "FA;FB;MD0;MD1;",
     },
 };
@@ -684,6 +686,9 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         return ctl && rig->dnr_max && is_rx_side(rig, p[0]) &&
                (pl == 1 || (pl == 7 && p[1] == '0' && (p[2] == '+' || p[2] == '-') && all_digits(p + 3, 4) &&
                             digits_value(p + 3, 4) <= 1200 && digits_value(p + 3, 4) % 20 == 0));
+    case CAT_TWO('S', 'S'):         // spectrum scope: only P2 = 5 (SPAN) 0-9 (1 kHz - 1 MHz), P4-P7 fixed 0
+        return ctl && rig->scope_span && pl == 7 && p[0] == '0' && p[1] == '5' && p[2] >= '0' && p[2] <= '9' &&
+               memcmp(p + 3, "0000", 4) == 0;
     case CAT_TWO('B', 'P'): {       // manual notch: kind 0 = ON/OFF, kind 1 = frequency in 10 Hz steps
         if (!ctl) {
             return false;
@@ -2821,6 +2826,15 @@ esp_err_t cat_set_if_shift(bool sub, int hz)
     if (hz < -1200 || hz > 1200 || hz % 20 != 0) return ESP_ERR_INVALID_ARG;
     char cmd[16];
     snprintf(cmd, sizeof(cmd), "IS%c0%c%04d;", sub ? '1' : '0', hz < 0 ? '-' : '+', hz < 0 ? -hz : hz);
+    return cat_enqueue(cmd);
+}
+
+esp_err_t cat_set_scope_span(uint8_t code)
+{
+    if (!s_rig->can_control || !s_rig->scope_span) return ESP_ERR_NOT_SUPPORTED;
+    if (code > 9) return ESP_ERR_INVALID_ARG;
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "SS05%u0000;", (unsigned)code);
     return cat_enqueue(cmd);
 }
 
