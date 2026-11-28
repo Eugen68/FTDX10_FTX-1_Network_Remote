@@ -120,6 +120,7 @@ static const char *TAG = "cat";
 
 static SemaphoreHandle_t s_lock;       // protects s_state
 static cat_state_t s_state;
+static void frontend_unread(void);
 static SemaphoreHandle_t s_wire_lock; // orders CAT writes against a USB recovery reset
 static SemaphoreHandle_t s_ptt_lock;  // serializes PTT writes with closing the CAT port
 static cdc_acm_dev_hdl_t s_ptt_port;
@@ -224,6 +225,12 @@ typedef struct {
     const char *poll_fast;    // every POLL_PERIOD_MS (S meter); NULL = none
     const char *poll_status;  // every 5 polls (BUSY / TX); NULL = none
     const char *sync_all;     // when the port is opened, then every 50 polls
+    const char *sync_frontend; // PA / RA / RG / GT, read with sync_all; NULL = none
+    unsigned pa_bands;        // PA P1 values: 1 (FTDX10: the receiver) or 3 (FTX-1: HF/50, VHF, UHF); 0 = no PA
+    unsigned att_max;         // highest RA P2: 3 (FTDX10 6/12/18 dB) or 1 (FTX-1 ON)
+    const char *sync_noise;   // NB / NL / NR / RL / BC / IS, read with sync_all; NULL = none
+    bool nb_switch;           // NB and NR switch on/off (FTDX10); else level 0 is OFF (FTX-1 NL / RL)
+    unsigned dnr_max;         // highest DNR level: 15 (FTDX10 RL 01-15) or 10 (FTX-1 RL 00-10); 0 = none
     const char *resync_vfo;   // after SV / AB / BA
 } rig_profile_t;
 
@@ -243,6 +250,10 @@ static const rig_profile_t s_profiles[] = {
         .poll_fast = "RM0;",
         .poll_status = "RI0;TX;",
         .sync_all = "FA;FB;MD0;MD1;AG0;AG1;SQ0;SQ1;BP00;BP01;BP10;BP11;",
+        .sync_frontend = "PA0;PA1;PA2;RA0;RG0;RG1;GT0;GT1;",
+        .pa_bands = 3, .att_max = 1,
+        .sync_noise = "NL0;NL1;RL0;RL1;BC0;BC1;IS0;IS1;",
+        .nb_switch = false, .dnr_max = 10,
         .resync_vfo = "FA;FB;MD0;MD1;",
     },
     {
@@ -255,6 +266,10 @@ static const rig_profile_t s_profiles[] = {
         .poll_fast = "RM1;",
         .poll_status = "BY;TX;",
         .sync_all = "FA;FB;MD0;MD1;AG0;SQ0;BP00;BP01;",
+        .sync_frontend = "PA0;RA0;RG0;GT0;",
+        .pa_bands = 1, .att_max = 3,
+        .sync_noise = "NB0;NL0;NR0;RL0;BC0;IS0;",
+        .nb_switch = true, .dnr_max = 15,
         .resync_vfo = "FA;FB;MD0;MD1;",
     },
 };
@@ -633,6 +648,42 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         return pl == 9 && memcmp(p, rig->ex_data_out, 6) == 0 && all_digits(p + 6, 3) &&
                digits_value(p + 6, 3) <= USB_OUT_LEVEL_MAX;
     }
+    case CAT_TWO('P', 'A'):         // pre-amp / IPO. FTX-1: P1 is the band (HF/50, VHF, UHF)
+        if (!ctl || p[0] < '0' || (unsigned)(p[0] - '0') >= rig->pa_bands) {
+            return false;
+        }
+        return pl == 1 || (pl == 2 && p[1] >= '0' && p[1] <= (p[0] == '0' ? '2' : '1'));
+    case CAT_TWO('R', 'A'):         // RF attenuator
+        return ctl && rig->att_max && p[0] == '0' &&
+               (pl == 1 || (pl == 2 && p[1] >= '0' && (unsigned)(p[1] - '0') <= rig->att_max));
+    case CAT_TWO('R', 'G'):         // RF gain
+        return ctl && rig->pa_bands && is_rx_side(rig, p[0]) &&
+               (pl == 1 || (pl == 4 && all_digits(p + 1, 3) && digits_value(p + 1, 3) <= 255));
+    case CAT_TWO('G', 'T'):         // AGC: set OFF / FAST / MID / SLOW / AUTO
+        return ctl && rig->pa_bands && is_rx_side(rig, p[0]) &&
+               (pl == 1 || (pl == 2 && p[1] >= '0' && p[1] <= '4'));
+    case CAT_TWO('N', 'B'):         // noise blanker / noise reduction on-off (FTDX10)
+    case CAT_TWO('N', 'R'):
+        return ctl && rig->nb_switch && p[0] == '0' && (pl == 1 || (pl == 2 && is_side(p[1])));
+    case CAT_TWO('N', 'L'):         // noise blanker level 000-010 (FTX-1: 000 is OFF)
+        return ctl && rig->dnr_max && is_rx_side(rig, p[0]) &&
+               (pl == 1 || (pl == 4 && all_digits(p + 1, 3) && digits_value(p + 1, 3) <= 10));
+    case CAT_TWO('R', 'L'): {       // DNR level: FTDX10 01-15, FTX-1 00 (OFF) - 10
+        if (!ctl || !rig->dnr_max || !is_rx_side(rig, p[0])) {
+            return false;
+        }
+        if (pl == 1) {
+            return true;
+        }
+        const unsigned v = pl == 3 && all_digits(p + 1, 2) ? digits_value(p + 1, 2) : 99u;
+        return v <= rig->dnr_max && (!rig->nb_switch || v >= 1);
+    }
+    case CAT_TWO('B', 'C'):         // auto notch (DNF) on-off
+        return ctl && rig->dnr_max && is_rx_side(rig, p[0]) && (pl == 1 || (pl == 2 && is_side(p[1])));
+    case CAT_TWO('I', 'S'):         // IF shift: P2 fixed 0, sign, 0000-1200 Hz in 20 Hz steps
+        return ctl && rig->dnr_max && is_rx_side(rig, p[0]) &&
+               (pl == 1 || (pl == 7 && p[1] == '0' && (p[2] == '+' || p[2] == '-') && all_digits(p + 3, 4) &&
+                            digits_value(p + 3, 4) <= 1200 && digits_value(p + 3, 4) % 20 == 0));
     case CAT_TWO('B', 'P'): {       // manual notch: kind 0 = ON/OFF, kind 1 = frequency in 10 Hz steps
         if (!ctl) {
             return false;
@@ -953,6 +1004,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_state.rx_vfo_sub = false;
         s_state.width_code[0] = s_state.width_code[1] = -1;
         s_state.key_pitch = -1;
+        frontend_unread();
         s_last_ptt_status_us = 0;
         s_ptt_mode = 0;
         s_state.tx_cat = false;
@@ -1071,6 +1123,90 @@ static bool parse_mode(const char *a, const char *prefix, char *mode_raw, char *
     return true;
 }
 
+/** PA RA RG GT NB NL NR RL BC IS: the front-end and noise commands this file reads back after a write */
+static bool is_frontend_cmd(const char *c)
+{
+    static const char names[][3] = {"PA", "RA", "RG", "GT", "NB", "NL", "NR", "RL", "BC", "IS"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (strncmp(c, names[i], 2) == 0) return true;
+    }
+    return false;
+}
+
+/** Front-end values not read yet (no radio, or a new one) */
+static void frontend_unread(void)
+{
+    memset(s_state.preamp, -1, sizeof(s_state.preamp));
+    s_state.att = -1;
+    s_state.rf_gain[0] = s_state.rf_gain[1] = -1;
+    s_state.agc[0] = s_state.agc[1] = -1;
+    memset(s_state.nb_on, -1, sizeof(s_state.nb_on));
+    memset(s_state.nb_level, -1, sizeof(s_state.nb_level));
+    memset(s_state.dnr_on, -1, sizeof(s_state.dnr_on));
+    memset(s_state.dnr_level, -1, sizeof(s_state.dnr_level));
+    memset(s_state.dnf, -1, sizeof(s_state.dnf));
+    s_state.if_shift_known[0] = s_state.if_shift_known[1] = false;
+}
+
+/** PA, RA, RG and GT answers (also sent on their own with auto information). Caller holds s_lock. */
+static bool parse_frontend_locked(const char *a)
+{
+    const size_t len = strlen(a);
+    if (len < 5 || a[len - 1] != ';' || a[2] < '0' || a[2] > '2') {
+        return false;
+    }
+    const unsigned p1 = (unsigned)(a[2] - '0');
+    if (len == 5 && isdigit((unsigned char)a[3])) {
+        int8_t v = (int8_t)(a[3] - '0');
+        if (strncmp(a, "PA", 2) == 0 && p1 < 3 && v <= 2) s_state.preamp[p1] = v;
+        else if (strncmp(a, "RA", 2) == 0 && p1 == 0 && v <= 3) s_state.att = v;
+        else if (strncmp(a, "GT", 2) == 0 && p1 < 2 && v <= 6) s_state.agc[p1] = v;
+        else v = -1;
+        if (v >= 0) return true;   // NB / NR / BC answers have the same length: checked below
+    }
+    if (len == 5 && (strncmp(a, "NB", 2) == 0 || strncmp(a, "NR", 2) == 0 || strncmp(a, "BC", 2) == 0) &&
+        p1 < 2 && (a[3] == '0' || a[3] == '1')) {
+        const int8_t on = (int8_t)(a[3] - '0');
+        if (a[0] == 'B') s_state.dnf[p1] = on;
+        else if (a[1] == 'B') s_state.nb_on[p1] = on;
+        else s_state.dnr_on[p1] = on;
+        return true;
+    }
+    if (len == 7 && strncmp(a, "NL", 2) == 0 && p1 < 2 && isdigit((unsigned char)a[3]) &&
+        isdigit((unsigned char)a[4]) && isdigit((unsigned char)a[5])) {
+        const int v = (a[3] - '0') * 100 + (a[4] - '0') * 10 + (a[5] - '0');
+        if (v > 10) return false;
+        s_state.nb_level[p1] = (int8_t)v;
+        if (!s_rig->nb_switch) s_state.nb_on[p1] = v > 0;
+        return true;
+    }
+    if (len == 6 && strncmp(a, "RL", 2) == 0 && p1 < 2 && isdigit((unsigned char)a[3]) &&
+        isdigit((unsigned char)a[4])) {
+        const int v = (a[3] - '0') * 10 + (a[4] - '0');
+        if (v > 15) return false;
+        s_state.dnr_level[p1] = (int8_t)v;
+        if (!s_rig->nb_switch) s_state.dnr_on[p1] = v > 0;
+        return true;
+    }
+    if (len == 10 && strncmp(a, "IS", 2) == 0 && p1 < 2 && a[3] == '0' && (a[4] == '+' || a[4] == '-') &&
+        isdigit((unsigned char)a[5]) && isdigit((unsigned char)a[6]) && isdigit((unsigned char)a[7]) &&
+        isdigit((unsigned char)a[8])) {
+        const int v = (a[5] - '0') * 1000 + (a[6] - '0') * 100 + (a[7] - '0') * 10 + (a[8] - '0');
+        if (v > 1200) return false;
+        s_state.if_shift[p1] = (int16_t)(a[4] == '-' ? -v : v);
+        s_state.if_shift_known[p1] = true;
+        return true;
+    }
+    if (len == 7 && strncmp(a, "RG", 2) == 0 && p1 < 2 && isdigit((unsigned char)a[3]) &&
+        isdigit((unsigned char)a[4]) && isdigit((unsigned char)a[5])) {
+        const int v = (a[3] - '0') * 100 + (a[4] - '0') * 10 + (a[5] - '0');
+        if (v > 255) return false;
+        s_state.rf_gain[p1] = (int16_t)v;
+        return true;
+    }
+    return false;
+}
+
 /** "AG0", "AG1", "SQ0", "SQ1" + 3-digit (000-255) + ";" */
 static bool parse_gain(const char *a, const char *prefix, int *val_out)
 {
@@ -1182,6 +1318,14 @@ static void handle_cat_packet(const char *pkt)
             }
             return;
         }
+    }
+
+    if (is_frontend_cmd(pkt)) {
+        if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+            if (parse_frontend_locked(pkt)) s_last_answer_us = now_pkt_us;
+            xSemaphoreGive(s_lock);
+        }
+        return;
     }
 
     if (parse_gain(pkt, "AG0", &gain_val)) {
@@ -1408,6 +1552,10 @@ static void publish_profile(void)
     strlcpy(s_state.rig_id, s_rig_id, sizeof(s_state.rig_id));
     s_state.dual_rx = rig->dual_rx;
     s_state.sq_max = (uint16_t)rig->sq_max;
+    s_state.pa_bands = (uint8_t)rig->pa_bands;
+    s_state.att_max = (uint8_t)rig->att_max;
+    s_state.nb_switch = rig->nb_switch;
+    s_state.dnr_max = (uint8_t)rig->dnr_max;
     s_state.freq_min = rig->freq_min;
     s_state.freq_max = rig->freq_max;
     s_state.can_control = rig->can_control;
@@ -1669,6 +1817,10 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             if (strncmp(item.cmd, "FT", 2) == 0) {
                 send_poll(dev, "FT;");   // show the new split state at once
             }
+            if (is_frontend_cmd(item.cmd)) {
+                const char readback[] = {item.cmd[0], item.cmd[1], item.cmd[2], ';', '\0'};
+                send_poll(dev, readback);   // the radio's own value (GT answers AUTO-FAST etc.)
+            }
             // SV (swap) / AB / BA (copy) change both VFOs: re-read them so the UI does not
             // show stale values until the next periodic sync
             if (strcmp(item.cmd, "SV;") == 0 || strcmp(item.cmd, "AB;") == 0 || strcmp(item.cmd, "BA;") == 0) {
@@ -1717,6 +1869,8 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
         if ((poll_count % 50) == 0) {
             const int64_t sync_start = esp_timer_get_time();
             send_poll(dev, rig->sync_all);
+            if (rig->can_control && rig->sync_frontend) send_poll(dev, rig->sync_frontend);
+            if (rig->can_control && rig->sync_noise) send_poll(dev, rig->sync_noise);
             if (poll_count == 0) {
                 ESP_LOGI(TAG, "%s sync_all: %lld ms", rig->name,
                          (long long)((esp_timer_get_time() - sync_start) / 1000));
@@ -1761,6 +1915,8 @@ static void initialize_reads(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig)
         read_poll(dev, rig->poll_fast, ANSWER_TIMEOUT_MS, false);
         read_poll(dev, rig->dual_rx ? "BP00;BP01;BP10;BP11;" : "BP00;BP01;", ANSWER_TIMEOUT_MS, false);
         read_poll(dev, "FT;", ANSWER_TIMEOUT_MS, false);
+        if (rig->sync_frontend) read_poll(dev, rig->sync_frontend, ANSWER_TIMEOUT_MS, false);
+        if (rig->sync_noise) read_poll(dev, rig->sync_noise, ANSWER_TIMEOUT_MS, false);
     }
     ESP_LOGI(TAG, "%s initial CAT reads: %lld ms", rig->name,
              (long long)((esp_timer_get_time() - started) / 1000));
@@ -2119,6 +2275,7 @@ esp_err_t cat_init(void)
     // Values not read yet, the same as after a disconnect.
     s_state.width_code[0] = s_state.width_code[1] = -1;
     s_state.key_pitch = -1;
+    frontend_unread();
     s_cmd_queue = xQueueCreate(10, sizeof(cat_cmd_item_t));
     ESP_RETURN_ON_FALSE(s_cmd_queue, ESP_ERR_NO_MEM, TAG, "no queue memory");
     const usb_host_client_config_t observer = {
@@ -2560,6 +2717,111 @@ esp_err_t cat_set_volume(bool sub, uint8_t volume)
         xSemaphoreGive(s_lock);
     }
     return err;
+}
+
+esp_err_t cat_set_preamp(uint8_t band, uint8_t value)
+{
+    if (!s_rig->can_control || band >= s_rig->pa_bands) return ESP_ERR_NOT_SUPPORTED;
+    if (value > (band == 0 ? 2 : 1)) return ESP_ERR_INVALID_ARG;
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "PA%u%u;", (unsigned)band, (unsigned)value);
+    return cat_enqueue(cmd);
+}
+
+esp_err_t cat_set_att(uint8_t value)
+{
+    if (!s_rig->can_control || !s_rig->att_max) return ESP_ERR_NOT_SUPPORTED;
+    if (value > s_rig->att_max) return ESP_ERR_INVALID_ARG;
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "RA0%u;", (unsigned)value);
+    return cat_enqueue(cmd);
+}
+
+esp_err_t cat_set_rf_gain(bool sub, uint8_t value)
+{
+    if (!s_rig->can_control || !s_rig->pa_bands || (sub && !s_rig->dual_rx)) return ESP_ERR_NOT_SUPPORTED;
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "RG%c%03u;", sub ? '1' : '0', (unsigned)value);
+    return cat_enqueue(cmd);
+}
+
+esp_err_t cat_set_agc(bool sub, uint8_t value)
+{
+    if (!s_rig->can_control || !s_rig->pa_bands || (sub && !s_rig->dual_rx)) return ESP_ERR_NOT_SUPPORTED;
+    if (value > 4) return ESP_ERR_INVALID_ARG;
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "GT%c%u;", sub ? '1' : '0', (unsigned)value);
+    return cat_enqueue(cmd);
+}
+
+static esp_err_t noise_target(bool sub)
+{
+    if (!s_rig->can_control || !s_rig->dnr_max || (sub && !s_rig->dual_rx)) return ESP_ERR_NOT_SUPPORTED;
+    return ESP_OK;
+}
+
+esp_err_t cat_set_nb(bool sub, bool on, uint8_t level)
+{
+    esp_err_t err = noise_target(sub);
+    if (err != ESP_OK) return err;
+    char cmd[16];
+    if (s_rig->nb_switch) {
+        if (level != CAT_LEVEL_KEEP && level > 10) return ESP_ERR_INVALID_ARG;
+        if (on && level != CAT_LEVEL_KEEP) {
+            snprintf(cmd, sizeof(cmd), "NL0%03u;", (unsigned)level);
+            err = cat_enqueue(cmd);
+        }
+        return err == ESP_OK ? cat_enqueue(on ? "NB01;" : "NB00;") : err;
+    }
+    // FTX-1: the level is the switch, 000 = OFF
+    if (on && level == CAT_LEVEL_KEEP) {
+        const int8_t last = s_state.nb_level[sub];
+        level = last > 0 ? (uint8_t)last : 5;
+    }
+    if (on && (level < 1 || level > 10)) return ESP_ERR_INVALID_ARG;
+    snprintf(cmd, sizeof(cmd), "NL%c%03u;", sub ? '1' : '0', on ? (unsigned)level : 0u);
+    return cat_enqueue(cmd);
+}
+
+esp_err_t cat_set_dnr(bool sub, bool on, uint8_t level)
+{
+    esp_err_t err = noise_target(sub);
+    if (err != ESP_OK) return err;
+    char cmd[16];
+    if (s_rig->nb_switch) {
+        if (level != CAT_LEVEL_KEEP && (level < 1 || level > s_rig->dnr_max)) return ESP_ERR_INVALID_ARG;
+        if (on && level != CAT_LEVEL_KEEP) {
+            snprintf(cmd, sizeof(cmd), "RL0%02u;", (unsigned)level);
+            err = cat_enqueue(cmd);
+        }
+        return err == ESP_OK ? cat_enqueue(on ? "NR01;" : "NR00;") : err;
+    }
+    if (on && level == CAT_LEVEL_KEEP) {
+        const int8_t last = s_state.dnr_level[sub];
+        level = last > 0 ? (uint8_t)last : 5;
+    }
+    if (on && (level < 1 || level > s_rig->dnr_max)) return ESP_ERR_INVALID_ARG;
+    snprintf(cmd, sizeof(cmd), "RL%c%02u;", sub ? '1' : '0', on ? (unsigned)level : 0u);
+    return cat_enqueue(cmd);
+}
+
+esp_err_t cat_set_dnf(bool sub, bool on)
+{
+    const esp_err_t err = noise_target(sub);
+    if (err != ESP_OK) return err;
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "BC%c%c;", sub ? '1' : '0', on ? '1' : '0');
+    return cat_enqueue(cmd);
+}
+
+esp_err_t cat_set_if_shift(bool sub, int hz)
+{
+    const esp_err_t err = noise_target(sub);
+    if (err != ESP_OK) return err;
+    if (hz < -1200 || hz > 1200 || hz % 20 != 0) return ESP_ERR_INVALID_ARG;
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "IS%c0%c%04d;", sub ? '1' : '0', hz < 0 ? '-' : '+', hz < 0 ? -hz : hz);
+    return cat_enqueue(cmd);
 }
 
 esp_err_t cat_set_notch(bool sub, bool on)
