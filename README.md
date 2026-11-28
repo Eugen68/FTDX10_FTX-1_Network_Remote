@@ -420,6 +420,25 @@ Under FRONT END, each receiver has a **NOISE / IF** row, read the same way:
 
 On the FTX-1 all four are separate for MAIN and SUB.
 
+### FTDX10: A / B (one receiver)
+
+The FTDX10 has one receiver and two VFOs, and its **A/B** key selects the VFO it receives and transmits on
+(CAT `VS`). The page works the same way:
+
+- The page's **A / B** button (where the FTX-1 has SWAP) swaps VFO-A and VFO-B (CAT `SV`), so you hear the
+  other frequency at once and VFO-A, which remote PTT uses, takes it. (CAT `VS` would move the display to
+  VFO-B but leave the receiver on VFO-A's frequency.) The page also follows the radio's own **A/B** key.
+- The left panel always shows and changes the **active** VFO: band, mode, dial, arrows, step and direct entry.
+  It turns green and reads **VFO-B (A/B)** while VFO-B is active. The screen keeps VFO-A above and VFO-B below,
+  with the active one framed in green. There is no separate VFO-B card on the FTDX10.
+- FT8, the scope and recordings follow the active VFO.
+- **Remote PTT (and FT8 transmit) works on VFO-A only**: with VFO-B active the TX panel reports
+  "Select VFO-A (A/B) for remote PTT", and VFO-B becoming active while transmitting releases PTT.
+- The FTDX10 reports MD0 / FT for the active VFO (MD1 for the other); the board maps them to VFO-A / VFO-B
+  for the page. NET rigctl (Log4OM) is unchanged and still assumes VFO-A is active.
+
+The FTX-1, with two receivers, keeps its MAIN and SUB panels and SWAP.
+
 ### Endpoints
 
 All of them require Basic authentication (see "Security notes" below).

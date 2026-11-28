@@ -152,6 +152,7 @@ static atomic_bool s_ft8_alc;
 #define ALC_PERIOD_US 500000
 static cat_write_stats_t s_write_stats;
 static int64_t s_tx_vfo_status_us;
+static int64_t s_rx_vfo_status_us;      // last VS answer (FTDX10: which VFO the receiver and PTT use)
 static int64_t s_mode_status_us[2];
 static int64_t s_ssb_menu_us[2];
 static char s_ssb_menu[2];
@@ -1025,6 +1026,7 @@ static void publish(bool connected, int busy, int s_main, int s_sub,
         s_tx_meters = (cat_tx_meters_t){0};
         atomic_store(&s_ft8_alc, false);
         s_tx_vfo_status_us = 0;
+        s_rx_vfo_status_us = 0;
         memset(s_mode_status_us, 0, sizeof(s_mode_status_us));
         memset(s_ssb_menu_us, 0, sizeof(s_ssb_menu_us));
         memset(s_data_menu_us, 0, sizeof(s_data_menu_us));
@@ -1465,8 +1467,21 @@ static void handle_cat_packet(const char *pkt)
 
     if (pkt[0] == 'V' && s_rig->can_control && strncmp(pkt, "VS", 2) == 0 && strlen(pkt) == 4 &&
         is_side(pkt[2]) && xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
+        const bool sub = pkt[2] == '1';
+        if (!s_rig->dual_rx && s_state.rx_vfo_known && s_state.rx_vfo_sub != sub) {
+            // FTDX10: MD0 answers for the active VFO and MD1 for the other, so after A/B the stored modes
+            // belong to the other VFO. Swap them, and let PTT wait for a fresh MD0 of the new VFO.
+            char raw = s_state.mode_main_raw, name[sizeof(s_state.mode_main)];
+            strlcpy(name, s_state.mode_main, sizeof(name));
+            s_state.mode_main_raw = s_state.mode_sub_raw;
+            strlcpy(s_state.mode_main, s_state.mode_sub, sizeof(s_state.mode_main));
+            s_state.mode_sub_raw = raw;
+            strlcpy(s_state.mode_sub, name, sizeof(s_state.mode_sub));
+            s_mode_status_us[0] = s_mode_status_us[1] = 0;
+        }
         s_state.rx_vfo_known = true;
-        s_state.rx_vfo_sub = pkt[2] == '1';
+        s_state.rx_vfo_sub = sub;
+        s_rx_vfo_status_us = now_pkt_us;
         s_last_answer_us = now_pkt_us;
         xSemaphoreGive(s_lock);
         return;
@@ -1887,10 +1902,14 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             }
             send_poll(dev, rig->poll_status);
             if (rig->can_tx && app_config_tx_enabled()) {
-                send_poll(dev, rig->dual_rx ? "FT;MD0;MD1;" : "FT;MD0;");
+                // FTDX10: VS first, so MD0 is read for the VFO that the receiver and PTT use
+                send_poll(dev, rig->dual_rx ? "FT;MD0;MD1;" : "VS;FT;MD0;");
             } else if (rig->can_tx) {
                 // The page's SPLIT button and NET rigctl both follow the transmitter selection.
                 send_poll(dev, "FT;");
+            }
+            if (!rig->dual_rx && rig->can_control && !(rig->can_tx && app_config_tx_enabled())) {
+                send_poll(dev, "VS;");      // the page's A/B follows the radio's own A/B key
             }
         }
 
@@ -2536,7 +2555,15 @@ const char *cat_ptt_mode_error(int64_t keyed_at)
     const int64_t oldest = keyed_at && now - keyed_at < KEYED_CAT_MAX_AGE_US
         ? keyed_at - RADIO_STATUS_MAX_AGE_US
         : now - (keyed_at ? KEYED_CAT_MAX_AGE_US : RADIO_STATUS_MAX_AGE_US);
-    if (!s_mode_status_us[0] || s_mode_status_us[0] < oldest ||
+    // FTDX10: FT0 means "the active VFO", so FT alone cannot tell A from B. Remote PTT only on VFO-A (VS0).
+    // A fresh VS is needed to key; while keyed, VS is not polled (the A/B write is refused during TX), so the
+    // last answer stands, and any VS1 answer (e.g. auto information) still releases PTT.
+    if (!s_rig->dual_rx && (!s_state.rx_vfo_known ||
+                            (!keyed_at && (!s_rx_vfo_status_us || s_rx_vfo_status_us < oldest)))) {
+        reason = "Waiting for VFO confirmation";
+    } else if (!s_rig->dual_rx && s_state.rx_vfo_sub) {
+        reason = "Select VFO-A (A/B) for remote PTT";
+    } else if (!s_mode_status_us[0] || s_mode_status_us[0] < oldest ||
         s_state.mode_main_raw != s_reported_mode[0]) {
         reason = "Waiting for MAIN mode confirmation";
     } else if (!ptt_sideband_mode(s_reported_mode[0])) {
@@ -2707,6 +2734,14 @@ esp_err_t cat_set_mode_char(bool sub, char mode_char)
         xSemaphoreGive(s_lock);
     }
     return err;
+}
+
+esp_err_t cat_set_vfo_mode(bool vfo_b, const char *mode_name)
+{
+    cat_state_t st;
+    cat_get_state(&st);
+    // FTDX10: MD0 is the active VFO's mode, MD1 the other's
+    return cat_set_mode(vfo_b != cat_modes_swapped(&st), mode_name);
 }
 
 esp_err_t cat_set_mode(bool sub, const char *mode_name)
