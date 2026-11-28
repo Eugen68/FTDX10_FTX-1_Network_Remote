@@ -2543,7 +2543,15 @@ esp_err_t cat_set_mode_char(bool sub, char mode_char)
 esp_err_t cat_select_vfo(bool vfo_b)
 {
     if (!s_rig->can_control || s_rig->dual_rx) return ESP_ERR_NOT_SUPPORTED;   // FTDX10 A/B only
-    return cat_enqueue(vfo_b ? "VS1;" : "VS0;");
+    esp_err_t err = cat_enqueue(vfo_b ? "VS1;" : "VS0;");
+    // Tested on an FTDX10: VS moves the display, the LEDs and the mode to the other VFO, but the receiver stays
+    // on the old frequency until that VFO's frequency is written (the A/B key retunes at once). So write the
+    // new VFO's own frequency back to it.
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    const uint32_t hz = vfo_b ? s_state.freq_sub : s_state.freq_main;
+    xSemaphoreGive(s_lock);
+    if (err == ESP_OK && hz) err = cat_set_freq(vfo_b, hz);
+    return err;
 }
 
 esp_err_t cat_set_vfo_mode(bool vfo_b, const char *mode_name)
