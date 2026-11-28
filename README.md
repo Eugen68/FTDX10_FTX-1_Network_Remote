@@ -407,30 +407,29 @@ Below the notch, each receiver has a **FRONT END** row read from the radio every
 
 On the FTX-1, RF GAIN and AGC are separate for MAIN and SUB; the FTDX10 has one receiver. These are receive settings only.
 
-### Noise and IF shift
+### Noise, width and IF shift
 
-Under FRONT END, each receiver has a **NOISE / IF** row, read the same way:
+Under FRONT END, each receiver has two more boxes, read the same way:
+
+**NOISE / DNR / DNF**, on one row:
 
 - **NB** (noise blanker): OFF or level 1–10 (0–10 on the FTDX10, which has a separate ON/OFF).
 - **DNR**: OFF or level 1–15 on the FTDX10, 1–10 on the FTX-1.
 - **DNF** (auto notch): ON / OFF.
-- **IF SHIFT**: −1200 to +1200 Hz in 20 Hz steps. Double-click the slider or press **0** to centre it.
 
-On the FTX-1 all four are separate for MAIN and SUB.
+**WIDTH / IF SHIFT**, one slider under the other:
 
-### Filter: roofing and width
-
-Under NOISE / IF, a **FILTER** row:
-
-- **ROOF** (FTDX10 only; the FTX-1 has no roofing filter command): the roofing filter, 12 kHz, 3 kHz, 500 Hz or
-  300 Hz (CAT `RF`). 300 Hz needs the optional filter; the list always shows what the radio reports.
+- **ROOF** (FTDX10 only, at the top; the FTX-1 has no roofing filter command): the roofing filter, 12 kHz,
+  3 kHz, 500 Hz or 300 Hz (CAT `RF`). 300 Hz needs the optional filter; the list always shows what the radio reports.
 - **WIDTH**: the receiver filter width (CAT `SH`), in the steps of the radio's bandwidth chart for the mode,
   shown in Hz. SSB has 23 steps from 300 Hz to 4 kHz; CW, RTTY, DATA and PSK 21 steps from 50 Hz to 4 kHz.
   AM and FM have fixed widths: the slider is greyed out and shows `fixed`. `default` means the radio uses
-  the mode's default width (which depends on the roofing filter on the FTDX10).
+  the mode's default width (on the FTDX10 it depends on the roofing filter).
+- **IF SHIFT**: −1200 to +1200 Hz in 20 Hz steps. Double-click the slider or press **0** to centre it.
 
-Both are read from the radio every 5 s and right after a change, so a change made on the radio shows up too.
-On the FTX-1 the width is separate for MAIN and SUB; on the FTDX10 it is the active VFO's.
+All are read from the radio every 5 s and right after a change, so a change made on the radio shows up too.
+On the FTX-1 they are separate for MAIN and SUB; on the FTDX10 they apply to its one receiver (the width is
+the active VFO's).
 
 ### FTDX10: A / B (one receiver)
 
@@ -443,7 +442,7 @@ The FTDX10 has one receiver and two VFOs, and its **A/B** key selects the VFO it
 - The left panel always shows and changes the **active** VFO: band, mode, dial, arrows, step, ZIN and direct entry.
   It turns green and reads **VFO-B (A/B)** while VFO-B is active. The screen keeps VFO-A above and VFO-B below,
   with the active one framed in green. There is no separate VFO-B card on the FTDX10: the right column is
-  **TX & RX SETTINGS** instead, with the TX panel and, under it, the FRONT END, NOISE / IF and FILTER rows.
+  **TX & RX SETTINGS** instead, with the TX panel and, under it, the FRONT END, NOISE / DNR / DNF and WIDTH / IF SHIFT boxes.
 - FT8, the scope and recordings follow the active VFO.
 - **Remote PTT (and FT8 transmit) works on VFO-A only**: with VFO-B active the TX panel reports
   "Select VFO-A (A/B) for remote PTT", and VFO-B becoming active while transmitting releases PTT.
