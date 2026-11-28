@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 AND Apache-2.0
+ * SPDX-License-Identifier: MIT AND Apache-2.0
  *
  * Attribution: the USB Host / UAC class driver start-up in this file (usb_lib_task(), the
  * uac_host_driver_config_t settings, and the task priority constants) follows the structure of the

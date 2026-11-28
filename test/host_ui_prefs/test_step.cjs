@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: MIT */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');

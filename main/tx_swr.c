@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: MIT */
 #include "tx_swr.h"
 
 unsigned tx_swr_value(cat_rig_t rig, unsigned raw)

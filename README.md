@@ -19,7 +19,7 @@ The firmware starts in receive-only mode. Remote push-to-talk is available on th
 
 ## Based on FTX-1 Network Companion by pizzamax
 
-This project is based on [FTX-1 Network Companion by pizzamax](https://github.com/pizzamax/FTX-1_Network_Companion). See `LICENSE` and `NOTICE` for licensing and attribution.
+This project is based on [FTX-1 Network Companion by pizzamax](https://github.com/pizzamax/FTX-1_Network_Companion). It continues as an independent project with the author's permission (see [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md)). See `LICENSE` and `NOTICE` for licensing and attribution.
 
 ## Overview
 
@@ -142,13 +142,9 @@ This project implements only the features that I, a lazy ham, found necessary to
 
 ## License
 
-The copyright of this project belongs to the author. The code is released under the [PolyForm Noncommercial License 1.0.0](LICENSE) (the source files carry `SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0`).
-
-- **Allowed**: you may use, copy, modify and redistribute it freely for any noncommercial purpose, such as personal use, hobby projects and amateur radio.
-- **Not allowed**: commercial use. Please contact the author if you would like to use it commercially.
-- **Please keep the origin**: when you redistribute it or publish a modified version, keep the `LICENSE` file (with its `Required Notice:` line) and say where it came from.
-
-Because commercial use is excluded, this license is not an "open source" license in the sense of the Open Source Initiative's definition. It is "source-available".
+The code is released under the [MIT License](LICENSE) (the source files carry `SPDX-License-Identifier: MIT`).
+The parts written by pizzamax are distributed under the MIT License with his permission, keeping his copyright notice in `LICENSE` (see [`docs/PERMISSIONS.md`](docs/PERMISSIONS.md)).
+When you redistribute it or publish a modified version, keep the `LICENSE` file with its copyright lines.
 
 Part of this project follows the structure of the example code of Espressif's `usb_host_uac` component (Apache License 2.0, the USB Host task in [`main/usb_audio.c`](main/usb_audio.c)), and that part remains under the Apache License 2.0. Details are in [`NOTICE`](NOTICE).
 Third-party components fetched at build time (the ESP-IDF and the components under `managed_components`) keep their own licenses. For the projects the FT8 decoder refers to, see "About the FT8 decoder". The CW decoder is a port of DeepCW (MIT License), see "CW decoder".

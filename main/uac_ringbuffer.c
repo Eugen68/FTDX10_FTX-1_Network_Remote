@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: MIT */
 // This file is compiled into the UAC library, but calls the original ring APIs.
 #undef xRingbufferCreate
 #undef vRingbufferDelete

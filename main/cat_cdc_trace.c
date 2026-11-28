@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: MIT */
 #include <stdbool.h>
 #include <stdatomic.h>
 #include "esp_log.h"

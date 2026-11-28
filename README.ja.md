@@ -19,7 +19,7 @@
 
 ## Based on FTX-1 Network Companion by pizzamax
 
-[FTX-1 Network Companion by pizzamax](https://github.com/pizzamax/FTX-1_Network_Companion) をベースにしています。ライセンスと帰属表示は `LICENSE` と `NOTICE` を参照してください。
+[FTX-1 Network Companion by pizzamax](https://github.com/pizzamax/FTX-1_Network_Companion) をベースにしています。作者の許可を得て、独立したプロジェクトとして開発を続けています（[`docs/PERMISSIONS.md`](docs/PERMISSIONS.md) を参照）。ライセンスと帰属表示は `LICENSE` と `NOTICE` を参照してください。
 
 ## 概要
 
@@ -116,13 +116,9 @@ Issue の報告は歓迎します。ただし、対応は**ベストエフォー
 
 ## ライセンス
 
-本プロジェクトの著作権は作者に帰属します。コードは [PolyForm Noncommercial License 1.0.0](LICENSE) に基づいて公開します（各ソースファイルには `SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0` を記載）。
-
-- **できること**: 個人での利用、趣味やアマチュア無線での利用など、非商用の目的であれば、自由に使い、コピーし、改変し、再配布できます。
-- **できないこと**: 商用での利用。商用で使いたい場合は、作者に連絡してください。
-- **出自は残してください**: 再配布したり、改変版を公開したりするときは、`LICENSE` ファイル（`Required Notice:` の行を含む）を残し、元がどこにあるかを明記してください。
-
-商用利用を除いているため、このライセンスは、Open Source Initiative の定義でいう「オープンソース」ではなく、「ソース公開（source-available）」にあたります。
+コードは [MIT License](LICENSE) に基づいて公開します（各ソースファイルには `SPDX-License-Identifier: MIT` を記載）。
+pizzamax が書いた部分は、本人の許可を得て、`LICENSE` に著作権表示を残したうえで MIT License で配布しています（[`docs/PERMISSIONS.md`](docs/PERMISSIONS.md) を参照）。
+再配布したり、改変版を公開したりするときは、著作権表示の行を含む `LICENSE` ファイルを残してください。
 
 一部（[`main/usb_audio.c`](main/usb_audio.c) の USB Host タスク）は、Espressif の `usb_host_uac` コンポーネントのサンプルコード（Apache License 2.0）の構造に沿っており、その部分は Apache License 2.0 のままです。詳細は [`NOTICE`](NOTICE) をご覧ください。
 ビルド時に取得するサードパーティのコンポーネント（ESP-IDF や `managed_components` 配下）は、それぞれのライセンスに従います。FT8 デコーダーが参照したプロジェクトは「FT8 デコーダーについて」をご覧ください。

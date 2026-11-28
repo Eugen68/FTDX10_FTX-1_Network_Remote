@@ -6,4 +6,4 @@ On 26 November 2026, pizzamax, the author of the upstream FTX-1 Network Companio
 
 Source: [pizzamax’s reply in upstream issue #1](https://github.com/pizzamax/FTX-1_Network_Companion/issues/1#issuecomment-7177332623).
 
-FTDX10 / FTX-1 Network Remote continues to use the [PolyForm Noncommercial License 1.0.0](../LICENSE), including pizzamax’s Required Notice.
+Since 28 November 2026, FTDX10 / FTX-1 Network Remote is distributed under the [MIT License](../LICENSE), keeping pizzamax's copyright notice in `LICENSE`. Earlier releases were published under the PolyForm Noncommercial License 1.0.0.

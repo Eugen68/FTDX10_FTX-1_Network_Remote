@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+ * SPDX-License-Identifier: MIT
  *
  * CAT control for the Yaesu FTX-1 and the Yaesu FTDX10.
  * Finds the radio's CAT serial port over USB, recognises the radio from its answer to "ID;", keeps a copy of

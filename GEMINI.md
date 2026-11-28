@@ -17,8 +17,8 @@ the FTDX10 ACC scope (`main/acc_frame.c`). Read `README.md` before changing beha
 4. **Network servers are off by default**, configured from the serial menu, LAN/VPN only.
    Do not open anything to the Internet or add new listening ports without being asked.
 5. Never commit passwords, keys, certificates or personal data.
-6. License: PolyForm Noncommercial 1.0.0. Keep the `SPDX-License-Identifier` line in new files
-   and do not touch `LICENSE` or the Required Notice.
+6. License: MIT. Keep the `SPDX-License-Identifier: MIT` line in new files and keep the copyright
+   lines in `LICENSE` (pizzamax's line is a condition of his permission).
 
 ## How to work
 
