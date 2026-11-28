@@ -975,6 +975,14 @@ static esp_err_t cat_handler(httpd_req_t *req)
         if (st.connected && st.scope_level_known) snprintf(level, sizeof(level), "%d", st.scope_level_x10);
         // CW pitch in Hz (KP code 0-75 = 300-1050 Hz in 10 Hz steps), for the CW decoder's RIG button
         char pitch[8] = "null";
+        // Filter width (SH code, -1 unread) per receiver; the FTDX10's one receiver is the active VFO's
+        int width[2] = {-1, -1};
+        if (st.connected && st.dual_rx) {
+            width[0] = st.width_code[0];
+            width[1] = st.width_code[1];
+        } else if (st.connected && st.rx_vfo_known) {
+            width[0] = st.width_code[st.rx_vfo_sub];
+        }
         if (st.connected && st.key_pitch >= 0 && st.key_pitch <= 75) snprintf(pitch, sizeof(pitch), "%d", 300 + 10 * st.key_pitch);
         n--;
         n += snprintf(json + n, sizeof(json) - n,
@@ -983,7 +991,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
                       "\"pa_bands\":%u,\"att_max\":%u,\"preamp\":[%d,%d,%d],\"att\":%d,\"rfg\":[%d,%d],\"agc\":[%d,%d],"
                       "\"nb_switch\":%s,\"dnr_max\":%u,\"nb\":[%d,%d],\"nb_level\":[%d,%d],\"dnr\":[%d,%d],"
                       "\"dnr_level\":[%d,%d],\"dnf\":[%d,%d],\"ifs\":[%s,%s],\"scope_level_x10\":%s,\"tx_power\":%s,\"tx_power_max\":%u,"
-                      "\"key_pitch_hz\":%s}",
+                      "\"key_pitch_hz\":%s,\"width\":[%d,%d],\"roofing\":%d}",
                       app_config_cat_console_enabled() ? "true" : "false",
                       (unsigned)st.voice_source, app_config_tx_enabled() ? "true" : "false",
                       st.tx_cat ? "true" : "false", st.tx_radio ? "true" : "false",
@@ -993,7 +1001,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
                       st.nb_switch ? "true" : "false", st.connected ? st.dnr_max : 0u,
                       st.nb_on[0], st.nb_on[1], st.nb_level[0], st.nb_level[1], st.dnr_on[0], st.dnr_on[1],
                       st.dnr_level[0], st.dnr_level[1], st.dnf[0], st.dnf[1], ifs[0], ifs[1], level, power, power_max,
-                      pitch);
+                      pitch, width[0], width[1], st.connected ? st.roofing : -1);
     }
     return send_json(req, json, n, sizeof(json));
 }
@@ -1008,6 +1016,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
 //   power   0 | 1 | false | true
 //   preamp  0-2 (with pa_band 0-2 on the FTX-1)   att 0-3   rfg 0-255   agc 0-4   (range checked again in cat.c)
 //   nb, dnr, dnf  0 | 1 | false | true   nb_level 0-10   dnr_level 0-15 (with nb / dnr)   ifs -1200..1200
+//   width 0-23 (filter width code)   roofing 1 | 2 | 4 | 5 (FTDX10: 12 kHz, 3 kHz, 500 Hz, 300 Hz)
 //   scope_span 0-9 (FTDX10 scope span, 1 kHz - 1 MHz)   scope_level -300..300 (tenths of a dB, steps of 5)
 //   action  "swap" | "copy_main_to_sub" | "copy_sub_to_main"
 //   raw     the CAT LOG console line, e.g. "FA014074000;" (alone; allow-list checked, never transmit)
@@ -1033,6 +1042,8 @@ typedef struct {
     bool has_preamp, has_pa_band, has_att, has_rfg, has_agc;
     uint8_t preamp, pa_band, att, rfg, agc;
     bool has_nb, nb, has_nb_level, has_dnr, dnr, has_dnr_level, has_dnf, dnf, has_ifs;
+    bool has_width, has_roofing;
+    uint8_t width, roofing;
     uint8_t nb_level, dnr_level;
     int16_t ifs;
     bool has_scope_span;
@@ -1526,6 +1537,14 @@ static bool parse_cat_request(const char *s, cat_req_t *r)
             if (is_text || r->has_ifs || !token_to_int(token, -1200, 1200, &v)) return false;
             r->ifs = (int16_t)v;
             r->has_ifs = true;
+        } else if (strcmp(key, "width") == 0) {
+            if (is_text || r->has_width || !token_to_uint(token, 23, &num)) return false;
+            r->width = (uint8_t)num;
+            r->has_width = true;
+        } else if (strcmp(key, "roofing") == 0) {
+            if (is_text || r->has_roofing || !token_to_uint(token, 5, &num)) return false;   // set codes checked in cat.c
+            r->roofing = (uint8_t)num;
+            r->has_roofing = true;
         } else if (strcmp(key, "scope_span") == 0) {
             if (is_text || r->has_scope_span || !token_to_uint(token, 9, &num)) return false;
             r->scope_span = (uint8_t)num;
@@ -1742,6 +1761,8 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     if (r.has_dnr) APPLY(cat_set_dnr(r.sub, r.dnr, r.has_dnr_level ? r.dnr_level : CAT_LEVEL_KEEP));
     if (r.has_dnf) APPLY(cat_set_dnf(r.sub, r.dnf));
     if (r.has_ifs) APPLY(cat_set_if_shift(r.sub, r.ifs));
+    if (r.has_width) APPLY(cat_set_width(r.sub, r.width));
+    if (r.has_roofing) APPLY(cat_set_roofing(r.roofing));
     if (r.has_scope_span) APPLY(cat_set_scope_span(r.scope_span));
     if (r.has_scope_level) APPLY(cat_set_scope_level(r.scope_level));
     if (r.has_zero_in) APPLY(cat_zero_in(r.sub));

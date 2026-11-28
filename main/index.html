@@ -611,8 +611,13 @@
   body:not(.has-fe) .fe-only { display: none !important; }
   body:not(.has-nr) .nr-only { display: none !important; }
   .nr-row { flex-wrap: wrap; gap: .2rem; }
-  .ifs-box { min-width: 9rem; }
-  .ifs-range { width: 8.5rem; }
+  /* WIDTH / IF SHIFT: ROOF (FTDX10) on the left, the two sliders on the right, one under the other */
+  .flt-row { gap: .6rem; padding: .35rem .5rem; }
+  .flt-roof[hidden] { display: none; }
+  .flt-sliders { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: .35rem; }
+  .flt-item { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+  .flt-item .mini-knob-label { display: flex; align-items: center; justify-content: center; gap: .35rem; }
+  .flt-range { width: 100%; min-width: 0; }
   .ifs-val { color: #e2e8f0; font-variant-numeric: tabular-nums; }
   .ifs-zero { padding: 0 .5rem; min-height: 0; font-size: .6rem; }
   .fe-select { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit;
@@ -1265,8 +1270,8 @@
         </div>
       </div>
 
-      <!-- NOISE / IF (CAT NB NL NR RL BC IS) -->
-      <div class="button-group-label nr-only">NOISE / IF (CAT):</div>
+      <!-- NOISE / DNR / DNF (CAT NB NL NR RL BC) -->
+      <div class="button-group-label nr-only">NOISE / DNR / DNF (CAT):</div>
       <div class="analog-knobs-row nr-row nr-only">
         <div class="mini-knob-box">
           <div class="mini-knob-label">NB</div>
@@ -1280,11 +1285,29 @@
           <div class="mini-knob-label">DNF</div>
           <button type="button" class="rig-btn notch-btn" id="nrDnfMain" aria-pressed="false">OFF</button>
         </div>
-        <div class="mini-knob-box ifs-box">
-          <div class="mini-knob-label">IF SHIFT <span class="ifs-val" id="nrIfsValMain">--</span></div>
-          <input type="range" class="ifs-range" id="nrIfsMain" min="-1200" max="1200" step="20" value="0"
-                 aria-label="MAIN IF shift" title="IF shift, 20 Hz steps. Double-click to centre">
-          <button type="button" class="rig-btn ifs-zero" id="nrIfsZeroMain" title="IF shift to 0 Hz">0</button>
+      </div>
+
+      <!-- WIDTH / IF SHIFT (CAT RF SH IS): ROOF (FTDX10) on the left, the sliders on the right -->
+      <div class="button-group-label nr-only">WIDTH / IF SHIFT (CAT):</div>
+      <div class="analog-knobs-row flt-row nr-only">
+        <div class="mini-knob-box flt-roof" id="fltRoofBox" hidden>
+          <div class="mini-knob-label">ROOF</div>
+          <select class="fe-select" id="fltRoof" aria-label="Roofing filter" title="Roofing filter (CAT RF). 300 Hz is an optional filter">
+            <option value="1">12 kHz</option><option value="2">3 kHz</option><option value="4">500 Hz</option><option value="5">300 Hz</option>
+          </select>
+        </div>
+        <div class="flt-sliders">
+          <div class="flt-item">
+            <div class="mini-knob-label">WIDTH <span class="ifs-val" id="fltWidthValMain">--</span></div>
+            <input type="range" class="flt-range" id="fltWidthMain" min="1" max="23" step="1" value="13"
+                   aria-label="MAIN filter width" title="Receiver filter width (CAT SH), in the steps of the radio's bandwidth chart for this mode">
+          </div>
+          <div class="flt-item">
+            <div class="mini-knob-label">IF SHIFT <span class="ifs-val" id="nrIfsValMain">--</span>
+              <button type="button" class="rig-btn ifs-zero" id="nrIfsZeroMain" title="IF shift to 0 Hz">0</button></div>
+            <input type="range" class="flt-range" id="nrIfsMain" min="-1200" max="1200" step="20" value="0"
+                   aria-label="MAIN IF shift" title="IF shift, 20 Hz steps. Double-click to centre">
+          </div>
         </div>
       </div>
 
@@ -1672,8 +1695,8 @@
         </div>
       </div>
 
-      <!-- NOISE / IF (CAT NB NL NR RL BC IS) -->
-      <div class="button-group-label dual-rx-only nr-only">NOISE / IF (CAT):</div>
+      <!-- NOISE / DNR / DNF (CAT NB NL NR RL BC) -->
+      <div class="button-group-label dual-rx-only nr-only">NOISE / DNR / DNF (CAT):</div>
       <div class="analog-knobs-row nr-row dual-rx-only nr-only">
         <div class="mini-knob-box">
           <div class="mini-knob-label">NB</div>
@@ -1687,11 +1710,23 @@
           <div class="mini-knob-label">DNF</div>
           <button type="button" class="rig-btn notch-btn" id="nrDnfSub" aria-pressed="false">OFF</button>
         </div>
-        <div class="mini-knob-box ifs-box">
-          <div class="mini-knob-label">IF SHIFT <span class="ifs-val" id="nrIfsValSub">--</span></div>
-          <input type="range" class="ifs-range" id="nrIfsSub" min="-1200" max="1200" step="20" value="0"
-                 aria-label="SUB IF shift" title="IF shift, 20 Hz steps. Double-click to centre">
-          <button type="button" class="rig-btn ifs-zero" id="nrIfsZeroSub" title="IF shift to 0 Hz">0</button>
+      </div>
+
+      <!-- WIDTH / IF SHIFT (CAT RF SH IS): ROOF (FTDX10) on the left, the sliders on the right -->
+      <div class="button-group-label dual-rx-only nr-only">WIDTH / IF SHIFT (CAT):</div>
+      <div class="analog-knobs-row flt-row dual-rx-only nr-only">
+        <div class="flt-sliders">
+          <div class="flt-item">
+            <div class="mini-knob-label">WIDTH <span class="ifs-val" id="fltWidthValSub">--</span></div>
+            <input type="range" class="flt-range" id="fltWidthSub" min="1" max="23" step="1" value="13"
+                   aria-label="SUB filter width" title="Receiver filter width (CAT SH), in the steps of the radio's bandwidth chart for this mode">
+          </div>
+          <div class="flt-item">
+            <div class="mini-knob-label">IF SHIFT <span class="ifs-val" id="nrIfsValSub">--</span>
+              <button type="button" class="rig-btn ifs-zero" id="nrIfsZeroSub" title="IF shift to 0 Hz">0</button></div>
+            <input type="range" class="flt-range" id="nrIfsSub" min="-1200" max="1200" step="20" value="0"
+                   aria-label="SUB IF shift" title="IF shift, 20 Hz steps. Double-click to centre">
+          </div>
         </div>
       </div>
 
@@ -4068,6 +4103,7 @@ function nrApply(d) {
       el.ifsVal.textContent = ifsLabel(ifs);
     }
   });
+  fltApply(d);
 }
 
 nrEls.forEach((el, i) => {
@@ -4102,6 +4138,59 @@ nrEls.forEach((el, i) => {
   const zero = () => { if (!el.ifs.disabled) { el.ifs.value = 0; sendIfs(0); } };
   el.ifs.addEventListener('dblclick', zero);
   el.ifsZero.addEventListener('click', zero);
+});
+
+// ---- Filter (CAT SH, RF): the width per receiver, as a step of the radio's bandwidth chart (code 1-23,
+// 0 = the mode's default), and the FTDX10's roofing filter. The chart depends on the mode: SSB up to 4 kHz,
+// CW / RTTY / DATA / PSK up to 4 kHz in narrower steps; AM and FM have fixed widths (no slider).
+const FLT_SSB_HZ = [0, 300, 400, 600, 850, 1100, 1200, 1500, 1650, 1800, 1950, 2100, 2250, 2400, 2450, 2500,
+                    2600, 2700, 2800, 2900, 3000, 3200, 3500, 4000];
+const FLT_NARROW_HZ = [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 600, 800, 1200, 1400, 1700, 2000,
+                       2400, 3000, 3200, 3500, 4000];
+const fltChart = mode => /^(LSB|USB)$/.test(mode || '') ? FLT_SSB_HZ
+  : /^(CW|RTTY|DATA-[LU]SB|PSK)/.test(mode || '') ? FLT_NARROW_HZ : null;
+const fltLabel = (chart, code) => !chart ? 'fixed' : code === 0 ? 'default' : chart[code] + ' Hz';
+const flt = {timer: [null, null], chart: [null, null]};
+const fltEls = ['Main', 'Sub'].map(S => ({
+  width: document.getElementById('fltWidth' + S), val: document.getElementById('fltWidthVal' + S),
+}));
+const fltRoof = document.getElementById('fltRoof');
+const fltRoofBox = document.getElementById('fltRoofBox');
+
+function fltApply(d) {
+  fltEls.forEach((el, i) => {
+    // FTDX10: one receiver, the active VFO's mode (MD0 / MD1 come as VFO-A / VFO-B)
+    const mode = i ? d.mode_sub : d.dual_rx === false && d.rx_vfo === 'sub' ? d.mode_sub : d.mode_main;
+    const code = Array.isArray(d.width) ? d.width[i] : -1;
+    const chart = fltChart(mode);
+    flt.chart[i] = chart;
+    el.width.disabled = !chart || !Number.isInteger(code) || code < 0;
+    if (chart) el.width.max = chart.length - 1;
+    if (!Number.isInteger(code) || code < 0) { el.val.textContent = '--'; return; }
+    if (nrHeld('w' + i)) return;   // not 'while focused': a slider keeps focus after a drag
+    if (code > 0) el.width.value = Math.min(code, chart ? chart.length - 1 : 23);
+    el.val.textContent = fltLabel(chart, code);
+  });
+  // FTDX10 roofing filter (the FTX-1 has no RF command: -1, hidden)
+  const roof = Number.isInteger(d.roofing) ? d.roofing : -1;
+  fltRoofBox.hidden = roof < 0;
+  if (roof > 0 && !nrHeld('roof')) fltRoof.value = String(roof);
+}
+
+fltEls.forEach((el, i) => {
+  el.width.addEventListener('input', () => {
+    const code = Number(el.width.value);
+    nr.last['w' + i] = Date.now();
+    el.val.textContent = fltLabel(flt.chart[i], code);
+    clearTimeout(flt.timer[i]);
+    // One CAT write per pause while dragging
+    flt.timer[i] = setTimeout(() => sendCatCommand({ target: i ? 'sub' : 'main', width: code }), 150);
+  });
+});
+fltRoof.addEventListener('change', () => {
+  nr.last.roof = Date.now();
+  fltRoof.blur();
+  sendCatCommand({ target: 'main', roofing: Number(fltRoof.value) });
 });
 
 // ---- Manual notch (CAT BP): ON/OFF button + frequency knob (10-3200 Hz, 10 Hz steps) ----
@@ -5015,7 +5104,7 @@ window.addEventListener('keyup', e => {
 });
 
 // FTDX10 (one receiver): the right column, where the FTX-1 has its SUB card, holds the TX panel and the
-// receiver settings rows (FRONT END, NOISE / IF) moved from the MAIN panel. The elements themselves are
+// receiver settings rows (FRONT END, NOISE / DNR / DNF, WIDTH / IF SHIFT) moved from the MAIN panel. The elements themselves are
 // moved, so their handlers keep working; on another radio they go back to where they were.
 const rightColumn = { card: null, moved: [] };
 function layoutRightColumn(single) {

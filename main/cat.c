@@ -155,6 +155,12 @@ static cat_write_stats_t s_write_stats;
 static int64_t s_tx_vfo_status_us;
 static int64_t s_rx_vfo_status_us;      // last VS answer (FTDX10: which VFO the receiver and PTT use)
 static int64_t s_mode_status_us[2];
+// FTX-1: besides answering our reads, the radio reports SH / IS on its own after a change (auto
+// information), and such a report can name the other receiver (seen: a SUB width or IF shift change shown
+// on MAIN until the next read). So for these two only the answer to our own read of that receiver is used.
+enum { SIDE_QUERY_SH, SIDE_QUERY_IS, SIDE_QUERY_KINDS };
+#define SIDE_QUERY_WINDOW_US 1000000
+static int64_t s_side_query_us[SIDE_QUERY_KINDS][2];   // when the read was sent; 0 = none outstanding
 static int64_t s_ssb_menu_us[2];
 static char s_ssb_menu[2];
 static int64_t s_data_menu_us[2];
@@ -235,6 +241,8 @@ typedef struct {
     unsigned dnr_max;         // highest DNR level: 15 (FTDX10 RL 01-15) or 10 (FTX-1 RL 00-10); 0 = none
     const char *resync_vfo;   // after SV / AB / BA
     bool scope_span;          // SS0 5 <span> 0000: the scope span (FTDX10, whose ACC scope the page shows)
+    const char *sync_filter;  // SH (filter width) and RF (roofing), read with sync_all; NULL = none
+    bool roofing;             // RF0: roofing filter choice (FTDX10; the FTX-1 has no RF command)
 } rig_profile_t;
 
 // No port open yet: only the identification query may be sent
@@ -257,6 +265,7 @@ static const rig_profile_t s_profiles[] = {
         .pa_bands = 3, .att_max = 1,
         .sync_noise = "NL0;NL1;RL0;RL1;BC0;BC1;IS0;IS1;",
         .nb_switch = false, .dnr_max = 10,
+        .sync_filter = "SH0;SH1;",
         .resync_vfo = "FA;FB;MD0;MD1;",
     },
     {
@@ -274,6 +283,7 @@ static const rig_profile_t s_profiles[] = {
         .sync_noise = "NB0;NL0;NR0;RL0;BC0;IS0;",
         .nb_switch = true, .dnr_max = 15,
         .scope_span = true,
+        .sync_filter = "SH0;RF0;", .roofing = true,
         .resync_vfo = "FA;FB;MD0;MD1;",
     },
 };
@@ -628,6 +638,9 @@ static bool cat_cmd_allowed(const char *c, size_t len)
         return ctl && (pl == 0 || (pl == 1 && is_side(p[0])));
     case CAT_TWO('K', 'P'):         // CW key pitch (read only), for network CAT clients
         return ctl && pl == 0;
+    case CAT_TWO('R', 'F'):         // roofing filter: read, or set P2 1 12 kHz, 2 3 kHz, 4 500 Hz, 5 300 Hz
+        return ctl && rig->roofing && p[0] == '0' &&
+               (pl == 1 || (pl == 2 && (p[1] == '1' || p[1] == '2' || p[1] == '4' || p[1] == '5')));
     case CAT_TWO('S', 'H'):         // receiver filter bandwidth
         return ctl && (pl == 1 || pl == 4) && is_rx_side(rig, p[0]) &&
                (pl == 1 || (p[1] == '0' && all_digits(p + 2, 2) && digits_value(p + 2, 2) <= 23));
@@ -886,6 +899,30 @@ static unsigned keyed_write_timeout_ms(void)
 }
 
 /** The only place that writes to the radio */
+/** Note the SH0; SH1; IS0; IS1; reads in a batch just sent. Caller holds s_lock. */
+static void note_side_queries_locked(const char *cmds, int64_t now)
+{
+    for (const char *c = cmds; c && *c;) {
+        const char *end = strchr(c, ';');
+        if (!end) break;
+        if (end - c == 3 && (c[2] == '0' || c[2] == '1')) {
+            const int kind = strncmp(c, "SH", 2) == 0 ? SIDE_QUERY_SH : strncmp(c, "IS", 2) == 0 ? SIDE_QUERY_IS : -1;
+            if (kind >= 0) s_side_query_us[kind][c[2] - '0'] = now;
+        }
+        c = end + 1;
+    }
+}
+
+/** Whether an SH / IS answer for this receiver answers our own read (always on a one-receiver radio). Caller holds s_lock. */
+static bool side_answer_expected_locked(int kind, unsigned side)
+{
+    if (!s_rig->dual_rx) return true;
+    const int64_t asked = s_side_query_us[kind][side & 1];
+    if (!asked || esp_timer_get_time() - asked > SIDE_QUERY_WINDOW_US) return false;
+    s_side_query_us[kind][side & 1] = 0;
+    return true;
+}
+
 static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_kind_t kind, bool keyed_poll)
 {
     if (!cat_cmds_allowed(cmds, CAT_TX_MAX_CMDS)) {
@@ -918,6 +955,7 @@ static esp_err_t cat_tx_kind(cdc_acm_dev_hdl_t dev, const char *cmds, cat_log_ki
     if (s_wire_lock) xSemaphoreGive(s_wire_lock);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     capture_write_timing(&s_write_stats.all, elapsed, err, budget_ms);
+    if (err == ESP_OK) note_side_queries_locked(cmds, start);
     if (keyed) {
         capture_write_timing(&s_write_stats.keyed, elapsed, err, budget_ms);
     }
@@ -1196,10 +1234,10 @@ static bool parse_mode(const char *a, const char *prefix, char *mode_raw, char *
     return true;
 }
 
-/** PA RA RG GT NB NL NR RL BC IS: the front-end and noise commands this file reads back after a write */
+/** PA RA RG GT NB NL NR RL BC IS RF: the front-end, noise and roofing commands read back after a write */
 static bool is_frontend_cmd(const char *c)
 {
-    static const char names[][3] = {"PA", "RA", "RG", "GT", "NB", "NL", "NR", "RL", "BC", "IS"};
+    static const char names[][3] = {"PA", "RA", "RG", "GT", "NB", "NL", "NR", "RL", "BC", "IS", "RF"};
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         if (strncmp(c, names[i], 2) == 0) return true;
     }
@@ -1219,6 +1257,7 @@ static void frontend_unread(void)
     memset(s_state.dnr_level, -1, sizeof(s_state.dnr_level));
     memset(s_state.dnf, -1, sizeof(s_state.dnf));
     s_state.if_shift_known[0] = s_state.if_shift_known[1] = false;
+    s_state.roofing = -1;
 }
 
 /** PA, RA, RG and GT answers (also sent on their own with auto information). Caller holds s_lock. */
@@ -1236,6 +1275,14 @@ static bool parse_frontend_locked(const char *a)
         else if (strncmp(a, "GT", 2) == 0 && p1 < 2 && v <= 6) s_state.agc[p1] = v;
         else v = -1;
         if (v >= 0) return true;   // NB / NR / BC answers have the same length: checked below
+    }
+    if (len == 5 && strncmp(a, "RF", 2) == 0 && p1 == 0 && s_rig->roofing) {
+        // The answer codes differ from the set codes: 6 12 kHz, 7 3 kHz, 9 500 Hz, A 300 Hz -> set P2 1, 2, 4, 5
+        const char *const answers = "679A", *at = strchr(answers, a[3]);
+        if (!at) return false;
+        static const int8_t set_code[] = {1, 2, 4, 5};
+        s_state.roofing = set_code[at - answers];
+        return true;
     }
     if (len == 5 && (strncmp(a, "NB", 2) == 0 || strncmp(a, "NR", 2) == 0 || strncmp(a, "BC", 2) == 0) &&
         p1 < 2 && (a[3] == '0' || a[3] == '1')) {
@@ -1266,6 +1313,7 @@ static bool parse_frontend_locked(const char *a)
         isdigit((unsigned char)a[8])) {
         const int v = (a[5] - '0') * 1000 + (a[6] - '0') * 100 + (a[7] - '0') * 10 + (a[8] - '0');
         if (v > 1200) return false;
+        if (!side_answer_expected_locked(SIDE_QUERY_IS, p1)) return true;   // a report of its own: see s_side_query_us
         s_state.if_shift[p1] = (int16_t)(a[4] == '-' ? -v : v);
         s_state.if_shift_known[p1] = true;
         return true;
@@ -1562,7 +1610,8 @@ static void handle_cat_packet(const char *pkt)
         is_rx_side(s_rig, pkt[2]) && pkt[3] == '0' && all_digits(pkt + 4, 2) &&
         digits_value(pkt + 4, 2) <= 23 &&
         xSemaphoreTake(s_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
-        if (s_rig->dual_rx || s_state.rx_vfo_known) {
+        if (s_rig->dual_rx ? side_answer_expected_locked(SIDE_QUERY_SH, (unsigned)(pkt[2] - '0'))
+                           : s_state.rx_vfo_known) {
             const bool sub = s_rig->dual_rx ? pkt[2] == '1' : s_state.rx_vfo_sub;
             s_state.width_code[sub] = (int8_t)digits_value(pkt + 4, 2);
         }
@@ -1931,7 +1980,7 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             if (strncmp(item.cmd, "FT", 2) == 0) {
                 send_poll(dev, "FT;");   // show the new split state at once
             }
-            if (is_frontend_cmd(item.cmd)) {
+            if (is_frontend_cmd(item.cmd) || strncmp(item.cmd, "SH", 2) == 0) {
                 const char readback[] = {item.cmd[0], item.cmd[1], item.cmd[2], ';', '\0'};
                 send_poll(dev, readback);   // the radio's own value (GT answers AUTO-FAST etc.)
             }
@@ -1989,6 +2038,7 @@ static void poll_loop(cdc_acm_dev_hdl_t dev)
             send_poll(dev, rig->sync_all);
             if (rig->can_control && rig->sync_frontend) send_poll(dev, rig->sync_frontend);
             if (rig->can_control && rig->sync_noise) send_poll(dev, rig->sync_noise);
+            if (rig->can_control && rig->sync_filter) send_poll(dev, rig->sync_filter);
             if (poll_count == 0) {
                 ESP_LOGI(TAG, "%s sync_all: %lld ms", rig->name,
                          (long long)((esp_timer_get_time() - sync_start) / 1000));
@@ -2037,6 +2087,7 @@ static void initialize_reads(cdc_acm_dev_hdl_t dev, const rig_profile_t *rig)
         read_poll(dev, "FT;", ANSWER_TIMEOUT_MS, false);
         if (rig->sync_frontend) read_poll(dev, rig->sync_frontend, ANSWER_TIMEOUT_MS, false);
         if (rig->sync_noise) read_poll(dev, rig->sync_noise, ANSWER_TIMEOUT_MS, false);
+        if (rig->sync_filter) read_poll(dev, rig->sync_filter, ANSWER_TIMEOUT_MS, false);
     }
     ESP_LOGI(TAG, "%s initial CAT reads: %lld ms", rig->name,
              (long long)((esp_timer_get_time() - started) / 1000));
@@ -3046,6 +3097,25 @@ esp_err_t cat_set_if_shift(bool sub, int hz)
     if (hz < -1200 || hz > 1200 || hz % 20 != 0) return ESP_ERR_INVALID_ARG;
     char cmd[16];
     snprintf(cmd, sizeof(cmd), "IS%c0%c%04d;", sub ? '1' : '0', hz < 0 ? '-' : '+', hz < 0 ? -hz : hz);
+    return cat_enqueue(cmd);
+}
+
+esp_err_t cat_set_width(bool sub, uint8_t code)
+{
+    // SH P3 00 (the mode's default) - 23. FTDX10: SH0 is its one receiver, whichever VFO is active.
+    if (!s_rig->can_control || !s_rig->sync_filter || (sub && !s_rig->dual_rx)) return ESP_ERR_NOT_SUPPORTED;
+    if (code > 23) return ESP_ERR_INVALID_ARG;
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "SH%c0%02u;", sub ? '1' : '0', (unsigned)code);
+    return cat_enqueue(cmd);
+}
+
+esp_err_t cat_set_roofing(uint8_t code)
+{
+    if (!s_rig->can_control || !s_rig->roofing) return ESP_ERR_NOT_SUPPORTED;
+    if (code != 1 && code != 2 && code != 4 && code != 5) return ESP_ERR_INVALID_ARG;
+    char cmd[16];
+    snprintf(cmd, sizeof(cmd), "RF0%u;", (unsigned)code);
     return cat_enqueue(cmd);
 }
 
