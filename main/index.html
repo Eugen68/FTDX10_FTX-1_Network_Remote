@@ -7288,6 +7288,7 @@ let cwBusy = false;
 function cwOverlapClear(c) {
   c.merger = new CwMerger(CW_EDGE_GUARD, CW_TOLERANCE);
   c.nextWin = -1; c.lastWin = -1; c.carry = []; c.lastCommitted = -Infinity; c.previewTok = []; c.lastPreview = 0;
+  c.skipUntil = -Infinity;
 }
 cwChans.forEach(cwOverlapClear);
 
@@ -7453,10 +7454,12 @@ async function cwProcessOverlap(c) {
   if (hz === undefined) return;
   if (c.nextWin < 0) c.nextWin = c.base;
   if (c.nextWin < c.base) {
-    // Decoding fell behind and old audio was dropped: confirm the carry, start a new line from the oldest
-    // audio still kept (what was dropped is lost)
-    self.postMessage({ type: 'text', ch: c.idx, commit: cwOverlapPending(c), pending: '', hz, brk: true });
+    // Decoding fell behind and old audio was dropped (what it held is lost): confirm the carry, start a new
+    // line from the oldest audio still kept. Its characters already confirmed are skipped (skipUntil).
+    const skip = c.lastCommitted + CW_TOLERANCE;
+    self.postMessage({ type: 'text', ch: c.idx, commit: cwTokText(c.carry), pending: '', hz, brk: true });
     cwOverlapClear(c);
+    c.skipUntil = c.lastCommitted = skip;
     c.pending = '';
     c.nextWin = c.base;
   }
@@ -7468,19 +7471,27 @@ async function cwProcessOverlap(c) {
     const committed = c.merger.push(start, CW_WIN, tokens);
     c.lastWin = start;
     c.nextWin = start + cwHop(CW_STEP_S[cwCfg.stream] || CW_STEP_S.normal);   // a new step applies from here
-    if (committed.length) { c.carry.push(...committed); c.lastCommitted = committed[committed.length - 1].s; }
+    // Never twice: after a restart on audio already partly confirmed (see above), skip what was confirmed
+    const fresh = committed.filter((t) => t.s > c.skipUntil);
+    if (fresh.length) { c.carry.push(...fresh); c.lastCommitted = fresh[fresh.length - 1].s; }
     let commit = cwTakeWords(c);
     cwDrop(c, c.lastWin - c.base);   // the audio before the last window is no longer needed
-    // The last word of an over has no word space after it: commit it once the merger is CW_QUIET past it
+    // The last word of an over has no word space after it: commit it once the merger is CW_QUIET past it,
+    // and start a new line (the end of a transmission, as with Pauses)
+    let over = false;
     if (c.carry.length && c.merger.committedUntil - c.carry[c.carry.length - 1].s >= CW_QUIET) {
       const rest = cwTokText(c.carry.splice(0));
       commit = commit && rest ? commit + ' ' + rest : commit || rest;
+      over = true;
     }
     self.postMessage({ type: 'text', ch: c.idx, commit: commit || null, pending: cwOverlapPending(c), hz });
+    if (over) self.postMessage({ type: 'text', ch: c.idx, commit: null, pending: c.pending, hz, brk: true });
     return;
   }
   if (windowDue) return;   // the tone check dropped audio: no window and no preview this time
-  const from = Math.max(c.lastWin, c.base), off = from - c.base;
+  // The preview starts at the last window, but no earlier than a guard before what the merger has passed:
+  // the grey text is only what comes after it, and a shorter preview costs less
+  const from = Math.max(c.lastWin, c.base, Math.floor(c.merger.committedUntil - CW_EDGE_GUARD)), off = from - c.base;
   if (c.len - off < CW_MIN_PENDING) return;
   const tokens = await cwInferTokens(model, c.buf.slice(off, c.len), hz);
   if (gen !== c.gen || model !== cwCfg.model) return;
