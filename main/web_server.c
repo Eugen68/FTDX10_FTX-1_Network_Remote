@@ -970,6 +970,7 @@ typedef struct {
     char action[24];
     bool has_raw;
     char raw[CAT_CONSOLE_MAX_BYTES + 1];
+    unsigned keys;            // keys in the request (raw must be alone)
 } cat_req_t;
 
 static void skip_ws(const char **p)
@@ -1353,6 +1354,7 @@ static bool parse_cat_request(const char *s, cat_req_t *r)
         }
 
         uint32_t num = 0;
+        r->keys++;
         if (strcmp(key, "target") == 0) {
             if (!is_text || r->has_target) return false;
             if (strcmp(text, "main") == 0) r->sub = false;
@@ -1546,8 +1548,7 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     if (r.has_raw) {
         // The CAT LOG console: a line of commands, alone in the request (see cat_send_console)
         char why[96] = "", why_json[2 * sizeof(why) + 1], json[sizeof(why_json) + 48];
-        const bool alone = !r.has_target && !r.has_freq && !r.has_mode && !r.has_vol && !r.has_sq && !r.has_notch &&
-                           !r.has_notch_hz && !r.has_power && !r.has_action;
+        const bool alone = r.keys == 1;
         const esp_err_t err = alone ? cat_send_console(r.raw, why, sizeof(why)) : ESP_ERR_INVALID_ARG;
         if (!alone) strlcpy(why, "raw must be the only key", sizeof(why));
         json_escape(why, why_json, sizeof(why_json));
