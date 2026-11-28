@@ -727,8 +727,8 @@ listens: it never keys the radio and sends no CAT command.
     | Normal | 4 s | about 7 s |
     | Precise | 8 s | about 13 s |
 
-    The grey text (the last word not confirmed yet) is refreshed once a second from the last window to
-    the end of the audio. The last word of a transmission is confirmed about 3 s after the signal stops.
+    The grey text (the words not confirmed yet) is refreshed every 2 s, from just before the confirmed
+    part to the end of the audio. The last word of a transmission is confirmed about 3 s after the signal stops.
     Changing between Rapid, Normal and Precise applies from the next window without losing text; changing
     between Pauses and the windows confirms the pending text and starts afresh.
 - **AUTO** (narrow model): follows the strongest CW tone between 300 and 1200 Hz and shows it next to the title.

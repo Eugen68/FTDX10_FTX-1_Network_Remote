@@ -7052,7 +7052,7 @@ const CW_WIN = 12 * CW_RATE;            // length of every window
 const CW_EDGE_GUARD = 1 * CW_RATE;      // unreliable margin at a window's interior edges
 const CW_TOLERANCE = CW_RATE / 10;      // 100 ms: how far apart two copies of one character may be
 const CW_MAX_CARRY = 30;                // characters without a space after which they are confirmed anyway
-const CW_PREVIEW_MS = 1000;             // the grey text: at most this often
+const CW_PREVIEW_MS = 2000;             // the grey text: at most this often (1 s doubled the cost)
 const CW_STEP_S = { fast: 2, normal: 4, precise: 8 };
 // The step rounded to the model's output frame, so every window's characters land on the same grid
 const cwHop = (s) => Math.min(Math.max(Math.round(s * CW_RATE / CW_OUT_HOP), 1), Math.floor(CW_WIN / CW_OUT_HOP)) * CW_OUT_HOP;
@@ -7315,12 +7315,24 @@ function cwRestart(c, newLine) {
 
 // The signal went away or another station took over: keep what was still pending, start a new line
 function cwBreak(c, hz) {
-  const windows = cwWindows();
-  if (windows) { cwOverlapPending(c); c.gen++; }   // a window decode still running belongs to the old signal
+  if (cwWindows()) {
+    // The text not confirmed yet ends the old signal's line. A window decode still running belongs to
+    // the old signal (gen). When the signal went away (hz null) the audio kept here was already turned
+    // into that text: skip it, so its last characters do not come out again when a signal returns.
+    cwOverlapPending(c);
+    c.gen++;
+    if (c.pending) self.postMessage({ type: 'text', ch: c.idx, commit: c.pending, pending: '', hz });
+    self.postMessage({ type: 'text', ch: c.idx, commit: null, pending: '', hz, brk: true });
+    c.pending = '';
+    const end = c.base + c.len;
+    cwDrop(c, Math.max(0, c.len - CW_DETECT_SEC * CW_RATE));
+    cwOverlapClear(c);
+    if (hz == null) c.skipUntil = c.lastCommitted = end;
+    return;
+  }
   self.postMessage({ type: 'text', ch: c.idx, commit: c.pending, pending: '', hz, brk: true });
   c.pending = '';
   cwDrop(c, Math.max(0, c.len - CW_DETECT_SEC * CW_RATE));
-  if (windows) cwOverlapClear(c);
 }
 
 function cwAppend(c, s) {
@@ -7420,8 +7432,9 @@ function cwOverlapTone(c) {
   const det = cwStrongestTone(c.buf.slice(Math.max(0, c.len - CW_DETECT_SEC * CW_RATE), c.len), c.lockHz);
   if (!det) {
     if (c.lockHz != null || c.carry.length) { c.lockHz = null; cwBreak(c, null); return undefined; }
+    // Nothing was decoded since (no window while nothing is keyed): only the audio is dropped, and what
+    // cwBreak marked as already turned into text stays skipped
     cwDrop(c, Math.max(0, c.len - CW_DETECT_SEC * CW_RATE));
-    cwOverlapClear(c);
     c.pending = '';
     self.postMessage({ type: 'text', ch: c.idx, commit: null, pending: '', hz: null });
     return undefined;
