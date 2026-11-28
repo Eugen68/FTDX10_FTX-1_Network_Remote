@@ -186,7 +186,7 @@ const char *cat_data_mode_error(void);
 /*
  * There is deliberately no function that sends a free-form CAT string. Every command is built here from
  * typed arguments, and cat.c only lets an allow-list of commands (frequency, mode, AF gain, squelch,
- * notch, VFO swap/copy, split, pre-amp, attenuator, RF gain, AGC, NB, DNR, DNF, IF shift, power) reach the radio. Nothing in this firmware can make the radio transmit.
+ * notch, VFO swap/copy, split, pre-amp, attenuator, RF gain, AGC, NB, DNR, DNF, IF shift, scope span, power) reach the radio. Nothing in this firmware can make the radio transmit.
  */
 
 /** @brief Swap the MAIN and SUB VFOs (CAT "SV") */
@@ -228,6 +228,10 @@ esp_err_t cat_set_dnf(bool sub, bool on);
 
 /** @brief IF shift (CAT "IS"), -1200..+1200 Hz in 20 Hz steps */
 esp_err_t cat_set_if_shift(bool sub, int hz);
+
+/** @brief FTDX10 scope span (CAT "SS05"): 0 1 kHz, 1 2k, 2 5k, 3 10k, 4 20k, 5 50k, 6 100k, 7 200k, 8 500k, 9 1 MHz.
+ *  The ACC scope frames report the span the radio uses. */
+esp_err_t cat_set_scope_span(uint8_t code);
 
 /**
  * @brief Set frequency in Hz

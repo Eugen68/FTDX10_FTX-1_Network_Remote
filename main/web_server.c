@@ -960,6 +960,7 @@ static esp_err_t cat_handler(httpd_req_t *req)
 //   power   0 | 1 | false | true
 //   preamp  0-2 (with pa_band 0-2 on the FTX-1)   att 0-3   rfg 0-255   agc 0-4   (range checked again in cat.c)
 //   nb, dnr, dnf  0 | 1 | false | true   nb_level 0-10   dnr_level 0-15 (with nb / dnr)   ifs -1200..1200
+//   scope_span 0-9 (FTDX10 scope span, 1 kHz - 1 MHz)
 //   action  "swap" | "copy_main_to_sub" | "copy_sub_to_main"
 // Unknown or repeated keys, escapes, nesting and trailing data are rejected. There is no way to send a
 // raw CAT string.
@@ -985,6 +986,8 @@ typedef struct {
     bool has_nb, nb, has_nb_level, has_dnr, dnr, has_dnr_level, has_dnf, dnf, has_ifs;
     uint8_t nb_level, dnr_level;
     int16_t ifs;
+    bool has_scope_span;
+    uint8_t scope_span;
     bool has_action;
     char action[24];
 } cat_req_t;
@@ -1454,6 +1457,10 @@ static bool parse_cat_request(const char *s, cat_req_t *r)
             if (is_text || r->has_ifs || !token_to_int(token, -1200, 1200, &v)) return false;
             r->ifs = (int16_t)v;
             r->has_ifs = true;
+        } else if (strcmp(key, "scope_span") == 0) {
+            if (is_text || r->has_scope_span || !token_to_uint(token, 9, &num)) return false;
+            r->scope_span = (uint8_t)num;
+            r->has_scope_span = true;
         } else if (strcmp(key, "action") == 0) {
             if (!is_text || r->has_action) return false;
             strlcpy(r->action, text, sizeof(r->action));
@@ -1637,6 +1644,7 @@ static esp_err_t cat_post_handler(httpd_req_t *req)
     if (r.has_dnr) APPLY(cat_set_dnr(r.sub, r.dnr, r.has_dnr_level ? r.dnr_level : CAT_LEVEL_KEEP));
     if (r.has_dnf) APPLY(cat_set_dnf(r.sub, r.dnf));
     if (r.has_ifs) APPLY(cat_set_if_shift(r.sub, r.ifs));
+    if (r.has_scope_span) APPLY(cat_set_scope_span(r.scope_span));
 #undef APPLY
 
     httpd_resp_set_type(req, "application/json");
