@@ -713,6 +713,24 @@ listens: it never keys the radio and sends no CAT command.
   until it is confirmed. A new station or the end of a transmission starts a new line. `CLEAR` empties the panel.
 - **Model**: `Narrow` (default) decodes one signal, the tone at the pitch; `Wide` decodes the strongest
   signal between 400 and 1200 Hz, is heavier and needs more CPU (a phone may struggle).
+- **Stream**: how the text is confirmed (the same for MAIN and SUB, kept in this browser).
+  - `Pauses` (default): every second the decoder re-decodes all the audio not confirmed yet (up to 30 s)
+    and confirms the text at the gaps between words.
+  - `Rapid` / `Normal` / `Precise`: overlapping windows. A fixed 12 s window is decoded every 2 / 4 / 8 s,
+    each piece of audio only once. Where two windows overlap their characters are matched in time and the
+    more confident copy is kept, so a character cut by the edge of one window is read from its neighbour.
+    The confirmed text is final.
+
+    | Stream | Window every | Text confirmed after (median) |
+    |---|---|---|
+    | Rapid | 2 s | about 4 s (on weak, noisy signals it may miss a character more) |
+    | Normal | 4 s | about 7 s |
+    | Precise | 8 s | about 13 s |
+
+    The grey text (the last word not confirmed yet) is refreshed once a second from the last window to
+    the end of the audio. The last word of a transmission is confirmed about 3 s after the signal stops.
+    Changing between Rapid, Normal and Precise applies from the next window without losing text; changing
+    between Pauses and the windows confirms the pending text and starts afresh.
 - **AUTO** (narrow model): follows the strongest CW tone between 300 and 1200 Hz and shows it next to the title.
   With AUTO off, the tone in **Hz** is decoded, normally the radio's CW pitch (700 Hz by default). Narrow the
   radio's filter around the station for the best copy.

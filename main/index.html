@@ -1454,6 +1454,8 @@
             <button type="button" class="ft8-btn dec-any-ft8" id="ft8DtApply" title="Set DT corr to this median" disabled>APPLY</button>
             <label class="ft8-dtcorr-label dec-any-cw" title="CW, MAIN and SUB. Narrow: decodes one signal, the tone at the pitch (1.2 MB download). Wide: decodes the strongest signal between 400 and 1200 Hz (15 MB download)">Model
               <select class="cw-select" id="cwModel"><option value="narrow">Narrow</option><option value="wide">Wide</option></select></label>
+            <label class="ft8-dtcorr-label dec-any-cw" title="How decoded text is confirmed. Pauses: at word gaps, re-decoding up to 30 s every second. Rapid / Normal / Precise: fixed 12 s windows every 2 / 4 / 8 s, each decoded once (lighter on phones); text is confirmed after about 4 / 7 / 13 s.">Stream
+              <select class="cw-select" id="cwStream"><option value="gap">Pauses</option><option value="fast">Rapid</option><option value="normal">Normal</option><option value="precise">Precise</option></select></label>
             <button type="button" class="ft8-btn dec-any-cw" id="cwAutoBtn" title="CW, narrow model: follow the strongest CW tone between 300 and 1200 Hz automatically">AUTO</button>
             <label class="ft8-dtcorr-label dec-any-cw" title="CW, narrow model with AUTO off: the audio tone to decode, normally the radio's CW pitch">Hz
               <input type="number" class="ft8-dtcorr cw-pitch" id="cwPitch" min="300" max="1200" step="10" value="700"></label>
@@ -5729,17 +5731,20 @@ var cwReady = false;
 const CW_SAMPLE_RATE = 9600;
 const CW_PREFS_KEY = 'ftx1.cw';
 const CW_MAX_TEXT = 6000;   // characters kept per panel
-const cwSettings = { model: 'narrow', auto: true, pitch: 700, rig: true, on: [false, false] };
+const CW_STREAMS = { gap: 'Pauses', fast: 'Rapid', normal: 'Normal', precise: 'Precise' };
+const cwSettings = { model: 'narrow', auto: true, pitch: 700, rig: true, stream: 'gap', on: [false, false] };
 try {
   const saved = JSON.parse(localStorage.getItem(CW_PREFS_KEY) || '{}');
   if (saved.model === 'narrow' || saved.model === 'wide') cwSettings.model = saved.model;
   if (typeof saved.auto === 'boolean') cwSettings.auto = saved.auto;
   if (saved.pitch >= 300 && saved.pitch <= 1200) cwSettings.pitch = Math.round(saved.pitch);
   if (typeof saved.rig === 'boolean') cwSettings.rig = saved.rig;
+  if (Object.prototype.hasOwnProperty.call(CW_STREAMS, saved.stream)) cwSettings.stream = saved.stream;
   if (Array.isArray(saved.on)) cwSettings.on = [saved.on[0] === true, saved.on[1] === true];
 } catch (e) {}
 
 const cwModelSel = document.getElementById('cwModel');
+const cwStreamSel = document.getElementById('cwStream');
 const cwAutoBtn = document.getElementById('cwAutoBtn');
 const cwPitchInput = document.getElementById('cwPitch');
 const cwRigBtn = document.getElementById('cwRigBtn');
@@ -5797,7 +5802,7 @@ function cwOnMessage(m) {
     cwShowInfo();
     if (nearBottom) c.box.scrollTop = c.box.scrollHeight;
   } else if (m.type === 'perf') {
-    cwChans[m.ch].toneEl.title = 'Tone being decoded. Last decode took ' + m.ms + ' ms';
+    cwChans[m.ch].toneEl.title = 'Tone being decoded. Last decode took ' + m.ms + ' ms (Stream: ' + CW_STREAMS[cwSettings.stream] + ')';
   }
 }
 
@@ -5908,6 +5913,7 @@ function cwSetRadioPitch(hz) {
 
 function cwApply() {
   cwModelSel.value = cwSettings.model;
+  cwStreamSel.value = cwSettings.stream;
   cwAutoBtn.classList.toggle('active', cwSettings.auto);
   const fromRig = cwSettings.rig && cwRadioPitch;
   cwPitchInput.value = cwEffectivePitch();
@@ -5933,7 +5939,7 @@ function cwApply() {
   if (!cwSettings.on.some(Boolean)) cwStatusEl.textContent = 'OFF';
   else if (cwStatusEl.textContent === 'OFF') { cwStatusEl.textContent = 'LOADING'; Object.assign(cwState, { kind: 'loading', progress: 0 }); }
   cwGetWorker().postMessage({ type: 'config', model: cwSettings.model, auto: cwSettings.auto,
-                              pitch: cwEffectivePitch(), enabled: cwSettings.on.slice() });
+                              pitch: cwEffectivePitch(), stream: cwSettings.stream, enabled: cwSettings.on.slice() });
 }
 
 function cwSave() {
@@ -5944,6 +5950,10 @@ cwModelSel.addEventListener('change', () => {
   cwSettings.model = cwModelSel.value === 'wide' ? 'wide' : 'narrow';
   cwStatusEl.title = '';
   if (cwSettings.on.some(Boolean)) { cwStatusEl.textContent = 'LOADING'; Object.assign(cwState, { kind: 'loading', progress: 0 }); }
+  cwSave(); cwApply();
+});
+cwStreamSel.addEventListener('change', () => {
+  cwSettings.stream = Object.prototype.hasOwnProperty.call(CW_STREAMS, cwStreamSel.value) ? cwStreamSel.value : 'gap';
   cwSave(); cwApply();
 });
 cwAutoBtn.addEventListener('click', () => {
@@ -7033,6 +7043,119 @@ function cwText(chars, endFrame) {
   return s.replace(/\s+/g, ' ').trim();
 }
 
+// ---- Overlapping windows (Stream = Rapid / Normal / Precise), a port of OverlapMerger and
+// OverlapWindows from the owner's CwDecoder. Fixed 12 s windows, one every 2 / 4 / 8 s, each decoded
+// once; in the part two consecutive windows share, their characters are aligned in time and of a pair
+// the more confident one is kept, so a character cut by one window's edge is read from its neighbour.
+// What the merger returns is final. (Stream = Pauses re-decodes the pending audio every second.)
+const CW_WIN = 12 * CW_RATE;            // length of every window
+const CW_EDGE_GUARD = 1 * CW_RATE;      // unreliable margin at a window's interior edges
+const CW_TOLERANCE = CW_RATE / 10;      // 100 ms: how far apart two copies of one character may be
+const CW_MAX_CARRY = 30;                // characters without a space after which they are confirmed anyway
+const CW_PREVIEW_MS = 1000;             // the grey text: at most this often
+const CW_STEP_S = { fast: 2, normal: 4, precise: 8 };
+// The step rounded to the model's output frame, so every window's characters land on the same grid
+const cwHop = (s) => Math.min(Math.max(Math.round(s * CW_RATE / CW_OUT_HOP), 1), Math.floor(CW_WIN / CW_OUT_HOP)) * CW_OUT_HOP;
+
+// Greedy CTC with the position and confidence of every character (port of CtcDecoder.GreedyTokens):
+// one token per run of equal non-blank frames, at the run's middle (frame t is centered on t * CW_OUT_HOP),
+// with the run's highest softmax probability. The word space is a token like any character.
+function cwTokens(data, dims) {
+  const T = dims[1], C = dims[2], tokens = [];
+  let runIndex = -1, runStart = 0, runPeak = 0;
+  for (let t = 0; t <= T; t++) {
+    let best = -1, prob = 0;
+    if (t < T) {
+      let bestV = -Infinity, sum = 0;
+      for (let c = 0; c < C; c++) { const v = data[t * C + c]; if (v > bestV) { bestV = v; best = c; } }
+      for (let c = 0; c < C; c++) sum += Math.exp(data[t * C + c] - bestV);
+      prob = 1 / sum;
+    }
+    if (best !== runIndex) {
+      if (runIndex >= 0 && runIndex !== CW_BLANK) {
+        tokens.push({ s: Math.round((runStart + t - 1) * 0.5 * CW_OUT_HOP), i: runIndex, p: runPeak });
+      }
+      runIndex = best; runStart = t; runPeak = prob;
+    } else if (prob > runPeak) {
+      runPeak = prob;
+    }
+  }
+  return tokens;
+}
+
+const cwTokText = (tokens) => tokens.map((t) => CW_VOCAB[t.i]).join('').replace(/\s+/g, ' ').trim();
+
+// Windows are pushed in increasing start order, with their tokens' samples already absolute
+class CwMerger {
+  constructor(edgeGuard, tolerance) {
+    this.edgeGuard = edgeGuard; this.tolerance = tolerance;
+    this.pending = []; this.pendingReliableEnd = -Infinity; this.windows = 0;
+    this.committedUntil = -Infinity;   // everything before this sample has been returned by push
+  }
+
+  push(windowStart, windowLength, windowTokens) {
+    const reliableStart = windowStart + (this.windows > 0 ? this.edgeGuard : 0);
+    const tokens = windowTokens.filter((t) => t.s >= reliableStart);
+    this.windows++;
+    if (this.windows === 1) {
+      this.pending = tokens;
+      this.pendingReliableEnd = windowStart + windowLength - this.edgeGuard;
+      return [];
+    }
+    let zoneStart = Math.max(reliableStart, this.committedUntil), zoneEnd = this.pendingReliableEnd;
+    if (zoneEnd < zoneStart) {
+      // No reliable overlap: each window is trusted up to the middle of the gap
+      zoneStart = 0.5 * (zoneStart + zoneEnd);
+      zoneEnd = zoneStart;
+    }
+    const middle = 0.5 * (zoneStart + zoneEnd);
+    const inZone = (t) => t.s >= zoneStart && t.s <= zoneEnd;
+    const committed = this.pending.filter((t) => t.s < zoneStart), merged = [];
+    for (const [older, newer] of this.align(this.pending.filter(inZone), tokens.filter(inZone))) {
+      if (older && newer) merged.push(older.p >= newer.p ? older : newer);
+      else if (older && older.s < middle) merged.push(older);
+      else if (newer && newer.s >= middle) merged.push(newer);
+    }
+    // Unmatched tokens between two pairs can come out in any older / newer order (sort is stable)
+    committed.push(...merged.sort((a, b) => a.s - b.s));
+    this.committedUntil = zoneEnd;
+    this.pending = tokens.filter((t) => t.s > zoneEnd);
+    this.pendingReliableEnd = windowStart + windowLength - this.edgeGuard;
+    return committed;
+  }
+
+  // Time alignment of two short token sequences. Pairs only within the tolerance; equal characters
+  // cost less than substitutions and both less than two unmatched tokens, so a spurious token cannot
+  // steal a real one's partner.
+  align(a, b) {
+    const n = a.length, m = b.length, gap = 1.0;
+    const cost = Array.from({ length: n + 1 }, () => new Float64Array(m + 1));
+    const move = Array.from({ length: n + 1 }, () => new Uint8Array(m + 1));   // 0 pair, 1 only a, 2 only b
+    for (let i = 0; i <= n; i++) { cost[i][0] = i * gap; move[i][0] = 1; }
+    for (let j = 0; j <= m; j++) { cost[0][j] = j * gap; move[0][j] = 2; }
+    for (let i = 1; i <= n; i++) {
+      for (let j = 1; j <= m; j++) {
+        let best = cost[i - 1][j] + gap, step = 1;
+        if (cost[i][j - 1] + gap < best) { best = cost[i][j - 1] + gap; step = 2; }
+        const dt = Math.abs(a[i - 1].s - b[j - 1].s);
+        if (dt <= this.tolerance) {
+          const pair = cost[i - 1][j - 1] + 0.5 * dt / this.tolerance + (a[i - 1].i === b[j - 1].i ? 0 : 0.9);
+          if (pair <= best) { best = pair; step = 0; }
+        }
+        cost[i][j] = best; move[i][j] = step;
+      }
+    }
+    const pairs = [];
+    for (let x = n, y = m; x > 0 || y > 0;) {
+      if (move[x][y] === 0) { pairs.push([a[x - 1], b[y - 1]]); x--; y--; }
+      else if (move[x][y] === 1) { pairs.push([a[x - 1], null]); x--; }
+      else { pairs.push([null, b[y - 1]]); y--; }
+    }
+    return pairs.reverse();
+  }
+}
+// ---- end of overlapping windows
+
 // ---- Runtime and models ----
 async function cwSha256(buf) {
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
@@ -7129,28 +7252,59 @@ async function cwLoadModel(model) {
   }
 }
 
-async function cwInfer(model, input) {
+async function cwRun(model, input) {
   const s = cwSessions[model];
   const out = await s.run({ [s.inputNames[0]]: new s.ort.Tensor('float32', input.data, input.dims) });
-  const t = out[s.outputNames[0]];
+  return out[s.outputNames[0]];
+}
+
+async function cwInfer(model, input) {
+  const t = await cwRun(model, input);
   return cwCtc(t.data, t.dims);
 }
 
+// Tokens of one stretch of audio, with samples relative to its start
+async function cwInferTokens(model, audio, hz) {
+  const input = model === 'narrow' ? cwNarrowInput(audio, hz) : cwWideInput(audio);
+  if (!input) return [];
+  const t = await cwRun(model, input);
+  return cwTokens(t.data, t.dims);
+}
+
 // ---- Streaming, one state per receiver ----
-const cwCfg = { model: 'narrow', auto: true, pitch: 700 };
+const cwCfg = { model: 'narrow', auto: true, pitch: 700, stream: 'gap' };
+const cwWindows = () => cwCfg.stream !== 'gap';
 const cwChans = [0, 1].map((idx) => ({
   idx, enabled: false, buf: new Float32Array(CW_MAX_SEG + 2 * CW_RATE), len: 0,
   lastRun: 0, lockHz: null, gen: 0, pending: '',
-  fixedHz: null   // tone chosen on the scope for this receiver (narrow model), overrides AUTO and the Hz field
+  fixedHz: null,  // tone chosen on the scope for this receiver (narrow model), overrides AUTO and the Hz field
+  base: 0         // absolute sample of buf[0] (the overlapping windows count in absolute samples)
 }));
 let cwBusy = false;
 
-function cwReset(c) { c.len = 0; c.lockHz = null; c.gen++; c.pending = ''; }
+// Overlapping windows: the merger, where the next window starts (-1: at the buffer start), the last
+// decoded window, the characters the merger confirmed after the last word space (carry), the last of
+// them, and the latest preview's characters (the grey text)
+function cwOverlapClear(c) {
+  c.merger = new CwMerger(CW_EDGE_GUARD, CW_TOLERANCE);
+  c.nextWin = -1; c.lastWin = -1; c.carry = []; c.lastCommitted = -Infinity; c.previewTok = []; c.lastPreview = 0;
+}
+cwChans.forEach(cwOverlapClear);
+
+// The grey text with overlapping windows: the carry, then the preview's characters the merger has not passed
+function cwOverlapPending(c) {
+  const after = Math.max(c.merger.committedUntil, c.lastCommitted + CW_TOLERANCE);
+  c.pending = cwTokText(c.carry.concat(c.previewTok.filter((t) => t.s > after)));
+  return c.pending;
+}
+
+function cwReset(c) { c.base += c.len; c.len = 0; c.lockHz = null; c.gen++; c.pending = ''; cwOverlapClear(c); }
 
 // Start the receiver over without losing text: confirm what was pending (on a new line), then drop the
 // audio and any decode running on it. QSY always starts a new line; a settings change only when text was
 // pending (the pitch can change from the radio during a reception).
 function cwRestart(c, newLine) {
+  if (cwWindows()) cwOverlapPending(c);
   if (newLine || c.pending) {
     self.postMessage({ type: 'text', ch: c.idx, commit: c.pending, pending: '', hz: null, brk: true });
   }
@@ -7159,9 +7313,12 @@ function cwRestart(c, newLine) {
 
 // The signal went away or another station took over: keep what was still pending, start a new line
 function cwBreak(c, hz) {
+  const windows = cwWindows();
+  if (windows) { cwOverlapPending(c); c.gen++; }   // a window decode still running belongs to the old signal
   self.postMessage({ type: 'text', ch: c.idx, commit: c.pending, pending: '', hz, brk: true });
   c.pending = '';
   cwDrop(c, Math.max(0, c.len - CW_DETECT_SEC * CW_RATE));
+  if (windows) cwOverlapClear(c);
 }
 
 function cwAppend(c, s) {
@@ -7174,7 +7331,7 @@ function cwAppend(c, s) {
 
 function cwDrop(c, n) {
   n = Math.min(n, c.len);
-  c.buf.copyWithin(0, n, c.len); c.len -= n;
+  c.buf.copyWithin(0, n, c.len); c.len -= n; c.base += n;
 }
 
 function cwSplit(spaces, len, nearEnd) {
@@ -7252,16 +7409,98 @@ async function cwProcess(c) {
   self.postMessage({ type: 'text', ch: c.idx, commit, pending: '', hz });
 }
 
+// Overlapping windows: the tone, as in cwProcess (narrow model). Returns undefined when nothing is keyed
+// (AUTO), after dropping the old audio, so nothing is decoded until a signal shows up.
+function cwOverlapTone(c) {
+  if (cwCfg.model !== 'narrow') return null;
+  if (c.fixedHz) return c.fixedHz;
+  if (!cwCfg.auto) return cwCfg.pitch;
+  const det = cwStrongestTone(c.buf.slice(Math.max(0, c.len - CW_DETECT_SEC * CW_RATE), c.len), c.lockHz);
+  if (!det) {
+    if (c.lockHz != null || c.carry.length) { c.lockHz = null; cwBreak(c, null); return undefined; }
+    cwDrop(c, Math.max(0, c.len - CW_DETECT_SEC * CW_RATE));
+    cwOverlapClear(c);
+    c.pending = '';
+    self.postMessage({ type: 'text', ch: c.idx, commit: null, pending: '', hz: null });
+    return undefined;
+  }
+  if (c.lockHz != null && Math.abs(det.hz - c.lockHz) > 2 * CW_BIN_HZ) {
+    c.lockHz = det.hz;   // a different station: decode it from the detection window only
+    cwBreak(c, det.hz);
+    return undefined;
+  }
+  c.lockHz = det.hz;
+  return det.hz;
+}
+
+const cwWindowDue = (c) => (c.nextWin < 0 ? c.base : c.nextWin) + CW_WIN <= c.base + c.len;
+
+// Commit the carry up to its last word space (or all of it past CW_MAX_CARRY characters)
+function cwTakeWords(c) {
+  let k = -1;
+  for (let i = c.carry.length - 1; i >= 0 && k < 0; i--) if (c.carry[i].i === CW_SPACE) k = i;
+  if (k < 0 && c.carry.length > CW_MAX_CARRY) k = c.carry.length - 1;
+  return k < 0 ? '' : cwTokText(c.carry.splice(0, k + 1));
+}
+
+// One step for a receiver with overlapping windows: decode the next full window if there is one,
+// otherwise refresh the preview (the grey text) at most once every CW_PREVIEW_MS
+async function cwProcessOverlap(c) {
+  const model = cwCfg.model, gen = c.gen;
+  const windowDue = cwWindowDue(c);
+  if (!windowDue) c.lastPreview = Date.now();
+  const hz = cwOverlapTone(c);
+  if (hz === undefined) return;
+  if (c.nextWin < 0) c.nextWin = c.base;
+  if (c.nextWin < c.base) {
+    // Decoding fell behind and old audio was dropped: confirm the carry, start a new line from the oldest
+    // audio still kept (what was dropped is lost)
+    self.postMessage({ type: 'text', ch: c.idx, commit: cwOverlapPending(c), pending: '', hz, brk: true });
+    cwOverlapClear(c);
+    c.pending = '';
+    c.nextWin = c.base;
+  }
+  if (cwWindowDue(c)) {
+    const start = c.nextWin, off = start - c.base;
+    const tokens = await cwInferTokens(model, c.buf.slice(off, off + CW_WIN), hz);
+    if (gen !== c.gen || model !== cwCfg.model) return;   // reset or reconfigured meanwhile
+    tokens.forEach((t) => { t.s += start; });
+    const committed = c.merger.push(start, CW_WIN, tokens);
+    c.lastWin = start;
+    c.nextWin = start + cwHop(CW_STEP_S[cwCfg.stream] || CW_STEP_S.normal);   // a new step applies from here
+    if (committed.length) { c.carry.push(...committed); c.lastCommitted = committed[committed.length - 1].s; }
+    let commit = cwTakeWords(c);
+    cwDrop(c, c.lastWin - c.base);   // the audio before the last window is no longer needed
+    // The last word of an over has no word space after it: commit it once the merger is CW_QUIET past it
+    if (c.carry.length && c.merger.committedUntil - c.carry[c.carry.length - 1].s >= CW_QUIET) {
+      const rest = cwTokText(c.carry.splice(0));
+      commit = commit && rest ? commit + ' ' + rest : commit || rest;
+    }
+    self.postMessage({ type: 'text', ch: c.idx, commit: commit || null, pending: cwOverlapPending(c), hz });
+    return;
+  }
+  if (windowDue) return;   // the tone check dropped audio: no window and no preview this time
+  const from = Math.max(c.lastWin, c.base), off = from - c.base;
+  if (c.len - off < CW_MIN_PENDING) return;
+  const tokens = await cwInferTokens(model, c.buf.slice(off, c.len), hz);
+  if (gen !== c.gen || model !== cwCfg.model) return;
+  tokens.forEach((t) => { t.s += from; });
+  c.previewTok = tokens;
+  self.postMessage({ type: 'text', ch: c.idx, commit: null, pending: cwOverlapPending(c), hz });
+}
+
 async function cwPump() {
   if (cwBusy || !cwSessions[cwCfg.model]) return;
-  const now = Date.now();
-  const due = cwChans.filter((c) => c.enabled && c.len >= CW_MIN_PENDING && now - c.lastRun >= CW_INTERVAL_MS)
+  const now = Date.now(), windows = cwWindows();
+  const due = cwChans.filter((c) => c.enabled && (windows
+                ? cwWindowDue(c) || (c.len >= CW_MIN_PENDING && now - c.lastPreview >= CW_PREVIEW_MS)
+                : c.len >= CW_MIN_PENDING && now - c.lastRun >= CW_INTERVAL_MS))
                      .sort((a, b) => a.lastRun - b.lastRun)[0];
   if (!due) return;
   cwBusy = true;
   due.lastRun = now;
   const t0 = Date.now();
-  try { await cwProcess(due); }
+  try { await (windows ? cwProcessOverlap(due) : cwProcess(due)); }
   catch (e) { self.postMessage({ type: 'status', model: cwCfg.model, state: 'error', progress: 0, error: String(e && e.message || e) }); }
   cwBusy = false;
   self.postMessage({ type: 'perf', ch: due.idx, ms: Date.now() - t0 });
@@ -7277,6 +7516,11 @@ self.onmessage = (e) => {
   } else if (m.type === 'config') {
     if (m.cdn) CW_CDN = m.cdn;
     const changed = m.model !== cwCfg.model || m.auto !== cwCfg.auto || (!m.auto && m.pitch !== cwCfg.pitch);
+    // Pauses <-> windows: confirm what is pending (in the old mode), then start clean. Between Rapid,
+    // Normal and Precise only the step changes, from the next window on.
+    const stream = CW_STEP_S[m.stream] ? m.stream : 'gap';
+    if ((stream === 'gap') !== (cwCfg.stream === 'gap')) cwChans.forEach((c) => cwRestart(c, false));
+    cwCfg.stream = stream;
     cwCfg.model = m.model; cwCfg.auto = m.auto; cwCfg.pitch = m.pitch;
     m.enabled.forEach((on, i) => { if (cwChans[i].enabled !== on) { cwChans[i].enabled = on; cwReset(cwChans[i]); } });
     if (changed) cwChans.forEach((c) => cwRestart(c, false));
