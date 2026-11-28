@@ -30,11 +30,17 @@
 #include "usb/usb_helpers.h"
 #include "usb/uac_host.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "tx.h"
 #include "cat.h"
 #include "tx_voice.h"
 #include "ft8_tx.h"
 #include "usb_audio.h"
+
+// The last audio loss and bus reset, for /status (an intermittent fault leaves its reason and the RAM then)
+static portMUX_TYPE s_event_mux = portMUX_INITIALIZER_UNLOCKED;
+static usb_audio_event_t s_last_loss, s_last_reset;
+static void note_event(usb_audio_event_t *e, const char *reason);
 
 // Above the stream's USB reader (6), the web server and LwIP (18), below the Wi-Fi driver (23): the
 // isochronous transfers must be handed back to the controller on time or audio packets are lost.
@@ -490,6 +496,7 @@ static void handle_disconnected(uac_host_device_handle_t handle)
         if (handle == s_mic_handle) {
             s_streaming = false;
             s_mic_handle = NULL;
+            note_event(&s_last_loss, "device disconnected");
         }
         xSemaphoreGive(s_lock);
         uac_host_device_close(handle);
@@ -512,6 +519,26 @@ static int64_t s_last_recover_ms;
 static int s_recover_attempts;
 static atomic_uint s_bus_resets;
 
+static void note_event(usb_audio_event_t *e, const char *reason)
+{
+    const usb_audio_event_t now = {
+        .reason = reason, .at_us = esp_timer_get_time(),
+        .int_free = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        .int_min = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+    };
+    portENTER_CRITICAL(&s_event_mux);
+    *e = now;
+    portEXIT_CRITICAL(&s_event_mux);
+}
+
+void usb_audio_last_events(usb_audio_event_t *loss, usb_audio_event_t *reset)
+{
+    portENTER_CRITICAL(&s_event_mux);
+    *loss = s_last_loss;
+    *reset = s_last_reset;
+    portEXIT_CRITICAL(&s_event_mux);
+}
+
 static void bus_power_cycle(uint32_t off_ms)
 {
     usb_host_lib_set_root_port_power(false);
@@ -519,9 +546,10 @@ static void bus_power_cycle(uint32_t off_ms)
     usb_host_lib_set_root_port_power(true);
 }
 
-static void recover_bus_claimed(void)
+static void recover_bus_claimed(const char *reason)
 {
     atomic_fetch_add(&s_bus_resets, 1);
+    note_event(&s_last_reset, reason);
     cat_usb_reset_begin();
     bus_power_cycle(500);
     cat_usb_reset_end();
@@ -532,7 +560,7 @@ bool usb_audio_recover_cat(unsigned attempt)
 {
     if (!tx_begin_usb_recovery()) return false;
     ESP_LOGW(TAG, "CP210x present without a valid CAT ID: resetting USB bus (attempt %u)", attempt);
-    recover_bus_claimed();
+    recover_bus_claimed("CAT ID missing");
     return true;
 }
 
@@ -570,7 +598,7 @@ static void recover_tick(void)
     s_dev_seen_ms = 0;
     ESP_LOGW(TAG, "%d USB device(s) but no audio input for %d s: resetting the USB bus (attempt %d)", count,
              RECOVER_AFTER_MS / 1000, s_recover_attempts);
-    recover_bus_claimed();
+    recover_bus_claimed("no audio input");
 }
 
 void usb_audio_prepare_restart(void)
@@ -659,6 +687,7 @@ static void restore_rx(bool channel_available)
                           ? ESP_ERR_INVALID_STATE : uac_host_device_start(s_mic_handle, &s_rx_format);
     if (err != ESP_OK) {
         s_streaming = false;
+        note_event(&s_last_loss, "RX restore failed");
         ESP_LOGW(TAG, "USB audio RX restore failed: %s", esp_err_to_name(err));
     } else {
         ESP_LOGI(TAG, "USB audio RX restored after TX");
@@ -701,6 +730,7 @@ esp_err_t usb_audio_tx_prepare(bool share_rx_channel)
         if (err != ESP_OK) {
             s_streaming = false;
             s_rx_paused = false;
+            note_event(&s_last_loss, "RX pause failed");
             xSemaphoreGive(s_lock);
             xSemaphoreGive(s_output_lock);
             ESP_LOGW(TAG, "USB audio RX pause failed: %s", esp_err_to_name(err));
