@@ -121,6 +121,16 @@ void usb_audio_prepare_restart(void);
 
 /** @brief How often the USB bus was reset because the radio's audio did not come up */
 uint32_t usb_audio_bus_resets(void);
+
+/** @brief One USB audio event kept for /status: what, when, and the internal RAM at that moment */
+typedef struct {
+    const char *reason;     /*!< NULL if it never happened since boot */
+    int64_t at_us;
+    uint32_t int_free, int_min;
+} usb_audio_event_t;
+
+/** @brief The last loss of the radio's USB audio input and the last USB bus reset */
+void usb_audio_last_events(usb_audio_event_t *loss, usb_audio_event_t *reset);
 bool usb_audio_recover_cat(unsigned attempt);
 
 #ifdef __cplusplus
