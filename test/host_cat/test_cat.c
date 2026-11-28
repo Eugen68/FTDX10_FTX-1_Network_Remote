@@ -156,7 +156,7 @@ static void test_startup(void)
     reject_notch = true;
     const unsigned rejected = cat_rejected_commands();
     initialize_reads((void *)1, s_rig);
-    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;AG1;SQ0;SQ1;RI0;TX;RM0;BP00;BP01;BP10;BP11;FT;AI1;") == 0,
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;AG1;SQ0;SQ1;RI0;TX;RM0;BP00;BP01;BP10;BP11;FT;PA0;PA1;PA2;RA0;RG0;RG1;GT0;GT1;NL0;NL1;RL0;RL1;BC0;BC1;IS0;IS1;AI1;") == 0,
           "FTX-1 reads before first write");
     CHECK(cat_rejected_commands() == rejected + 1 && !poll_rejected("BP00;"),
           "one explicit rejection does not suppress a read");
@@ -187,12 +187,12 @@ static void test_startup(void)
     startup_ai = "AI1;";
     g_sent[0] = '\0';
     initialize_reads((void *)1, s_rig);
-    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;") == 0, "FTDX10 leaves AI1 alone");
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;PA0;RA0;RG0;GT0;NB0;NL0;NR0;RL0;BC0;IS0;") == 0, "FTDX10 leaves AI1 alone");
     startup_ai = NULL;
     g_sent[0] = '\0';
     const int64_t before = g_now_us;
     initialize_reads((void *)1, s_rig);
-    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;AI1;") == 0 &&
+    CHECK(strcmp(g_sent, "FA;FB;MD0;MD1;AI;AG0;SQ0;BY;TX;RM1;BP00;BP01;FT;PA0;RA0;RG0;GT0;NB0;NL0;NR0;RL0;BC0;IS0;AI1;") == 0 &&
           g_now_us - before >= ANSWER_TIMEOUT_MS * 1000, "silent AI enables it after timeout and all reads");
     startup_ai = "AI2;";
     g_sent[0] = '\0';
@@ -600,6 +600,36 @@ int main(void) {
     use("9999");
     CHECK(!ok("FT0;") && !ok("FT2;") && !ok("VS1;") && !ok("SH0013;"), "unknown rig cannot set VFO/filter");
 
+    // front-end: pre-amp, attenuator, RF gain, AGC, each with the radio's own parameter ranges
+    use("0840");
+    CHECK(ok("PA0;") && ok("PA1;") && ok("PA2;") && !ok("PA3;") && !ok("PA;"), "FTX-1 PA bands");
+    CHECK(ok("PA02;") && !ok("PA03;") && ok("PA11;") && !ok("PA12;") && ok("PA21;") && !ok("PA22;"), "FTX-1 PA values");
+    CHECK(ok("RA0;") && ok("RA01;") && !ok("RA02;") && !ok("RA1;") && !ok("RA11;"), "FTX-1 ATT on/off");
+    CHECK(ok("RG1;") && ok("RG1255;") && !ok("RG1256;") && !ok("RG2100;") && !ok("RG112;"), "FTX-1 RF gain");
+    CHECK(ok("GT1;") && ok("GT14;") && !ok("GT15;") && !ok("GT2;") && !ok("GT1A;"), "FTX-1 AGC");
+    use("0761");
+    CHECK(ok("PA0;") && ok("PA02;") && !ok("PA1;") && !ok("PA11;") && !ok("PA03;"), "FTDX10 PA");
+    CHECK(ok("RA03;") && !ok("RA04;"), "FTDX10 ATT 6/12/18 dB");
+    CHECK(ok("RG0128;") && !ok("RG1;") && !ok("RG1128;"), "FTDX10 RF gain, one receiver");
+    CHECK(ok("GT04;") && !ok("GT1;") && !ok("GT10;"), "FTDX10 AGC, one receiver");
+    use("9999");
+    CHECK(!ok("PA0;") && !ok("RA0;") && !ok("RG0;") && !ok("GT0;") && !ok("PA00;"), "unknown rig: no front-end");
+
+    // noise: NB / DNR / DNF / IF shift
+    use("0840");
+    CHECK(!ok("NB0;") && !ok("NB01;") && !ok("NR01;"), "FTX-1 has no NB / NR switch");
+    CHECK(ok("NL1;") && ok("NL1010;") && ok("NL0000;") && !ok("NL1011;") && !ok("NL2005;"), "FTX-1 NB level");
+    CHECK(ok("RL1;") && ok("RL100;") && ok("RL010;") && !ok("RL011;") && !ok("RL01;"), "FTX-1 DNR level 00-10");
+    CHECK(ok("BC1;") && ok("BC11;") && !ok("BC12;") && !ok("BC2;"), "FTX-1 DNF");
+    CHECK(ok("IS1;") && ok("IS10+1200;") && ok("IS00-0020;") && !ok("IS00+1220;") && !ok("IS00+0010;") &&
+          !ok("IS01+0100;") && !ok("IS00 0100;") && !ok("IS00+100;"), "FTX-1 IF shift");
+    use("0761");
+    CHECK(ok("NB0;") && ok("NB01;") && !ok("NB02;") && !ok("NB1;") && ok("NR00;"), "FTDX10 NB / NR switch");
+    CHECK(ok("NL0010;") && !ok("NL1005;") && ok("RL015;") && !ok("RL016;") && !ok("RL000;"), "FTDX10 levels");
+    CHECK(ok("BC01;") && !ok("BC11;") && ok("IS00-1200;") && !ok("IS10+0000;"), "FTDX10 DNF / IF shift, one receiver");
+    use("9999");
+    CHECK(!ok("NL0;") && !ok("RL0;") && !ok("BC0;") && !ok("IS0;") && !ok("NB0;"), "unknown rig: no noise controls");
+
     tx_enabled = true;
     use("0840");
     CHECK(!ok("TX1;") && ok("TX0;"), "unkey allowed without password");
@@ -659,6 +689,63 @@ int main(void) {
     CHECK(cat_set_split(true) == ESP_ERR_INVALID_STATE, "unknown radio: no split");
     g_queue_send_hook = NULL;
     use("0840");
+    // front-end setters and answers
+    g_queue_send_hook = capture_cat_item;
+    CHECK(cat_set_preamp(1, 1) == ESP_OK && strcmp(queued_rigctl.cmd, "PA11;") == 0, "ftx1 VHF preamp");
+    CHECK(cat_set_preamp(1, 2) == ESP_ERR_INVALID_ARG && cat_set_att(2) == ESP_ERR_INVALID_ARG, "ftx1 ranges");
+    CHECK(cat_set_rf_gain(true, 7) == ESP_OK && strcmp(queued_rigctl.cmd, "RG1007;") == 0, "ftx1 sub RF gain");
+    CHECK(cat_set_agc(false, 5) == ESP_ERR_INVALID_ARG, "AGC set range");
+    use("0761");
+    CHECK(cat_set_att(3) == ESP_OK && strcmp(queued_rigctl.cmd, "RA03;") == 0, "ftdx10 18 dB");
+    CHECK(cat_set_agc(false, 4) == ESP_OK && strcmp(queued_rigctl.cmd, "GT04;") == 0, "ftdx10 AGC auto");
+    CHECK(cat_set_preamp(1, 0) == ESP_ERR_NOT_SUPPORTED && cat_set_rf_gain(true, 1) == ESP_ERR_NOT_SUPPORTED,
+          "ftdx10 has one receiver and no VHF band");
+    use("9999");
+    CHECK(cat_set_preamp(0, 0) == ESP_ERR_NOT_SUPPORTED && cat_set_agc(false, 1) == ESP_ERR_NOT_SUPPORTED, "unknown");
+    use("0840");
+    CHECK(cat_set_nb(true, true, 7) == ESP_OK && strcmp(queued_rigctl.cmd, "NL1007;") == 0, "ftx1 NB level");
+    CHECK(cat_set_nb(true, false, CAT_LEVEL_KEEP) == ESP_OK && strcmp(queued_rigctl.cmd, "NL1000;") == 0, "ftx1 NB off");
+    CHECK(cat_set_dnr(false, true, 10) == ESP_OK && strcmp(queued_rigctl.cmd, "RL010;") == 0, "ftx1 DNR");
+    CHECK(cat_set_dnr(false, true, 11) == ESP_ERR_INVALID_ARG, "ftx1 DNR max 10");
+    CHECK(cat_set_dnf(true, true) == ESP_OK && strcmp(queued_rigctl.cmd, "BC11;") == 0, "ftx1 DNF");
+    CHECK(cat_set_if_shift(true, -340) == ESP_OK && strcmp(queued_rigctl.cmd, "IS10-0340;") == 0, "ftx1 IF shift");
+    CHECK(cat_set_if_shift(false, 1210) == ESP_ERR_INVALID_ARG && cat_set_if_shift(false, 30) == ESP_ERR_INVALID_ARG,
+          "IF shift range and step");
+    use("0761");
+    CHECK(cat_set_nb(false, true, 4) == ESP_OK && strcmp(queued_rigctl.cmd, "NB01;") == 0, "ftdx10 NB on after level");
+    CHECK(cat_set_dnr(false, false, CAT_LEVEL_KEEP) == ESP_OK && strcmp(queued_rigctl.cmd, "NR00;") == 0, "ftdx10 DNR off");
+    CHECK(cat_set_dnr(false, true, 15) == ESP_OK && cat_set_dnf(true, true) == ESP_ERR_NOT_SUPPORTED, "ftdx10 DNR / no SUB");
+    use("9999");
+    CHECK(cat_set_if_shift(false, 0) == ESP_ERR_NOT_SUPPORTED, "unknown radio: no IF shift");
+    g_queue_send_hook = NULL;
+    use("0840");
+    {
+        cat_state_t fe;
+        handle_cat_packet("PA02;");
+        handle_cat_packet("PA21;");
+        handle_cat_packet("RA01;");
+        handle_cat_packet("RG1100;");
+        handle_cat_packet("GT06;");
+        handle_cat_packet("RG0999;");   // out of range: ignored
+        handle_cat_packet("NL1003;");
+        handle_cat_packet("RL000;");
+        handle_cat_packet("BC01;");
+        handle_cat_packet("IS10-0340;");
+        cat_get_state(&fe);
+        CHECK(fe.preamp[0] == 2 && fe.preamp[2] == 1 && fe.att == 1 && fe.rf_gain[1] == 100 && fe.agc[0] == 6 &&
+              fe.rf_gain[0] != 999, "front-end answers");
+        CHECK(fe.nb_on[1] == 1 && fe.nb_level[1] == 3 && fe.dnr_on[0] == 0 && fe.dnf[0] == 1 &&
+              fe.if_shift_known[1] && fe.if_shift[1] == -340 && !fe.if_shift_known[0], "noise answers");
+        use("0761");
+        handle_cat_packet("NB01;");
+        handle_cat_packet("NR01;");
+        handle_cat_packet("RL012;");
+        handle_cat_packet("PA01;");
+        cat_get_state(&fe);
+        CHECK(fe.nb_on[0] == 1 && fe.dnr_on[0] == 1 && fe.dnr_level[0] == 12 && fe.preamp[0] == 1,
+              "FTDX10 NB / NR switches and levels");
+        use("0840");
+    }
 
     // parsers
     int m, sb; bool b;

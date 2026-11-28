@@ -398,6 +398,28 @@ lights up whenever the radio transmits on SUB, also when split was set on the ra
 **SPLIT +1k** copies MAIN to SUB, puts SUB 1 kHz up and turns split on. Neither button keys the
 radio, and the change is refused while the radio transmits.
 
+### Front end: pre-amp, attenuator, RF gain, AGC
+
+Below the notch, each receiver has a **FRONT END** row read from the radio every 5 s and after each change:
+
+- **AMP** (MAIN only): IPO / AMP1 / AMP2. On the FTX-1 the CAT pre-amp command is per band and follows MAIN's frequency: IPO / AMP1 / AMP2 on HF and 50 MHz, OFF / ON on VHF and on UHF. The FTX-1 keeps a separate IPO for SUB, but CAT reaches only MAIN's, so set SUB's on the radio.
+- **ATT** (MAIN only): OFF / 6 / 12 / 18 dB on the FTDX10, OFF / ON on the FTX-1.
+- **RF GAIN**: 0–255.
+- **AGC**: OFF / FAST / MID / SLOW / AUTO. In AUTO the radio reports which speed it chose (AUTO-FAST / -MID / -SLOW).
+
+On the FTX-1, RF GAIN and AGC are separate for MAIN and SUB; the FTDX10 has one receiver. These are receive settings only.
+
+### Noise and IF shift
+
+Under FRONT END, each receiver has a **NOISE / IF** row, read the same way:
+
+- **NB** (noise blanker): OFF or level 1–10 (0–10 on the FTDX10, which has a separate ON/OFF).
+- **DNR**: OFF or level 1–15 on the FTDX10, 1–10 on the FTX-1.
+- **DNF** (auto notch): ON / OFF.
+- **IF SHIFT**: −1200 to +1200 Hz in 20 Hz steps. Double-click the slider or press **0** to centre it.
+
+On the FTX-1 all four are separate for MAIN and SUB.
+
 ### Endpoints
 
 All of them require Basic authentication (see "Security notes" below).
@@ -730,9 +752,9 @@ All endpoints (`/`, `/map`, `/status`, `/cat`, `POST /reboot`, `/stream.*`, `POS
 
 Every command to the radio passes the allow-list in [`main/cat.c`](main/cat.c).
 
-- The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `action`.
+- The browser does not build CAT commands. `POST /cat` accepts only the JSON keys `target` / `freq` / `mode` / `vol` / `sq` / `notch` / `notch_hz` / `power` / `preamp` / `pa_band` / `att` / `rfg` / `agc` / `nb` / `nb_level` / `dnr` / `dnr_level` / `dnf` / `ifs` / `action`.
   Unknown keys, duplicate keys, and `cmd` (a raw command) are rejected with 400. `action` is only one of `swap` / `copy_main_to_sub` / `copy_sub_to_main` / `split_on` / `split_off`.
-- Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `EX`), checked against the profile of the connected radio.
+- Commands sent from the ESP32 to the radio use an allow list (`ID` `SV` `AB` `BA` `AI` `RI` `RM` `BY` `TX` `PS` `FA` `FB` `MD` `AG` `SQ` `BP` `PA` `RA` `RG` `GT` `NB` `NL` `NR` `RL` `BC` `IS` `EX`), checked against the profile of the connected radio.
   For `EX` only the write that sets the DATA-mode audio output level to 100 is allowed (`EX010411` on the FTX-1, `EX010413` on the FTDX10).
   Supported radios also allow modulation menu queries and transmit VFO status (`FT;`). NET rigctl can set the active VFO, transmit VFO selection and filter width through radio-specific allow-listed commands. The page's **SPLIT** button selects the transmit VFO the same way (`FT1;`/`FT0;` on the FTX-1, `FT3;`/`FT2;` on the FTDX10); `FT;` is read every 500 ms so the button also follows the radio's own SPLIT key. These commands cannot key the radio. `TX;` reads TX status. Keying with `TX1;` requires a supported radio, the TX setting and a configured TX password. The allow-list always permits `TX0;` to release PTT.
   The ordinary CAT endpoint has no raw-command or PTT operation.
