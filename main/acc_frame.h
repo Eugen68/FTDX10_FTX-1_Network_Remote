@@ -1,5 +1,5 @@
 /*
- * SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+ * SPDX-License-Identifier: MIT
  */
 
 /* Checking and reading one FTDX10 ACC scope frame (acc_frame.c) */

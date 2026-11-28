@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: MIT */
 #include <assert.h>
 #include <stdio.h>
 #include "tx_voice.h"

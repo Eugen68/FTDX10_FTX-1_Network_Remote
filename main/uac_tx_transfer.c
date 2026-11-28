@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: MIT */
 #undef usb_host_transfer_submit
 #include <stdatomic.h>
 #include "usb/usb_host.h"

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: MIT */
 #pragma once
 #include <stdlib.h>
 enum { MALLOC_CAP_SPIRAM = 1, MALLOC_CAP_8BIT = 2 };

@@ -17,7 +17,7 @@ documented safety property (README, "Restrictions that keep the radio from trans
 transmit in a way that keeps the radio safe.
 
 **Repository:** `Eugen68/FTDX10_FTX-1_Network_Remote`, default branch `main`. Fork of
-`pizzamax/FTX-1_Network_Companion` (licence PolyForm Noncommercial 1.0.0; keep `LICENSE` and `NOTICE`).
+`pizzamax/FTX-1_Network_Companion` (licence MIT; keep `LICENSE` and `NOTICE`).
 
 **Code you will touch**
 

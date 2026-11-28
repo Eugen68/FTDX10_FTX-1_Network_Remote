@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* SPDX-License-Identifier: MIT */
 const voiceRate = 16000;
 const frameSamples = voiceRate / 50;
 const taps = 48;
