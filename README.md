@@ -721,6 +721,8 @@ listens: it never keys the radio and sends no CAT command.
   scope where the decoder listens (dashed while AUTO follows a tone, solid when chosen by a click), and the tone
   badge next to the title is outlined. Click the badge, or AUTO, to go back to AUTO / Hz. On the FTDX10's ACC
   scope a click still tunes the radio.
+- Changing frequency (by 150 Hz or more), mode or VFO starts a new line and drops the audio of the old
+  frequency; a tone chosen on the scope is released. Fine tuning of a few tens of Hz keeps the line.
 - The settings, and which receivers use CW, are kept in this browser (`localStorage`).
 - Like FT8, it works on the audio the page is playing: on a phone, when the page goes to the background, it pauses.
 
