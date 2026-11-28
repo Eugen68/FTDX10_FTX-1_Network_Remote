@@ -429,6 +429,9 @@ All of them require Basic authentication (see "Security notes" below).
 | `/` | Browser player |
 | `/status` | Stream state and diagnostics (JSON): firmware version (`version`), build time (`build`), audio format, uptime, heap (`heap_free` / `heap_min` / `heap_block`; these include PSRAM if it is enabled), internal-RAM-only heap (`int_free` / `int_min` / `int_block`), Wi-Fi `rssi`, and stream send statistics (`stream.slow_sends` / `stream.max_send_ms`, and others) |
 | `POST /cat` | Controls the radio (frequency, mode, volume, and so on; JSON, `X-Requested-With: ftx1` required) |
+| `GET /log` | QSO log state (JSON): `ready`, `count`, `bytes`, `max_bytes` |
+| `POST /log` | Store one FT8 QSO (JSON: `call`, `grid`, `sent`, `rcvd`, `freq` in Hz, `on` / `off` as UTC `YYYYMMDDHHMMSS`, `mycall`, `mygrid`; `X-Requested-With: ftx1` required). Every field is checked; see "FT8 QSO log" |
+| `/log.adi` | The FT8 QSO log as an ADIF file |
 | `POST /reboot` | Reboot the ESP32-S3 (JSON, `X-Requested-With: ftx1` required) |
 | `/stream.pcm` | Raw PCM (little endian). The format is reported in the `X-Sample-Rate` / `X-Channels` / `X-Bytes-Per-Sample` headers |
 | `/stream.wav` | With a WAV header (indefinite length). For external players |
@@ -883,6 +886,21 @@ and account for delay introduced by the receiver or recording path. Increase the
 playback lead by the repeatable RF lateness relative to `rf_target_utc`, in milliseconds.
 `CONFIG_FT8_FTX1_AUDIO_LEAD_MS` and `CONFIG_FT8_FTDX10_AUDIO_LEAD_MS` are independent and
 default to 20 ms. `CONFIG_FT8_NTP_SERVER` configures the SNTP server.
+
+### FT8 QSO log (ADIF)
+
+The page follows the QSO in progress, as WSJT-X does: the station you answer or that answers your
+CQ, its locator, the report you send (from the message you arm) and the report you receive (from
+the decodes addressed to your call). When the reports have been exchanged and an RR73 or 73 has
+gone either way, **Log QSO** turns green. Check or edit the call, locator and reports, then press
+**Log QSO**: the board stores the QSO as an ADIF record (FT8, band, the frequency you transmitted
+on, UTC start and end, your call and locator). Nothing is logged without that click. **New** clears
+the fields; you can also fill them by hand for a QSO the page did not follow.
+
+The log is kept on the board's `storage` partition, so it survives reboots and OTA updates; the
+first boot with this firmware formats that partition (it was unused). **ADIF log (n)** downloads
+the whole log as `network_remote_ft8.adi`, ready to import into Log4OM or any other logger. The
+log holds up to 1 MB (about 4000 QSOs); beyond that **Log QSO** reports that it is full.
 
 
 ## Input validation and build settings

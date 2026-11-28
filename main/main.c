@@ -18,6 +18,7 @@
 #include "mdns.h"
 #include "nvs_flash.h"
 #include "ota.h"
+#include "qso_log.h"
 #include "usb_audio.h"
 #include "web_server.h"
 #include "rigctld.h"
@@ -60,6 +61,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ft8_tx_init());
     ft8_tx_start_clock();
+    qso_log_init();   // not fatal: without the storage partition only the QSO log is off
     ESP_ERROR_CHECK(web_server_start());
     // Reserve the web ports first, even if NET rigctl was configured to use one.
     rigctld_start();

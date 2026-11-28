@@ -43,6 +43,8 @@
 #include "usb_audio.h"
 #include "web_auth.h"
 #include "ui_prefs.h"
+#include "qso_adif.h"
+#include "qso_log.h"
 #include "nvs.h"
 #include "web_server.h"
 
@@ -1583,6 +1585,78 @@ static esp_err_t prefs_post_handler(httpd_req_t *req)
     return send_json(req, "{}", err == ESP_OK ? 2 : -1, 3);
 }
 
+static esp_err_t send_log_stats(httpd_req_t *req)
+{
+    unsigned count;
+    size_t bytes;
+    qso_log_stats(&count, &bytes);
+    char json[96];
+    const int n = snprintf(json, sizeof(json), "{\"ready\":%s,\"count\":%u,\"bytes\":%u,\"max_bytes\":%u}",
+                           qso_log_ready() ? "true" : "false", count, (unsigned)bytes, (unsigned)QSO_LOG_MAX_BYTES);
+    return send_json(req, json, n, sizeof(json));
+}
+
+static esp_err_t log_get_handler(httpd_req_t *req)
+{
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) return ESP_OK;
+    return send_log_stats(req);
+}
+
+/* POST /log: one completed FT8 QSO from the page, checked field by field and appended as an ADIF record */
+static esp_err_t log_post_handler(httpd_req_t *req)
+{
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, true)) return ESP_OK;
+    web_auth_set_common_headers(req);
+    if (req->content_len >= QSO_ADIF_JSON_BYTES) {
+        httpd_resp_set_hdr(req, "Connection", "close");
+        return httpd_resp_send_err(req, HTTPD_413_CONTENT_TOO_LARGE, "Request body is too large");
+    }
+    char json[QSO_ADIF_JSON_BYTES];
+    if (!content_type_is_json(req) || !read_body(req, json, sizeof(json))) {
+        httpd_resp_set_hdr(req, "Connection", "close");
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON body");
+    }
+    qso_adif_t qso;
+    char record[QSO_ADIF_RECORD_BYTES];
+    if (!qso_adif_parse(json, &qso) || qso_adif_format(&qso, record, sizeof(record)) < 0) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid QSO");
+    }
+    const esp_err_t err = qso_log_append(record);
+    if (err == ESP_ERR_NO_MEM) {
+        httpd_resp_set_status(req, "507 Insufficient Storage");
+        return httpd_resp_sendstr(req, "The QSO log is full");
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "QSO log append failed: %s", esp_err_to_name(err));
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "The QSO could not be stored");
+    }
+    ESP_LOGI(TAG, "QSO logged: %s %s", qso.call, qso_adif_band(qso.freq_hz));
+    return send_log_stats(req);
+}
+
+/* GET /log.adi: the whole log as an ADIF file (header + stored records) */
+static esp_err_t log_adi_handler(httpd_req_t *req)
+{
+    if (!web_auth_check(req, WEB_AUTH_REALM_WEB, false)) return ESP_OK;
+    web_auth_set_common_headers(req);
+    char buf[512];
+    const int n = qso_adif_header(FTX1_VERSION, buf, sizeof(buf));
+    if (n < 0) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Internal error");
+    httpd_resp_set_type(req, "text/plain; charset=us-ascii");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"network_remote_ft8.adi\"");
+    esp_err_t err = httpd_resp_send_chunk(req, buf, n);
+    FILE *f = qso_log_open();
+    if (f) {
+        size_t got;
+        while (err == ESP_OK && (got = fread(buf, 1, sizeof(buf), f)) > 0) {
+            err = httpd_resp_send_chunk(req, buf, (ssize_t)got);
+        }
+        fclose(f);
+    }
+    return err == ESP_OK ? httpd_resp_send_chunk(req, NULL, 0) : err;
+}
+
 static esp_err_t cat_post_handler(httpd_req_t *req)
 {
     if (!web_auth_check(req, WEB_AUTH_REALM_WEB, true)) {
@@ -1964,8 +2038,8 @@ esp_err_t web_server_start(void)
     // When all sockets are taken, drop the least recently used one instead of refusing new clients,
     // so idle or half-open connections cannot starve a legitimate user
     config.httpd.lru_purge_enable = true;
-    // The default of 8 URI handlers is exactly used up by the routes below plus /ota
-    config.httpd.max_uri_handlers = 16;
+    // The routes below plus /ota, with a little room to spare
+    config.httpd.max_uri_handlers = 20;
 
     httpd_handle_t server = NULL;
     ESP_RETURN_ON_ERROR(https_identity_start(&server, &config), TAG, "HTTPS server start");
@@ -1977,6 +2051,9 @@ esp_err_t web_server_start(void)
         {.uri = "/status",     .method = HTTP_GET,  .handler = status_handler},
         {.uri = "/prefs",      .method = HTTP_GET,  .handler = prefs_get_handler},
         {.uri = "/prefs",      .method = HTTP_POST, .handler = prefs_post_handler},
+        {.uri = "/log",        .method = HTTP_GET,  .handler = log_get_handler},
+        {.uri = "/log",        .method = HTTP_POST, .handler = log_post_handler},
+        {.uri = "/log.adi",    .method = HTTP_GET,  .handler = log_adi_handler},
         {.uri = "/cat",        .method = HTTP_GET,  .handler = cat_handler},
         {.uri = "/cat",        .method = HTTP_POST, .handler = cat_post_handler},
         {.uri = "/reboot",     .method = HTTP_POST, .handler = reboot_handler},
