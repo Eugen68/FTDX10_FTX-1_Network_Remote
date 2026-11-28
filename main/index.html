@@ -787,6 +787,11 @@
   .cw-info { color: #94a3b8; font-style: italic; font-size: .7rem; letter-spacing: 0; }
   .cw-info.err { color: #f87171; font-style: normal; font-weight: bold; }
   .cw-info[hidden] { display: none; }
+  /* Decoder selector: each panel shows only the parts of the decoder chosen for it; the controls shared by
+     MAIN and SUB show while either receiver uses that decoder */
+  .dec-select { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 3px; font: inherit; font-size: .62rem; font-weight: bold; padding: 0 .2rem; }
+  .dec-panel:not([data-dec="ft8"]) .dec-ft8, .dec-panel:not([data-dec="cw"]) .dec-cw { display: none !important; }
+  body:not(.uses-ft8) .dec-any-ft8, body:not(.uses-cw) .dec-any-cw { display: none !important; }
 
   /* Control Card (Left / Right Column Hardware Panels) */
   .control-card {
@@ -1423,21 +1428,33 @@
         <span id="scopeRateText">48.0 kHz AUDIO</span>
       </div>
 
-      <!-- FT8 Live Decoder Panels (MAIN / SUB) -->
-      <div class="ft8-panel">
+      <!-- Decoder panels (MAIN / SUB): one decoder per receiver, chosen in the DECODER list. Choosing one
+           starts it, OFF stops it. -ft8/-cw parts show only for that decoder (see decSetView). -->
+      <div class="ft8-panel dec-panel" id="decPanelMain" data-dec="off">
         <div class="ft8-header">
           <div class="ft8-title">
             <span class="ft8-icon">📻</span>
-            <span>FT8 DECODER <span class="main-tag">MAIN</span></span>
-            <span class="ft8-sync-badge" id="ft8SyncBadgeMain">SYNC: 00s</span>
+            <span>DECODER <span class="main-tag">MAIN</span></span>
+            <select class="dec-select" id="decSelMain" title="Decoder for MAIN. Choosing one starts it">
+              <option value="off">OFF</option><option value="ft8">FT8</option><option value="cw">CW</option>
+            </select>
+            <span class="ft8-sync-badge dec-ft8" id="ft8SyncBadgeMain">SYNC: 00s</span>
+            <span class="ft8-sync-badge dec-cw" id="cwToneMain" title="Tone being decoded">—</span>
           </div>
           <div class="ft8-ctrls">
-            <label class="ft8-dtcorr-label" title="Subtracted from every DT shown (MAIN and SUB): the delay the audio picks up on its way here (USB, Wi-Fi, browser). Set it to the DT most stations show, so DTs read as in WSJT-X">DT corr
+            <!-- shared by MAIN and SUB: shown while either receiver uses that decoder -->
+            <label class="ft8-dtcorr-label dec-any-ft8" title="Subtracted from every DT shown (MAIN and SUB): the delay the audio picks up on its way here (USB, Wi-Fi, browser). Set it to the DT most stations show, so DTs read as in WSJT-X">DT corr
               <input type="number" class="ft8-dtcorr" id="ft8DtCorr" min="-1" max="2" step="0.1" value="0.3"></label>
-            <span class="ft8-dtcorr-label" id="ft8DtMedian" title="Median raw DT (before DT corr) of the stations decoded on MAIN and SUB in the last 4 slots, and how many">med —</span>
-            <button type="button" class="ft8-btn" id="ft8DtApply" title="Set DT corr to this median" disabled>APPLY</button>
-            <button type="button" class="ft8-btn" id="ft8EnableBtnMain">DECODER OFF</button>
-            <button type="button" class="ft8-btn" id="ft8ClearBtnMain">CLEAR</button>
+            <span class="ft8-dtcorr-label dec-any-ft8" id="ft8DtMedian" title="Median raw DT (before DT corr) of the stations decoded on MAIN and SUB in the last 4 slots, and how many">med —</span>
+            <button type="button" class="ft8-btn dec-any-ft8" id="ft8DtApply" title="Set DT corr to this median" disabled>APPLY</button>
+            <label class="ft8-dtcorr-label dec-any-cw" title="CW, MAIN and SUB. Narrow: decodes one signal, the tone at the pitch (1.2 MB download). Wide: decodes the strongest signal between 400 and 1200 Hz (15 MB download)">Model
+              <select class="cw-select" id="cwModel"><option value="narrow">Narrow</option><option value="wide">Wide</option></select></label>
+            <button type="button" class="ft8-btn dec-any-cw" id="cwAutoBtn" title="CW, narrow model: follow the strongest CW tone between 300 and 1200 Hz automatically">AUTO</button>
+            <label class="ft8-dtcorr-label dec-any-cw" title="CW, narrow model with AUTO off: the audio tone to decode, normally the radio's CW pitch">Hz
+              <input type="number" class="ft8-dtcorr cw-pitch" id="cwPitch" min="300" max="1200" step="10" value="700"></label>
+            <span class="ft8-dtcorr-label dec-any-cw" id="cwStatus" role="status" title="The CW decoder runtime and model are downloaded from cdn.jsdelivr.net on first use, checked and kept by the browser">OFF</span>
+            <button type="button" class="ft8-btn dec-ft8" id="ft8ClearBtnMain">CLEAR</button>
+            <button type="button" class="ft8-btn dec-cw" id="cwClearBtnMain">CLEAR</button>
           </div>
         </div>
         <div class="ft8-ctrls" id="ft8TxControls" hidden>
@@ -1454,8 +1471,8 @@
           <label>Grid <input id="ft8TxGrid" maxlength="4" autocomplete="off" size="4"></label>
           <span id="ft8TxInfo" role="status"></span>
         </div>
-        <div class="ft8-progress-bar"><div class="ft8-progress-fill" id="ft8ProgressFillMain"></div></div>
-        <div class="ft8-list-container">
+        <div class="ft8-progress-bar dec-ft8"><div class="ft8-progress-fill" id="ft8ProgressFillMain"></div></div>
+        <div class="ft8-list-container dec-ft8">
           <table class="ft8-table">
             <thead>
               <tr>
@@ -1472,22 +1489,27 @@
             </tbody>
           </table>
         </div>
+        <div class="cw-text dec-cw" id="cwTextMain"><span class="cw-done"></span><span class="cw-pending"></span></div>
       </div>
 
-      <div class="ft8-panel dual-rx-only">
+      <div class="ft8-panel dec-panel dual-rx-only" id="decPanelSub" data-dec="off">
         <div class="ft8-header">
           <div class="ft8-title">
             <span class="ft8-icon">📻</span>
-            <span>FT8 DECODER <span class="sub-tag">SUB</span></span>
-            <span class="ft8-sync-badge" id="ft8SyncBadgeSub">SYNC: 00s</span>
+            <span>DECODER <span class="sub-tag">SUB</span></span>
+            <select class="dec-select" id="decSelSub" title="Decoder for SUB. Choosing one starts it">
+              <option value="off">OFF</option><option value="ft8">FT8</option><option value="cw">CW</option>
+            </select>
+            <span class="ft8-sync-badge dec-ft8" id="ft8SyncBadgeSub">SYNC: 00s</span>
+            <span class="ft8-sync-badge dec-cw" id="cwToneSub" title="Tone being decoded">—</span>
           </div>
           <div class="ft8-ctrls">
-            <button type="button" class="ft8-btn" id="ft8EnableBtnSub">DECODER OFF</button>
-            <button type="button" class="ft8-btn" id="ft8ClearBtnSub">CLEAR</button>
+            <button type="button" class="ft8-btn dec-ft8" id="ft8ClearBtnSub">CLEAR</button>
+            <button type="button" class="ft8-btn dec-cw" id="cwClearBtnSub">CLEAR</button>
           </div>
         </div>
-        <div class="ft8-progress-bar"><div class="ft8-progress-fill" id="ft8ProgressFillSub"></div></div>
-        <div class="ft8-list-container">
+        <div class="ft8-progress-bar dec-ft8"><div class="ft8-progress-fill" id="ft8ProgressFillSub"></div></div>
+        <div class="ft8-list-container dec-ft8">
           <table class="ft8-table">
             <thead>
               <tr>
@@ -1504,42 +1526,7 @@
             </tbody>
           </table>
         </div>
-      </div>
-      <!-- CW Decoder Panels (MAIN / SUB): the DeepCW neural decoder, see <script id="cw-worker-src"> -->
-      <div class="ft8-panel cw-panel">
-        <div class="ft8-header">
-          <div class="ft8-title">
-            <span class="ft8-icon">🔑</span>
-            <span>CW DECODER <span class="main-tag">MAIN</span></span>
-            <span class="ft8-sync-badge" id="cwToneMain" title="Tone being decoded">—</span>
-          </div>
-          <div class="ft8-ctrls">
-            <label class="ft8-dtcorr-label" title="Narrow: decodes one signal, the tone at the pitch (1.2 MB download). Wide: decodes the strongest signal between 400 and 1200 Hz (15 MB download)">Model
-              <select class="cw-select" id="cwModel"><option value="narrow">Narrow</option><option value="wide">Wide</option></select></label>
-            <button type="button" class="ft8-btn" id="cwAutoBtn" title="Narrow model: follow the strongest CW tone between 300 and 1200 Hz automatically">AUTO</button>
-            <label class="ft8-dtcorr-label" title="Narrow model with AUTO off: the audio tone to decode, normally the radio's CW pitch">Hz
-              <input type="number" class="ft8-dtcorr cw-pitch" id="cwPitch" min="300" max="1200" step="10" value="700"></label>
-            <span class="ft8-dtcorr-label" id="cwStatus" role="status" title="The decoder runtime and model are downloaded from cdn.jsdelivr.net on first use, checked and kept by the browser">OFF</span>
-            <button type="button" class="ft8-btn" id="cwEnableBtnMain">DECODER OFF</button>
-            <button type="button" class="ft8-btn" id="cwClearBtnMain">CLEAR</button>
-          </div>
-        </div>
-        <div class="cw-text" id="cwTextMain"><span class="cw-done"></span><span class="cw-pending"></span></div>
-      </div>
-
-      <div class="ft8-panel cw-panel dual-rx-only">
-        <div class="ft8-header">
-          <div class="ft8-title">
-            <span class="ft8-icon">🔑</span>
-            <span>CW DECODER <span class="sub-tag">SUB</span></span>
-            <span class="ft8-sync-badge" id="cwToneSub" title="Tone being decoded">—</span>
-          </div>
-          <div class="ft8-ctrls">
-            <button type="button" class="ft8-btn" id="cwEnableBtnSub">DECODER OFF</button>
-            <button type="button" class="ft8-btn" id="cwClearBtnSub">CLEAR</button>
-          </div>
-        </div>
-        <div class="cw-text" id="cwTextSub"><span class="cw-done"></span><span class="cw-pending"></span></div>
+        <div class="cw-text dec-cw" id="cwTextSub"><span class="cw-done"></span><span class="cw-pending"></span></div>
       </div>
     </div>
 
@@ -5022,6 +5009,8 @@ function applyRigProfile(d) {
   const subMeter = smHost.children[1];
   if (subMeter) subMeter.style.display = single ? 'none' : '';
   setFt8Decoder(ft8Chans[1], !single && uiPrefValues.decoderSub === true);
+  if (single && cwSettings.on[1]) { cwSettings.on[1] = false; cwApply(); }   // no SUB receiver: stop CW there too
+  decRefresh();
 
   // Modes and bands the radio does not have
   document.querySelectorAll('[data-mode^="C4FM"], option[value^="C4FM"]').forEach((el) => {
@@ -5235,6 +5224,8 @@ ft8DtApplyBtn.addEventListener('click', () => {
   ft8DtCorrInput.dispatchEvent(new Event('input'));   // saved like a typed value
 });
 
+let decReady = false;   // the decoder selector below (after the CW decoder) is set up
+
 // One independent decoder state per receiver channel (left = MAIN, right = SUB)
 const ft8Chans = ['Main', 'Sub'].map((name, idx) => {
   const f = {
@@ -5246,18 +5237,12 @@ const ft8Chans = ['Main', 'Sub'].map((name, idx) => {
     resampleAcc: 0,
     resampleSum: 0,
     resampleCount: 0,
-    enableBtn: document.getElementById('ft8EnableBtn' + name),
     clearBtn: document.getElementById('ft8ClearBtn' + name),
     syncBadge: document.getElementById('ft8SyncBadge' + name),
     progressFill: document.getElementById('ft8ProgressFill' + name),
     msgBody: document.getElementById('ft8MsgBody' + name),
     emptyRow: document.getElementById('ft8EmptyRow' + name)
   };
-  f.enableBtn.addEventListener('click', () => {
-    setFt8Decoder(f, !f.enabled);
-    queueUiPref('decoder' + name, f.enabled);
-    if (f.enabled) openFt8Map(); // must run inside the click handler or popup blockers reject it
-  });
   f.clearBtn.addEventListener('click', () => {
     f.msgBody.innerHTML = '';
     f.msgBody.appendChild(f.emptyRow);
@@ -5267,8 +5252,7 @@ const ft8Chans = ['Main', 'Sub'].map((name, idx) => {
 
 function setFt8Decoder(f, enabled) {
   f.enabled = enabled;
-  f.enableBtn.classList.toggle('active', enabled);
-  f.enableBtn.textContent = enabled ? 'DECODER ON' : 'DECODER OFF';
+  if (decReady) decFt8Changed(f.idx);
 }
 
 // Low-pass filtered decimation audio feeder (any input rate -> 6400Hz)
@@ -5703,7 +5687,6 @@ const cwChans = ['Main', 'Sub'].map((name, idx) => {
     doneEl: box.querySelector('.cw-done'),
     pendingEl: box.querySelector('.cw-pending'),
     toneEl: document.getElementById('cwTone' + name),
-    enableBtn: document.getElementById('cwEnableBtn' + name),
     clearBtn: document.getElementById('cwClearBtn' + name),
     rate: 0, lp: null, t: 0, prev: 0,
     infoEl: box.insertBefore(Object.assign(document.createElement('div'), { className: 'cw-info', hidden: true }), box.firstChild),
@@ -5785,10 +5768,7 @@ function cwApply() {
   cwAutoBtn.disabled = !narrow;
   cwPitchInput.disabled = !narrow || cwSettings.auto;
   cwChans.forEach((c) => {
-    const on = cwSettings.on[c.idx];
-    c.enableBtn.classList.toggle('active', on);
-    c.enableBtn.textContent = on ? 'DECODER ON' : 'DECODER OFF';
-    if (!on) { c.pendingEl.textContent = ''; c.toneEl.textContent = '—'; }
+    if (!cwSettings.on[c.idx]) { c.pendingEl.textContent = ''; c.toneEl.textContent = '—'; }
   });
   cwShowInfo();
   if (!cwSettings.on.some(Boolean) && !cwWorker) { cwStatusEl.textContent = 'OFF'; return; }
@@ -5815,7 +5795,6 @@ cwPitchInput.addEventListener('change', () => {
   cwSave(); cwApply();
 });
 cwChans.forEach((c) => {
-  c.enableBtn.addEventListener('click', () => { cwSettings.on[c.idx] = !cwSettings.on[c.idx]; cwSave(); cwApply(); });
   c.clearBtn.addEventListener('click', () => { c.doneEl.textContent = ''; c.pendingEl.textContent = ''; cwShowInfo(); });
 });
 
@@ -5858,6 +5837,63 @@ function cwFeedAudio(channels, rate) {
 // The worker's source is at the end of the page: restart a saved decoder only once the page is parsed
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', cwApply);
 else cwApply();
+
+// ============================================================================
+// Decoder selector: one decoder per receiver (OFF, FT8, CW). Choosing one starts it.
+// FT8 keeps its ON/OFF in the board's UI prefs (decoderMain / decoderSub), CW in this browser; the
+// selector keeps them exclusive. The FT8 TX controls are not part of this and always stay visible.
+// ============================================================================
+const decSels = ['Main', 'Sub'].map((name) => document.getElementById('decSel' + name));
+const decPanels = ['Main', 'Sub'].map((name) => document.getElementById('decPanel' + name));
+
+function decCurrent(idx) {
+  return ft8Chans[idx].enabled ? 'ft8' : cwSettings.on[idx] ? 'cw' : 'off';
+}
+
+function decRefresh() {
+  [0, 1].forEach((idx) => {
+    const kind = decCurrent(idx);
+    decSels[idx].value = kind;
+    decPanels[idx].dataset.dec = kind;
+  });
+  const used = (kind) => [0, 1].some((idx) => decCurrent(idx) === kind &&
+    (idx === 0 || !document.body.classList.contains('single-rx')));
+  document.body.classList.toggle('uses-ft8', used('ft8'));
+  document.body.classList.toggle('uses-cw', used('cw'));
+}
+
+// FT8 was turned on or off from the board's prefs or the radio profile: CW on the same receiver stops
+function decFt8Changed(idx) {
+  if (ft8Chans[idx].enabled && cwSettings.on[idx]) {
+    cwSettings.on[idx] = false;
+    cwSave();
+    cwApply();
+  }
+  decRefresh();
+}
+
+function decChoose(idx, kind) {
+  const f = ft8Chans[idx];
+  if (f.enabled !== (kind === 'ft8')) {
+    setFt8Decoder(f, kind === 'ft8');
+    queueUiPref('decoder' + f.name, f.enabled);
+  }
+  if (cwSettings.on[idx] !== (kind === 'cw')) {
+    cwSettings.on[idx] = kind === 'cw';
+    cwSave();
+    cwApply();
+  }
+  decRefresh();
+}
+
+decSels.forEach((sel, idx) => sel.addEventListener('change', () => {
+  const kind = ['off', 'ft8', 'cw'].includes(sel.value) ? sel.value : 'off';
+  decChoose(idx, kind);
+  if (kind === 'ft8') openFt8Map();   // must run inside the user's event or popup blockers reject it
+}));
+
+decReady = true;
+decRefresh();
 </script>
 <script type="text/plain" id="ft8-worker-src">
 // ---- FT8 decoder: runs in a Web Worker so that the 1-2 s of heavy computation per slot does not
