@@ -51,7 +51,7 @@ for (const [from, to, radius] of [[48000, 9600, 128], [16000, 9600, 128], [44100
 }
 
 // 2. AUTO: the CW model in CW only
-const sel = vm.createContext({ hnSettings: { model: ['auto', 'auto'] }, hnMode: ['', ''] });
+const sel = vm.createContext({ hnSettings: { model: ['auto', 'auto'], on: [true, false] }, hnMode: ['', ''] });
 vm.runInContext(section('function hnTargetFor(i) {', 'function hnParams(') + 'this.hnTargetFor = hnTargetFor;', sel);
 const pick = (mode, model = 'auto') => { sel.hnSettings.model[0] = model; sel.hnMode[0] = mode; return sel.hnTargetFor(0); };
 assert.equal(pick('CW-U'), 'cw');
@@ -59,5 +59,11 @@ assert.equal(pick('CW-L'), 'cw');
 for (const m of ['USB', 'LSB', 'AM', 'FM', 'DATA-USB', 'RTTY-LSB', 'C4FM-DN', '']) assert.equal(pick(m), 'voice', m);
 assert.equal(pick('USB', 'cw'), 'cw');
 assert.equal(pick('CW-U', 'voice'), 'voice');
+assert.equal(pick('USB', 'lite'), 'lite');
+// both receivers on: AUTO takes the light voice model, so the two fit on the one audio thread
+sel.hnSettings.on = [true, true];
+assert.equal(pick('USB'), 'lite');
+assert.equal(pick('CW-U'), 'cw');
+assert.equal(pick('USB', 'voice'), 'voice');
 
-console.log('AI noise reduction: resampler matches HamNoise (5 rate pairs), AUTO model choice');
+console.log('AI noise reduction: resampler matches HamNoise (5 rate pairs), AUTO model choice (VOICE LITE with both receivers on)');

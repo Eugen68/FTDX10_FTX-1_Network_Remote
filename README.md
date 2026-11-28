@@ -787,7 +787,10 @@ the scope, the FT8 and CW decoders, recordings, the radio and the board get the 
 - The settings are in the DSP panel (NOISE SQUELCH GATE section), one **AI NOISE REDUCTION** box per receiver
   under its squelch (on the FTDX10, the one box sits beside MAIN SQUELCH):
   - **Model**: `AUTO` uses HamNoise's CW model in CW and its voice model in every other mode (SSB, AM, FM, DATA);
-    `CW` or `VOICE` chooses one by hand.
+    `CW`, `VOICE` or `VOICE LITE` chooses one by hand. `VOICE` is the best and the heaviest; `VOICE LITE` (HamNoise's
+    first voice model) costs about 1/45 of it. With AI NR on for both receivers, `AUTO` uses `VOICE LITE` for voice:
+    all of the page's audio processing runs on one audio thread of the browser, and two `VOICE` models can need more
+    than all of it on a slower PC, which stops the audio (it sounds like a mute).
   - **Strength**: how much of the cleaned audio is heard, the rest being the original (100 % = fully cleaned).
 - The button is green while it works, amber while the model loads, red on an error (the original audio is
   played then; the reason is in the DSP panel).
@@ -796,8 +799,8 @@ the scope, the FT8 and CW decoders, recordings, the radio and the board get the 
   receiving while MAIN and SUB are both on HF) is not processed: its box says `paused` and it costs no CPU.
   It resumes with the first audio.
 - **CPU**: the CW model is very light. The voice model is heavy: about half of one CPU core per receiver on a
-  PC. Each box shows its load; above 70 % it says the device is too slow (crackling audio): turn it off,
-  or use it on one receiver only.
+  PC. Each box shows its load; above 70 % it suggests `VOICE LITE`, and with both receivers on it warns when
+  together they need more than 85 % of the audio thread.
 - The settings are kept in this browser.
 
 **Download from the Internet.** Like the CW decoder, the models are too large for the firmware (CW 1.7 MB,

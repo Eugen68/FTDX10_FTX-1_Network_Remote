@@ -1806,8 +1806,8 @@
         <strong>MAIN AI NOISE REDUCTION (HamNoise, this PC only)</strong>
         <div class="sq-row">
           <span>Model:</span>
-          <select id="hnModelMain" title="AUTO: CW model in CW, voice model in the other modes">
-            <option value="auto">AUTO (by mode)</option><option value="cw">CW</option><option value="voice">VOICE</option>
+          <select id="hnModelMain" title="AUTO: CW model in CW, VOICE in the other modes (VOICE LITE when AI NR is on for both receivers). VOICE is the best and the heaviest">
+            <option value="auto">AUTO (by mode)</option><option value="cw">CW</option><option value="voice">VOICE</option><option value="lite">VOICE LITE</option>
           </select>
         </div>
         <div class="sq-row">
@@ -1821,8 +1821,8 @@
         <strong>SUB AI NOISE REDUCTION (HamNoise, this PC only)</strong>
         <div class="sq-row">
           <span>Model:</span>
-          <select id="hnModelSub" title="AUTO: CW model in CW, voice model in the other modes">
-            <option value="auto">AUTO (by mode)</option><option value="cw">CW</option><option value="voice">VOICE</option>
+          <select id="hnModelSub" title="AUTO: CW model in CW, VOICE in the other modes (VOICE LITE when AI NR is on for both receivers). VOICE is the best and the heaviest">
+            <option value="auto">AUTO (by mode)</option><option value="cw">CW</option><option value="voice">VOICE</option><option value="lite">VOICE LITE</option>
           </select>
         </div>
         <div class="sq-row">
@@ -6222,14 +6222,19 @@ const HN_ASSETS = {
   voice: { path: '/gh/e04/HamNoise@' + HN_COMMIT + '/web/public/denoise-voice.wasm',
            sha: 'd032f7cf2c36df685a253772eb4ea50c6a19d0e9b54e27c409a72aa0d9dacd97', mb: 4.3 },
 };
-const HN_MODEL_ID = { cw: 0, voice: 2 };   // HamNoise's own choices: CW, Voice (v2)
+// HamNoise's models: CW and Voice (v2) are its own choices; Voice lite (its v1 voice model, in the same file
+// as v2) costs about 1/45 of v2. All the page's AudioWorklets share one audio thread, so two v2 voice models
+// can need more than the whole thread on a slower PC: the audio then stops (heard as a mute).
+const HN_MODEL_ID = { cw: 0, voice: 2, lite: 1 };
+const HN_WASM = { cw: 'cw', voice: 'voice', lite: 'voice' };
+const HN_LABEL = { cw: 'CW', voice: 'VOICE', lite: 'VOICE LITE' };
 const HN_CACHE = 'hamnoise-v1';
 const HN_PREFS_KEY = 'ftx1.hn';
 const HN_OUTPUT_LATENCY_MS = 45;   // the worklet's output cushion (HamNoise default 90 ms)
 let HN_CDN = 'https://cdn.jsdelivr.net';
 // Per receiver: [MAIN, SUB]
 const hnSettings = { on: [false, false], model: ['auto', 'auto'], strength: [100, 100] };
-const hnModelOk = (m) => ['auto', 'cw', 'voice'].includes(m);
+const hnModelOk = (m) => ['auto', 'cw', 'voice', 'lite'].includes(m);
 const hnStrengthOk = (v) => Number.isFinite(v) && v >= 0 && v <= 100;
 try {
   const saved = JSON.parse(localStorage.getItem(HN_PREFS_KEY) || '{}');
@@ -6296,10 +6301,12 @@ function hnModule(c) {
   return hnModuleCtx.get(c);
 }
 
-// CW model in CW, the voice model in every other mode (unless chosen by hand)
+// CW model in CW, the voice model in every other mode (unless chosen by hand); the light voice model when
+// AI NR is on for both receivers, so two of them fit on the one audio thread
 function hnTargetFor(i) {
   if (hnSettings.model[i] !== 'auto') return hnSettings.model[i];
-  return /^CW/.test(hnMode[i] || '') ? 'cw' : 'voice';
+  if (/^CW/.test(hnMode[i] || '')) return 'cw';
+  return hnSettings.on[0] && hnSettings.on[1] ? 'lite' : 'voice';
 }
 
 function hnParams(chan) {
@@ -6331,12 +6338,15 @@ async function hnRoute(i) {
     hnShow();
     return;
   }
-  if (chan.node && chan.target === target && chan.bus === bus) { hnParams(chan); hnShow(); return; }
-  if (chan.failed === target + '|' + (bus && bus.ctx.sampleRate)) { hnShow(); return; }   // no retry loop
+  if (chan.node && chan.bus === bus && HN_WASM[chan.target] === HN_WASM[target]) {
+    chan.target = target;   // the same WebAssembly: the worklet switches the model itself (short fade)
+    hnParams(chan); hnShow(); return;
+  }
+  if (chan.failed === HN_WASM[target] + '|' + (bus && bus.ctx.sampleRate)) { hnShow(); return; }   // no retry loop
   if (!chan.node) straight();
   chan.state = 'loading'; chan.error = ''; hnShow();
   try {
-    const [bytes] = await Promise.all([hnFetch(target), hnModule(bus.ctx)]);
+    const [bytes] = await Promise.all([hnFetch(HN_WASM[target]), hnModule(bus.ctx)]);
     if (gen !== chan.gen || bus !== hnBus) return;   // turned off, model or stream changed meanwhile
     const node = new AudioWorkletNode(bus.ctx, 'hamnoise-denoise', {
       numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
@@ -6358,7 +6368,7 @@ async function hnRoute(i) {
         const wasLive = chan.node === node;
         detach(node, bus);
         if (wasLive) { chan.node = null; straight(); }
-        chan.state = 'error'; chan.error = e.data.message; chan.failed = target + '|' + bus.ctx.sampleRate;
+        chan.state = 'error'; chan.error = e.data.message; chan.failed = HN_WASM[target] + '|' + bus.ctx.sampleRate;
         console.warn('AI NR:', chan.error);
       }
       hnShow();
@@ -6400,11 +6410,16 @@ function hnShow() {
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
     let text = 'Off. Turn it on with AI NR next to MUTE.';
     if (on && !hnBus) text = 'On: starts with the audio.';
-    else if (on && c.state === 'loading') text = 'Loading the ' + t + ' model (' + HN_ASSETS[t].mb + ' MB, first time only)…';
+    else if (on && c.state === 'loading') text = 'Loading the ' + HN_LABEL[t] + ' model (' + HN_ASSETS[HN_WASM[t]].mb + ' MB, first time only)…';
     else if (on && c.state === 'error') text = 'ERROR ' + c.error + ' (downloaded from cdn.jsdelivr.net): original audio.';
-    else if (on && c.idle) text = (c.target || t).toUpperCase() + ' model, paused: no audio on this receiver';
-    else if (on) text = (c.target || t).toUpperCase() + ' model' +
-      (Number.isFinite(c.load) ? ', CPU ' + c.load + ' %' + (c.load > 70 ? ' (too heavy for this device: turn it off)' : '') : '');
+    else if (on && c.idle) text = HN_LABEL[c.target || t] + ' model, paused: no audio on this receiver';
+    else if (on) text = HN_LABEL[c.target || t] + ' model' +
+      (Number.isFinite(c.load) ? ', CPU ' + c.load + ' %' + (c.load > 70 ? ' (too heavy for this PC: use VOICE LITE)' : '') : '');
+    // Both receivers share one audio thread: warn when together they need nearly all of it
+    const total = hnChan.reduce((sum, ch, k) => sum + (hnSettings.on[k] && ch.state === 'on' && !ch.idle && Number.isFinite(ch.load) ? ch.load : 0), 0);
+    if (on && c.state === 'on' && hnChan.every((ch, k) => hnSettings.on[k]) && total > 85) {
+      text += '. MAIN + SUB need ' + total + ' % of the audio thread: the audio stops. Use VOICE LITE';
+    }
     el.status.textContent = text;
     el.model.value = hnSettings.model[i];
     el.strength.value = hnSettings.strength[i];
@@ -6415,7 +6430,7 @@ function hnShow() {
 hnBtns.forEach((btn, i) => btn.addEventListener('click', () => {
   hnSettings.on[i] = !hnSettings.on[i];
   hnSave();
-  hnRoute(i);
+  [0, 1].forEach(hnRoute);   // AUTO on the other receiver may move between VOICE and VOICE LITE
 }));
 hnEls.forEach((el, i) => {
   el.model.addEventListener('change', () => {
